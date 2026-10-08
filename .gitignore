@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Xcode user state and build output
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.xcscmblueprint
+
+# Workspace files saved from the app and local scratch output
+*.optws
+optshots*/

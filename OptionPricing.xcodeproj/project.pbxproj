@@ -3,10 +3,22 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F37616363077241000F5524A /* Theme.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616353077241000F5524A /* Theme.cpp */; };
+		F376163A3077246A00F5524A /* Widgets.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616393077246A00F5524A /* Widgets.cpp */; };
+		F376163D3077248000F5524A /* MarketState.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376163C3077248000F5524A /* MarketState.cpp */; };
+		F37616403077255400F5524A /* PricerTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376163F3077255400F5524A /* PricerTab.cpp */; };
+		F37616433077260600F5524A /* StrategyTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616423077260600F5524A /* StrategyTab.cpp */; };
+		F37616463077263B00F5524A /* ScenarioTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616453077263B00F5524A /* ScenarioTab.cpp */; };
+		F3761649307726B500F5524A /* ChainTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3761648307726B500F5524A /* ChainTab.cpp */; };
+		F376164C307726C700F5524A /* RateCurveDialog.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376164B307726C700F5524A /* RateCurveDialog.cpp */; };
+		F376164F307726DE00F5524A /* BatchDialog.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376164E307726DE00F5524A /* BatchDialog.cpp */; };
+		F37616523077272300F5524A /* MainWindow.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616513077272300F5524A /* MainWindow.cpp */; };
+		F3761666307730A400F5524A /* MarketDataClient.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3761665307730A400F5524A /* MarketDataClient.cpp */; };
+		F376166A3077EFF800F5524A /* HeatmapTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616693077EFF800F5524A /* HeatmapTab.cpp */; };
 		F3B6FB022988347000563EB6 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3B6FB012988347000563EB6 /* main.cpp */; };
 /* End PBXBuildFile section */
 
@@ -23,11 +35,61 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F37616273077215100F5524A /* Normal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Normal.h; sourceTree = "<group>"; };
+		F37616283077218E00F5524A /* BlackScholes.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BlackScholes.h; sourceTree = "<group>"; };
+		F3761629307721A800F5524A /* DayCount.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = DayCount.h; sourceTree = "<group>"; };
+		F376162A307721C800F5524A /* American.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = American.h; sourceTree = "<group>"; };
+		F376162B307721D000F5524A /* MonteCarlo.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MonteCarlo.h; sourceTree = "<group>"; };
+		F376162C307721EB00F5524A /* FiniteDifference.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = FiniteDifference.h; sourceTree = "<group>"; };
+		F376162D307721F500F5524A /* RateCurve.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RateCurve.h; sourceTree = "<group>"; };
+		F376162E3077222700F5524A /* Csv.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Csv.h; sourceTree = "<group>"; };
+		F376162F3077229E00F5524A /* Strategy.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Strategy.h; sourceTree = "<group>"; };
+		F3761630307722B100F5524A /* Scenario.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Scenario.h; sourceTree = "<group>"; };
+		F3761631307722D000F5524A /* VolSurface.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = VolSurface.h; sourceTree = "<group>"; };
+		F3761633307723DA00F5524A /* QtHeaders.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = QtHeaders.h; sourceTree = "<group>"; };
+		F3761634307723E000F5524A /* Theme.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Theme.h; sourceTree = "<group>"; };
+		F37616353077241000F5524A /* Theme.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Theme.cpp; sourceTree = "<group>"; };
+		F37616373077245400F5524A /* Formatting.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Formatting.h; sourceTree = "<group>"; };
+		F37616383077245B00F5524A /* Widgets.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Widgets.h; sourceTree = "<group>"; };
+		F37616393077246A00F5524A /* Widgets.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Widgets.cpp; sourceTree = "<group>"; };
+		F376163B3077247300F5524A /* MarketState.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MarketState.h; sourceTree = "<group>"; };
+		F376163C3077248000F5524A /* MarketState.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = MarketState.cpp; sourceTree = "<group>"; };
+		F376163E307724AB00F5524A /* PricerTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PricerTab.h; sourceTree = "<group>"; };
+		F376163F3077255400F5524A /* PricerTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PricerTab.cpp; sourceTree = "<group>"; };
+		F37616413077258600F5524A /* StrategyTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = StrategyTab.h; sourceTree = "<group>"; };
+		F37616423077260600F5524A /* StrategyTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = StrategyTab.cpp; sourceTree = "<group>"; };
+		F37616443077260B00F5524A /* ScenarioTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ScenarioTab.h; sourceTree = "<group>"; };
+		F37616453077263B00F5524A /* ScenarioTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ScenarioTab.cpp; sourceTree = "<group>"; };
+		F37616473077265E00F5524A /* ChainTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ChainTab.h; sourceTree = "<group>"; };
+		F3761648307726B500F5524A /* ChainTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ChainTab.cpp; sourceTree = "<group>"; };
+		F376164A307726B600F5524A /* RateCurveDialog.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = RateCurveDialog.h; sourceTree = "<group>"; };
+		F376164B307726C700F5524A /* RateCurveDialog.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = RateCurveDialog.cpp; sourceTree = "<group>"; };
+		F376164D307726CA00F5524A /* BatchDialog.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = BatchDialog.h; sourceTree = "<group>"; };
+		F376164E307726DE00F5524A /* BatchDialog.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = BatchDialog.cpp; sourceTree = "<group>"; };
+		F3761650307726E400F5524A /* MainWindow.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MainWindow.h; sourceTree = "<group>"; };
+		F37616513077272300F5524A /* MainWindow.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = MainWindow.cpp; sourceTree = "<group>"; };
+		F3761657307728D100F5524A /* PricingTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PricingTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		F37616643077306D00F5524A /* MarketDataClient.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MarketDataClient.h; sourceTree = "<group>"; };
+		F3761665307730A400F5524A /* MarketDataClient.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = MarketDataClient.cpp; sourceTree = "<group>"; };
+		F37616673077EF8F00F5524A /* Activity.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Activity.h; sourceTree = "<group>"; };
+		F37616683077EF9900F5524A /* HeatmapTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HeatmapTab.h; sourceTree = "<group>"; };
+		F37616693077EFF800F5524A /* HeatmapTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = HeatmapTab.cpp; sourceTree = "<group>"; };
 		F3B6FAFE2988347000563EB6 /* OptionPricing */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = OptionPricing; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3B6FB012988347000563EB6 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		F3761658307728D100F5524A /* PricingTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = PricingTests; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
+		F3761654307728D100F5524A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F3B6FAFB2988347000563EB6 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -38,10 +100,63 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		F37616263077215100F5524A /* Pricing */ = {
+			isa = PBXGroup;
+			children = (
+				F37616273077215100F5524A /* Normal.h */,
+				F37616283077218E00F5524A /* BlackScholes.h */,
+				F3761629307721A800F5524A /* DayCount.h */,
+				F376162A307721C800F5524A /* American.h */,
+				F376162B307721D000F5524A /* MonteCarlo.h */,
+				F376162C307721EB00F5524A /* FiniteDifference.h */,
+				F376162D307721F500F5524A /* RateCurve.h */,
+				F376162E3077222700F5524A /* Csv.h */,
+				F376162F3077229E00F5524A /* Strategy.h */,
+				F3761630307722B100F5524A /* Scenario.h */,
+				F3761631307722D000F5524A /* VolSurface.h */,
+				F37616673077EF8F00F5524A /* Activity.h */,
+			);
+			path = Pricing;
+			sourceTree = "<group>";
+		};
+		F3761632307723DA00F5524A /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				F3761633307723DA00F5524A /* QtHeaders.h */,
+				F3761634307723E000F5524A /* Theme.h */,
+				F37616353077241000F5524A /* Theme.cpp */,
+				F37616373077245400F5524A /* Formatting.h */,
+				F37616383077245B00F5524A /* Widgets.h */,
+				F37616393077246A00F5524A /* Widgets.cpp */,
+				F376163B3077247300F5524A /* MarketState.h */,
+				F376163C3077248000F5524A /* MarketState.cpp */,
+				F376163E307724AB00F5524A /* PricerTab.h */,
+				F376163F3077255400F5524A /* PricerTab.cpp */,
+				F37616413077258600F5524A /* StrategyTab.h */,
+				F37616423077260600F5524A /* StrategyTab.cpp */,
+				F37616443077260B00F5524A /* ScenarioTab.h */,
+				F37616453077263B00F5524A /* ScenarioTab.cpp */,
+				F37616473077265E00F5524A /* ChainTab.h */,
+				F3761648307726B500F5524A /* ChainTab.cpp */,
+				F376164A307726B600F5524A /* RateCurveDialog.h */,
+				F376164B307726C700F5524A /* RateCurveDialog.cpp */,
+				F376164D307726CA00F5524A /* BatchDialog.h */,
+				F376164E307726DE00F5524A /* BatchDialog.cpp */,
+				F3761650307726E400F5524A /* MainWindow.h */,
+				F37616513077272300F5524A /* MainWindow.cpp */,
+				F37616643077306D00F5524A /* MarketDataClient.h */,
+				F3761665307730A400F5524A /* MarketDataClient.cpp */,
+				F37616683077EF9900F5524A /* HeatmapTab.h */,
+				F37616693077EFF800F5524A /* HeatmapTab.cpp */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
 		F3B6FAF52988347000563EB6 = {
 			isa = PBXGroup;
 			children = (
 				F3B6FB002988347000563EB6 /* OptionPricing */,
+				F3761658307728D100F5524A /* PricingTests */,
 				F3B6FAFF2988347000563EB6 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -50,6 +165,7 @@
 			isa = PBXGroup;
 			children = (
 				F3B6FAFE2988347000563EB6 /* OptionPricing */,
+				F3761657307728D100F5524A /* PricingTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -58,6 +174,8 @@
 			isa = PBXGroup;
 			children = (
 				F3B6FB012988347000563EB6 /* main.cpp */,
+				F37616263077215100F5524A /* Pricing */,
+				F3761632307723DA00F5524A /* UI */,
 			);
 			path = OptionPricing;
 			sourceTree = "<group>";
@@ -65,6 +183,28 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		F3761656307728D100F5524A /* PricingTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F376165B307728D100F5524A /* Build configuration list for PBXNativeTarget "PricingTests" */;
+			buildPhases = (
+				F3761653307728D100F5524A /* Sources */,
+				F3761654307728D100F5524A /* Frameworks */,
+				F3761655307728D100F5524A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				F3761658307728D100F5524A /* PricingTests */,
+			);
+			name = PricingTests;
+			packageProductDependencies = (
+			);
+			productName = PricingTests;
+			productReference = F3761657307728D100F5524A /* PricingTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		F3B6FAFD2988347000563EB6 /* OptionPricing */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = F3B6FB052988347000563EB6 /* Build configuration list for PBXNativeTarget "OptionPricing" */;
@@ -89,8 +229,11 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastUpgradeCheck = 1420;
+				LastUpgradeCheck = 2700;
 				TargetAttributes = {
+					F3761656307728D100F5524A = {
+						CreatedOnToolsVersion = 27.0;
+					};
 					F3B6FAFD2988347000563EB6 = {
 						CreatedOnToolsVersion = 14.2;
 					};
@@ -110,22 +253,98 @@
 			projectRoot = "";
 			targets = (
 				F3B6FAFD2988347000563EB6 /* OptionPricing */,
+				F3761656307728D100F5524A /* PricingTests */,
 			);
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		F3761655307728D100F5524A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
+		F3761653307728D100F5524A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F3B6FAFA2988347000563EB6 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F376164C307726C700F5524A /* RateCurveDialog.cpp in Sources */,
+				F37616433077260600F5524A /* StrategyTab.cpp in Sources */,
+				F37616463077263B00F5524A /* ScenarioTab.cpp in Sources */,
+				F37616403077255400F5524A /* PricerTab.cpp in Sources */,
+				F376166A3077EFF800F5524A /* HeatmapTab.cpp in Sources */,
 				F3B6FB022988347000563EB6 /* main.cpp in Sources */,
+				F376163D3077248000F5524A /* MarketState.cpp in Sources */,
+				F376164F307726DE00F5524A /* BatchDialog.cpp in Sources */,
+				F37616523077272300F5524A /* MainWindow.cpp in Sources */,
+				F37616363077241000F5524A /* Theme.cpp in Sources */,
+				F376163A3077246A00F5524A /* Widgets.cpp in Sources */,
+				F3761666307730A400F5524A /* MarketDataClient.cpp in Sources */,
+				F3761649307726B500F5524A /* ChainTab.cpp in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+		F376165C307728D100F5524A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.luismolina.PricingTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Debug;
+		};
+		F376165D307728D100F5524A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.luismolina.PricingTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = "1,2,7";
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Release;
+		};
 		F3B6FB032988347000563EB6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -159,9 +378,12 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 57LBCFNF5H;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -181,6 +403,7 @@
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 			};
 			name = Debug;
 		};
@@ -217,9 +440,12 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 57LBCFNF5H;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -232,6 +458,7 @@
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 			};
 			name = Release;
 		};
@@ -239,8 +466,27 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 57LBCFNF5H;
-				ENABLE_HARDENED_RUNTIME = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				"FRAMEWORK_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/lib;
+				HEADER_SEARCH_PATHS = "";
+				LD_RUNPATH_SEARCH_PATHS = "/opt​/homebrew​/opt​/qt​/lib";
+				"LD_RUNPATH_SEARCH_PATHS[arch=*]" = "";
+				LIBRARY_SEARCH_PATHS = /opt/homebrew/opt/qt/lib;
+				"LIBRARY_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/lib;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					QtWidgets,
+					"-framework",
+					QtCore,
+					"-framework",
+					QtGui,
+					"-framework",
+					QtCharts,
+					"-framework",
+					QtNetwork,
+				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Debug;
@@ -249,8 +495,27 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 57LBCFNF5H;
-				ENABLE_HARDENED_RUNTIME = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_HARDENED_RUNTIME = NO;
+				"FRAMEWORK_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/lib;
+				HEADER_SEARCH_PATHS = "";
+				"HEADER_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/include;
+				LD_RUNPATH_SEARCH_PATHS = "/opt​/homebrew​/opt​/qt​/lib";
+				LIBRARY_SEARCH_PATHS = /opt/homebrew/opt/qt/lib;
+				"LIBRARY_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/lib;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_LDFLAGS = (
+					"-framework",
+					QtWidgets,
+					"-framework",
+					QtCore,
+					"-framework",
+					QtGui,
+					"-framework",
+					QtCharts,
+					"-framework",
+					QtNetwork,
+				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Release;
@@ -258,6 +523,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		F376165B307728D100F5524A /* Build configuration list for PBXNativeTarget "PricingTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F376165C307728D100F5524A /* Debug */,
+				F376165D307728D100F5524A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		F3B6FAF92988347000563EB6 /* Build configuration list for PBXProject "OptionPricing" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

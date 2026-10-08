@@ -1,0 +1,48 @@
+//
+//  Widgets.h
+//  OptionPricing
+//
+//  Small factory helpers that keep the tabs' construction code short and consistent.
+//
+
+#pragma once
+
+#include "QtHeaders.h"
+
+namespace ui {
+
+QDoubleSpinBox* makeSpinBox(QWidget* parent, double minimum, double maximum, double step, int decimals,
+                            double initial, const QString& suffix = QString());
+
+QSpinBox* makeIntSpinBox(QWidget* parent, int minimum, int maximum, int initial);
+
+/// Right-aligned, selectable monospace value label.
+QLabel* makeValueLabel(QWidget* parent, const QString& objectName = QString());
+
+/// A rounded card with a small caption, a large value and an optional subtitle line.
+struct Card {
+    QFrame* frame = nullptr;
+    QLabel* title = nullptr;
+    QLabel* value = nullptr;
+    QLabel* subtitle = nullptr;
+};
+Card makeCard(QWidget* parent, const QString& title, const QString& valueObjectName = QStringLiteral("bigValue"));
+
+QPushButton* makeButton(QWidget* parent, const QString& text, const QString& objectName, const QString& tooltip = QString());
+
+QFrame* makeSeparator(QWidget* parent);
+
+/// Swaps a label between the muted, warning and error styles and forces a restyle.
+enum class StatusKind { Info, Warning, Error };
+void setStatus(QLabel* label, const QString& text, StatusKind kind);
+
+/// Re-applies the stylesheet after changing a widget's objectName.
+void restyle(QWidget* widget);
+
+/// Configures a chart view with antialiasing and a sensible minimum size.
+QChartView* makeChartView(QWidget* parent, QChart* chart, int minimumHeight = 260);
+
+/// Non-editable table cell with right alignment.
+QTableWidgetItem* makeCell(const QString& text, Qt::Alignment alignment = Qt::AlignRight | Qt::AlignVCenter);
+
+} // namespace ui
