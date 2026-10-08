@@ -39,8 +39,18 @@ struct Theme {
     QString profit;      ///< heatmap and chart colour for gains
     QString loss;        ///< heatmap and chart colour for losses
     QString gridLine;    ///< chart grid lines
+    QString up;          ///< price up / bid side
+    QString down;        ///< price down / ask side
+    QString flat;        ///< unchanged price
+    QString accent2;     ///< secondary accent (amber) for section titles and the ticker symbol
+    QString accent3;     ///< tertiary accent (cyan) for informational highlights
+    QString itmCall;     ///< background tint for in-the-money call cells
+    QString itmPut;      ///< background tint for in-the-money put cells
     bool dark = false;
 };
+
+/// Colour for a signed change: up, down or flat.
+QString changeColor(const Theme& t, double change);
 
 Theme lightTheme();
 Theme darkTheme();

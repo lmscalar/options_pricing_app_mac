@@ -27,10 +27,14 @@ public:
     pricing::VolSurface surface;       ///< fitted from the option chain, may be empty
     std::vector<pricing::ChainQuote> chainQuotes;   ///< raw chain, kept so it can be saved
     QString underlyingTicker;                        ///< symbol the chain and spot came from, if downloaded
+    QString companyName;                             ///< issuer name from the reference data, if known
+    QString exchange;                                ///< primary exchange code, if known
+    QImage logo;                                     ///< company icon, null when unavailable
     QString spotSource;                              ///< "last minute bar", "day close", "option parity", ... (empty for manual spot)
     QDateTime spotTime;                              ///< when the live spot was fetched
     QDateTime spotAsOf;                              ///< vendor timestamp of the delayed stock price
     double vendorSpot = 0.0;                         ///< last delayed stock price from the feed (0 = none)
+    double previousClose = 0.0;                      ///< prior session close from the feed, for daily change (0 = none)
     bool useImpliedSpot = true;                      ///< prefer the parity-implied spot from fresh option prices
     double impliedSpot = 0.0;                        ///< latest parity-implied spot (0 = unavailable)
     QString impliedSpotNote;                         ///< how the implied spot was derived
@@ -52,6 +56,11 @@ public:
         m.riskFreeRate = rateFor(maturity);
         return m;
     }
+
+    /// Daily change of the current spot versus the previous close (0 when unknown).
+    double dayChange() const { return previousClose > 0.0 ? market.spot - previousClose : 0.0; }
+    double dayChangePercent() const { return previousClose > 0.0 ? (market.spot / previousClose - 1.0) * 100.0 : 0.0; }
+    bool hasDayChange() const { return previousClose > 0.0; }
 
     pricing::ChainMarket chainMarket(double maturity) const
     {

@@ -26,11 +26,15 @@ MainWindow::MainWindow()
 
     const QSettings settings;
     applyTheme(settings.value("appearance/darkMode", false).toBool());
-    restoreGeometry(settings.value("window/geometry").toByteArray());
+    // A --window WxH argument (developer aid) wins over the remembered geometry.
+    if (!QCoreApplication::arguments().contains("--window")) {
+        restoreGeometry(settings.value("window/geometry").toByteArray());
+    }
     if (size().width() < 900) {
         resize(1360, 900);
     }
-    setMinimumSize(1024, 700);
+    // No explicit minimum: Qt derives it from the densest tab so the window can never be
+    // shrunk into a state where panes overlap.
     rebuildRecentMenu();
     statusBar()->showMessage("Ready. Edit the market on the Pricer tab; every other tab follows it.", 8000);
 }
@@ -100,10 +104,63 @@ void MainWindow::buildUi()
     m_themeToggle->setToolTip("Switch between the light and dark appearance");
     connect(m_themeToggle, &QPushButton::toggled, this, [this](bool checked) { applyTheme(checked); });
 
+    // Quote banner: visible on every tab, driven by the shared market state.
+    m_banner = new QFrame(this);
+    m_banner->setObjectName("tickerBanner");
+    m_banner->setAttribute(Qt::WA_StyledBackground, true);
+    m_bannerLogo = new QLabel(m_banner);
+    m_bannerLogo->setFixedSize(44, 44);
+    m_bannerLogo->setAlignment(Qt::AlignCenter);
+    m_bannerName = new QLabel(m_banner);
+    m_bannerName->setObjectName("tickerMeta");
+    // Text labels in the banner must not dictate the window's minimum width: they shrink
+    // and elide instead (see elideBanner).
+    m_bannerName->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_bannerName->setMinimumWidth(60);
+    m_bannerSymbol = new QLabel(m_banner);
+    m_bannerSymbol->setObjectName("tickerSymbol");
+    m_bannerPrice = new QLabel(m_banner);
+    m_bannerPrice->setObjectName("tickerPrice");
+    m_bannerPrice->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_bannerChange = new QLabel(m_banner);
+    m_bannerChange->setObjectName("tickerFlat");
+    m_bannerMeta = new QLabel(m_banner);
+    m_bannerMeta->setObjectName("tickerMeta");
+    m_bannerMeta->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_bannerMeta->setMinimumWidth(120);
+    auto* identity = new QVBoxLayout;
+    identity->setContentsMargins(0, 0, 0, 0);
+    identity->setSpacing(0);
+    identity->addWidget(m_bannerSymbol);
+    identity->addWidget(m_bannerName);
+    auto* bannerTop = new QHBoxLayout;
+    bannerTop->setContentsMargins(0, 0, 0, 0);
+    bannerTop->setSpacing(12);
+    bannerTop->addLayout(identity);
+    bannerTop->addWidget(m_bannerPrice);
+    bannerTop->addWidget(m_bannerChange);
+    auto* bannerText = new QVBoxLayout;
+    bannerText->setContentsMargins(0, 0, 0, 0);
+    bannerText->setSpacing(0);
+    bannerText->addLayout(bannerTop);
+    bannerText->addWidget(m_bannerMeta);
+    auto* bannerLayout = new QHBoxLayout(m_banner);
+    bannerLayout->setContentsMargins(12, 6, 14, 6);
+    bannerLayout->setSpacing(12);
+    bannerLayout->addWidget(m_bannerLogo);
+    bannerLayout->addLayout(bannerText);
+    m_state.subscribe([this] { updateBanner(); });
+    updateBanner();
+
+    m_banner->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    m_banner->setMaximumWidth(760);
     auto* header = new QHBoxLayout;
     header->addWidget(title);
-    header->addStretch(1);
-    header->addWidget(m_themeToggle);
+    header->addSpacing(20);
+    header->addWidget(m_banner, 1);
+    header->addStretch(0);
+    header->addSpacing(12);
+    header->addWidget(m_themeToggle, 0, Qt::AlignRight);
 
     auto* central = new QWidget(this);
     central->setObjectName("root");
@@ -203,6 +260,7 @@ void MainWindow::applyTheme(bool dark)
         m_darkAction->setChecked(dark);
     }
 
+    updateBanner();
     m_pricer->applyTheme(theme);
     m_strategy->applyTheme(theme);
     m_scenario->applyTheme(theme);
@@ -211,6 +269,86 @@ void MainWindow::applyTheme(bool dark)
 
     QSettings settings;
     settings.setValue("appearance/darkMode", dark);
+}
+
+void MainWindow::updateBanner()
+{
+    const bool live = !m_state.underlyingTicker.isEmpty();
+    m_bannerSymbol->setText(live ? m_state.underlyingTicker : QStringLiteral("UNDERLYING"));
+    m_bannerNameFull = live ? (m_state.companyName.isEmpty() ? QStringLiteral("…") : m_state.companyName) : QStringLiteral("no chain loaded");
+    {
+        const Theme theme = m_darkMode ? darkTheme() : lightTheme();
+        const qreal dpr = devicePixelRatioF();
+        if (!live) {
+            m_bannerLogo->setPixmap(ui::monogramBadge(QStringLiteral("$"), QColor(theme.surfaceAlt), QColor(theme.textMuted), 44, dpr));
+        } else if (m_state.logo.isNull()) {
+            m_bannerLogo->setPixmap(ui::monogramBadge(m_state.underlyingTicker, QColor(theme.accent2), QColor(theme.window), 44, dpr));
+        } else {
+            m_bannerLogo->setPixmap(ui::roundedLogo(m_state.logo, 44, dpr));
+        }
+        m_bannerLogo->setToolTip(m_state.companyName.isEmpty() ? m_state.underlyingTicker
+                                                               : QStringLiteral("%1%2").arg(m_state.companyName, m_state.exchange.isEmpty() ? QString() : " · " + m_state.exchange));
+    }
+    m_bannerPrice->setText(QString::number(m_state.market.spot, 'f', 2));
+
+    if (m_state.hasDayChange()) {
+        const double change = m_state.dayChange();
+        const double pct = m_state.dayChangePercent();
+        const QString sign = change > 1e-9 ? "+" : (change < -1e-9 ? "−" : "");
+        const QString arrow = change > 1e-9 ? "▲" : (change < -1e-9 ? "▼" : "•");
+        m_bannerChange->setText(QStringLiteral("%1 %2%3  (%2%4%)").arg(arrow, sign, QString::number(std::fabs(change), 'f', 2), QString::number(std::fabs(pct), 'f', 2)));
+        m_bannerChange->setObjectName(change > 1e-9 ? "tickerUp" : (change < -1e-9 ? "tickerDown" : "tickerFlat"));
+        m_bannerChange->setToolTip(QStringLiteral("Change versus the previous close of %1").arg(QString::number(m_state.previousClose, 'f', 2)));
+    } else {
+        m_bannerChange->setText(live ? QStringLiteral("—") : QStringLiteral("model spot"));
+        m_bannerChange->setObjectName("tickerFlat");
+        m_bannerChange->setToolTip("Daily change appears after a live fetch supplies the previous close");
+    }
+    ui::restyle(m_bannerChange);
+
+    QStringList meta;
+    if (!m_state.spotSource.isEmpty()) {
+        meta << (m_state.spotSource == "option parity" ? QStringLiteral("parity-implied from options") : QStringLiteral("Massive %1").arg(m_state.spotSource));
+    } else if (!live) {
+        meta << "set on the Pricer tab";
+    }
+    if (m_state.spotAsOf.isValid() && m_state.vendorSpot > 0.0) {
+        const qint64 delay = m_state.spotAsOf.secsTo(QDateTime::currentDateTime()) / 60;
+        meta << QStringLiteral("vendor %1 as of %2 (%3 min delayed)").arg(QString::number(m_state.vendorSpot, 'f', 2), m_state.spotAsOf.toString("HH:mm")).arg(std::max<qint64>(0, delay));
+    }
+    if (m_state.chainTime.isValid()) meta << QStringLiteral("chain %1").arg(m_state.chainTime.toString("HH:mm:ss"));
+    if (!m_state.chainQuotes.empty()) meta << QStringLiteral("%1 contracts").arg(m_state.chainQuotes.size());
+    m_bannerMetaFull = meta.join("  ·  ");
+    m_bannerMeta->setToolTip(m_bannerMetaFull);
+    m_bannerName->setToolTip(m_bannerNameFull);
+    elideBanner();
+}
+
+void MainWindow::elideBanner()
+{
+    const int nameWidth = std::max(40, m_bannerName->width());
+    const int metaWidth = std::max(80, m_bannerMeta->width());
+    m_bannerName->setText(m_bannerName->fontMetrics().elidedText(m_bannerNameFull, Qt::ElideRight, nameWidth));
+    m_bannerMeta->setText(m_bannerMeta->fontMetrics().elidedText(m_bannerMetaFull, Qt::ElideRight, metaWidth));
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    elideBanner();
+}
+
+void MainWindow::showEvent(QShowEvent* event)
+{
+    QMainWindow::showEvent(event);
+    // A remembered geometry narrower than the content's minimum would clip the header.
+    QTimer::singleShot(0, this, [this] {
+        const QSize minimum = minimumSizeHint();
+        if (width() < minimum.width() || height() < minimum.height()) {
+            resize(std::max(width(), minimum.width()), std::max(height(), minimum.height()));
+        }
+        elideBanner();
+    });
 }
 
 void MainWindow::closeEvent(QCloseEvent* event)
@@ -447,12 +585,32 @@ QStringList MainWindow::captureTabs(const QString& directory)
     QDir().mkpath(directory);
     m_chain->generateSample();
     m_strategy->loadPreset();
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        const QSize hint = m_tabs->widget(i)->minimumSizeHint();
+        qInfo("[screenshot] tab %-12s minimumSizeHint %dx%d", qPrintable(m_tabs->tabText(i)), hint.width(), hint.height());
+    }
+    qInfo("[screenshot] window %dx%d minimumSizeHint %dx%d", width(), height(), minimumSizeHint().width(), minimumSizeHint().height());
     QStringList paths;
     const char* names[] = { "pricer", "strategy", "scenarios", "chain", "heatmap" };
     for (int i = 0; i < m_tabs->count() && i < 5; ++i) {
         m_tabs->setCurrentIndex(i);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
+        if (m_tabs->widget(i) == m_chain) {
+            // Exercise the chart hover readouts so the screenshot shows them populated.
+            for (QChartView* view : m_chain->findChildren<QChartView*>()) {
+                for (QAbstractSeries* series : view->chart()->series()) {
+                    if (auto* scatter = qobject_cast<QScatterSeries*>(series); scatter && scatter->count() > 0) {
+                        emit scatter->hovered(scatter->at(scatter->count() / 2), true);
+                        break;
+                    }
+                    if (auto* line = qobject_cast<QLineSeries*>(series); line && line->count() > 0 && line->name() == "ATM") {
+                        emit line->hovered(line->at(0), true);
+                    }
+                }
+            }
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 200);
+        }
         const QString path = directory + "/" + names[i] + ".png";
         if (grab().save(path)) {
             paths << path;
@@ -527,14 +685,26 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                 qInfo("[live-smoke] parity: %s %3d DTE pairs %3d implied fwd %.2f model fwd %.2f gap %+.2f implied yield %.2f%% mean|gap| %.3f",
                       p.expiry.expiryDate.c_str(), p.expiry.daysToExpiry, p.pairs, p.impliedForward, p.modelForward, p.forwardGap, p.impliedYield * 100.0, p.meanAbsGap);
             }
+            // Load a chain-driven preset and report its legs.
+            m_strategy->loadPreset();
+            for (int i = 0; i < m_tabs->count(); ++i) {
+                const QSize hint = m_tabs->widget(i)->minimumSizeHint();
+                qInfo("[live-smoke] tab %-12s minimumSizeHint %dx%d", qPrintable(m_tabs->tabText(i)), hint.width(), hint.height());
+            }
+            qInfo("[live-smoke] window %dx%d minimumSizeHint %dx%d", width(), height(), minimumSizeHint().width(), minimumSizeHint().height());
+            for (const pricing::Leg& leg : m_strategy->position().legs) {
+                qInfo("[live-smoke] leg: %-10s qty %+.0f strike %.2f expiry %s (T %.4f) entry %.2f mid %.2f iv %.1f%%",
+                      leg.kind == pricing::LegKind::Call ? "call" : (leg.kind == pricing::LegKind::Put ? "put" : "underlying"),
+                      leg.quantity, leg.strike, leg.expiryDate.c_str(), leg.maturity, leg.entryPrice, leg.marketPrice, leg.volatility * 100.0);
+            }
             // Render the live-data tabs so the result can be inspected offline.
             const QString shotDir = QDir::tempPath() + "/optshots-live";
             QDir().mkpath(shotDir);
-            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain }) {
+            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy }) {
                 m_tabs->setCurrentWidget(tab);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
-                const QString path = shotDir + (tab == m_heatmap ? "/heatmap.png" : "/chain.png");
+                const QString path = shotDir + (tab == m_heatmap ? "/heatmap.png" : (tab == m_chain ? "/chain.png" : "/strategy.png"));
                 if (grab().save(path)) qInfo("[live-smoke] wrote %s", qPrintable(path));
             }
             QCoreApplication::exit(0);

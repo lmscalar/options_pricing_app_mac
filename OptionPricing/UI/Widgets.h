@@ -42,6 +42,12 @@ void restyle(QWidget* widget);
 /// Configures a chart view with antialiasing and a sensible minimum size.
 QChartView* makeChartView(QWidget* parent, QChart* chart, int minimumHeight = 260);
 
+/// Company icon scaled into a rounded square of `size` device-independent pixels.
+QPixmap roundedLogo(const QImage& image, int size, qreal devicePixelRatio);
+
+/// Fallback badge: the first letters of `text` on a rounded square.
+QPixmap monogramBadge(const QString& text, const QColor& background, const QColor& foreground, int size, qreal devicePixelRatio);
+
 /// Non-editable table cell with right alignment.
 QTableWidgetItem* makeCell(const QString& text, Qt::Alignment alignment = Qt::AlignRight | Qt::AlignVCenter);
 

@@ -47,7 +47,11 @@ StrategyTab::StrategyTab(MarketState& state, QWidget* parent)
 {
     buildUi();
     wire();
-    m_state.subscribe([this] { recompute(); });
+    m_state.subscribe([this] {
+        refreshChainIndex();
+        recompute();
+    });
+    refreshChainIndex();
     recompute();
 }
 
@@ -68,8 +72,14 @@ void StrategyTab::buildUi()
 
     m_presetMaturity = ui::makeSpinBox(this, 0.01, 10.0, 0.25, 2, 0.5, " yrs");
     m_presetMaturity->setToolTip("Expiry used for preset legs (calendars use twice this for the far leg)");
+    m_presetExpiry = new QComboBox(this);
+    m_presetExpiry->setToolTip("Listed expiry from the loaded option chain used for preset legs (calendars take the next suitable listed expiry for the far leg)");
+    m_presetExpiry->setVisible(false);
     m_strikeStep = ui::makeSpinBox(this, 0.01, 10000.0, 1.0, 2, 5.0);
-    m_strikeStep->setToolTip("Strike interval used to place preset wings");
+    m_strikeStep->setToolTip("Strike interval used to place preset wings when no option chain is loaded");
+    m_chainInfo = new QLabel(this);
+    m_chainInfo->setObjectName("muted");
+    m_chainInfo->setWordWrap(true);
     m_multiplier = ui::makeSpinBox(this, 1.0, 100000.0, 1.0, 0, 100.0);
     m_multiplier->setToolTip("Contract multiplier (100 for US equity options)");
     m_loadPreset = ui::makeButton(this, "Load Preset", "primary", "Replace the legs with the selected preset");
@@ -78,21 +88,29 @@ void StrategyTab::buildUi()
     auto* presetForm = new QGridLayout(presetBox);
     presetForm->setHorizontalSpacing(12);
     presetForm->setVerticalSpacing(8);
+    m_presetExpiryLabel = new QLabel("Expiry", presetBox);
+    m_strikeStepLabel = new QLabel("Strike step", presetBox);
+    auto* expiryStack = new QHBoxLayout;
+    expiryStack->setContentsMargins(0, 0, 0, 0);
+    expiryStack->addWidget(m_presetMaturity);
+    expiryStack->addWidget(m_presetExpiry);
     presetForm->addWidget(new QLabel("Strategy", presetBox), 0, 0);
     presetForm->addWidget(m_presets, 0, 1);
-    presetForm->addWidget(new QLabel("Expiry", presetBox), 0, 2);
-    presetForm->addWidget(m_presetMaturity, 0, 3);
-    presetForm->addWidget(new QLabel("Strike step", presetBox), 0, 4);
+    presetForm->addWidget(m_presetExpiryLabel, 0, 2);
+    presetForm->addLayout(expiryStack, 0, 3);
+    presetForm->addWidget(m_strikeStepLabel, 0, 4);
     presetForm->addWidget(m_strikeStep, 0, 5);
     presetForm->addWidget(new QLabel("Multiplier", presetBox), 0, 6);
     presetForm->addWidget(m_multiplier, 0, 7);
     presetForm->addWidget(m_loadPreset, 0, 8);
-    presetForm->addWidget(m_presetDescription, 1, 0, 1, 9);
+    presetForm->addWidget(m_chainInfo, 1, 0, 1, 9);
+    presetForm->addWidget(m_presetDescription, 2, 0, 1, 9);
     presetForm->setColumnStretch(1, 2);
+    presetForm->setColumnStretch(3, 1);
 
     // Legs table
     m_table = new QTableWidget(0, ColumnCount, this);
-    m_table->setHorizontalHeaderLabels({ "Type", "Qty", "Strike", "Expiry (yrs)", "IV % (0 = mkt)", "Entry price", "Model price", "Unit P&L", "Position P&L" });
+    m_table->setHorizontalHeaderLabels({ "Type", "Qty", "Strike", "Expiry", "IV %", "Entry price", "Mkt mid", "Model price", "Unit P&L", "Position P&L" });
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_table->verticalHeader()->setVisible(false);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -280,9 +298,16 @@ void StrategyTab::wire()
         Leg leg;
         leg.kind = LegKind::Call;
         leg.quantity = 1.0;
-        leg.strike = roundToStrike(m_state.market.spot, m_strikeStep->value());
-        leg.maturity = m_presetMaturity->value();
-        leg.entryPrice = legValue(leg, valuationMarket(), m_state.market.spot, 0.0);
+        if (chainMode()) {
+            leg.maturity = presetMaturity();
+            leg.strike = m_chain.nearestStrike(leg.maturity, m_state.market.spot);
+            markLegToChain(leg, m_chain, activityMarket());
+            leg.entryPrice = leg.marketPrice > 0.0 ? leg.marketPrice : legValue(leg, valuationMarket(), m_state.market.spot, 0.0);
+        } else {
+            leg.strike = roundToStrike(m_state.market.spot, m_strikeStep->value());
+            leg.maturity = m_presetMaturity->value();
+            leg.entryPrice = legValue(leg, valuationMarket(), m_state.market.spot, 0.0);
+        }
         addLeg(leg);
     });
     connect(m_removeLeg, &QPushButton::clicked, this, [this] {
@@ -319,25 +344,21 @@ void StrategyTab::appendRow(const Leg& leg)
     kind->setFrame(false);
 
     auto* quantity = ui::makeSpinBox(m_table, -100000.0, 100000.0, 1.0, 0, leg.quantity);
-    auto* strike = ui::makeSpinBox(m_table, 0.01, 1'000'000.0, 1.0, 2, leg.kind == LegKind::Underlying ? m_state.market.spot : leg.strike);
-    auto* expiry = ui::makeSpinBox(m_table, 0.0001, 50.0, 0.25, 4, leg.kind == LegKind::Underlying ? 1.0 : leg.maturity, " yrs");
     auto* vol = ui::makeSpinBox(m_table, 0.0, 500.0, 1.0, 2, leg.volatility * 100.0, " %");
     auto* entry = ui::makeSpinBox(m_table, -1'000'000.0, 1'000'000.0, 0.05, 4, leg.entryPrice);
-    for (QDoubleSpinBox* box : { quantity, strike, expiry, vol, entry }) {
+    for (QDoubleSpinBox* box : { quantity, vol, entry }) {
         box->setFrame(false);
     }
     vol->setSpecialValueText("market");
+    vol->setToolTip(chainMode() ? "Implied vol from the chain mid; edit to override" : "Per-leg implied vol; 0 uses the market volatility");
     const bool isOption = leg.kind != LegKind::Underlying;
-    strike->setEnabled(isOption);
-    expiry->setEnabled(isOption);
     vol->setEnabled(isOption);
 
     m_table->setCellWidget(row, ColKind, kind);
     m_table->setCellWidget(row, ColQuantity, quantity);
-    m_table->setCellWidget(row, ColStrike, strike);
-    m_table->setCellWidget(row, ColExpiry, expiry);
     m_table->setCellWidget(row, ColVol, vol);
     m_table->setCellWidget(row, ColEntry, entry);
+    m_table->setItem(row, ColMarket, ui::makeCell("–"));
     m_table->setItem(row, ColModel, ui::makeCell("–"));
     m_table->setItem(row, ColUnitPnl, ui::makeCell("–"));
     m_table->setItem(row, ColPnl, ui::makeCell("–"));
@@ -347,16 +368,117 @@ void StrategyTab::appendRow(const Leg& leg)
         readTableIntoPosition();
         recompute();
     };
-    connect(kind, qOverload<int>(&QComboBox::currentIndexChanged), this, [this, changed, strike, expiry, vol, kind](int) {
-        const bool option = static_cast<LegKind>(kind->currentData().toInt()) != LegKind::Underlying;
-        strike->setEnabled(option);
-        expiry->setEnabled(option);
-        vol->setEnabled(option);
-        changed();
-    });
-    for (QDoubleSpinBox* box : { quantity, strike, expiry, vol, entry }) {
+
+    if (chainMode()) {
+        // Strike and expiry are chosen from the listed contracts of the loaded chain.
+        auto* expiry = new QComboBox(m_table);
+        expiry->setFrame(false);
+        for (const ListedExpiry* e : m_chain.expiries()) {
+            const QString date = e->key.expiryDate.empty() ? QStringLiteral("T %1y").arg(number(e->key.maturity, 3)) : QString::fromStdString(e->key.expiryDate);
+            expiry->addItem(QStringLiteral("%1 · %2d").arg(date).arg(e->key.daysToExpiry), e->key.maturity);
+        }
+        int expiryIndex = -1;
+        for (int i = 0; i < expiry->count(); ++i) {
+            if (std::fabs(expiry->itemData(i).toDouble() - leg.maturity) < 1e-6) { expiryIndex = i; break; }
+        }
+        if (expiryIndex < 0 && isOption) {
+            // Not listed (e.g. loaded from a workspace): keep it as an extra entry.
+            expiry->addItem(QStringLiteral("%1 yrs (unlisted)").arg(number(leg.maturity, 3)), leg.maturity);
+            expiryIndex = expiry->count() - 1;
+        }
+        expiry->setCurrentIndex(std::max(0, expiryIndex));
+        auto* strike = new QComboBox(m_table);
+        strike->setFrame(false);
+        populateStrikeCombo(strike, expiry->currentData().toDouble(), leg.strike);
+        expiry->setEnabled(isOption);
+        strike->setEnabled(isOption);
+        m_table->setCellWidget(row, ColStrike, strike);
+        m_table->setCellWidget(row, ColExpiry, expiry);
+
+        auto contractChanged = [this, kind, expiry, strike, row] {
+            if (m_updating) return;
+            const bool option = static_cast<LegKind>(kind->currentData().toInt()) != LegKind::Underlying;
+            expiry->setEnabled(option);
+            strike->setEnabled(option);
+            readTableIntoPosition();
+            updateLegFromChain(row);   // new contract: take its mid as entry and its IV
+            recompute();
+        };
+        connect(expiry, qOverload<int>(&QComboBox::currentIndexChanged), this, [this, expiry, strike, contractChanged](int) {
+            if (m_updating) return;
+            const double keep = strike->currentData().toDouble();
+            m_updating = true;
+            populateStrikeCombo(strike, expiry->currentData().toDouble(), keep);
+            m_updating = false;
+            contractChanged();
+        });
+        connect(strike, qOverload<int>(&QComboBox::currentIndexChanged), this, [contractChanged](int) { contractChanged(); });
+        connect(kind, qOverload<int>(&QComboBox::currentIndexChanged), this, [contractChanged, vol, kind](int) {
+            vol->setEnabled(static_cast<LegKind>(kind->currentData().toInt()) != LegKind::Underlying);
+            contractChanged();
+        });
+    } else {
+        auto* strike = ui::makeSpinBox(m_table, 0.01, 1'000'000.0, 1.0, 2, leg.kind == LegKind::Underlying ? m_state.market.spot : leg.strike);
+        auto* expiry = ui::makeSpinBox(m_table, 0.0001, 50.0, 0.25, 4, leg.kind == LegKind::Underlying ? 1.0 : leg.maturity, " yrs");
+        strike->setFrame(false);
+        expiry->setFrame(false);
+        strike->setEnabled(isOption);
+        expiry->setEnabled(isOption);
+        m_table->setCellWidget(row, ColStrike, strike);
+        m_table->setCellWidget(row, ColExpiry, expiry);
+        connect(kind, qOverload<int>(&QComboBox::currentIndexChanged), this, [changed, strike, expiry, vol, kind](int) {
+            const bool option = static_cast<LegKind>(kind->currentData().toInt()) != LegKind::Underlying;
+            strike->setEnabled(option);
+            expiry->setEnabled(option);
+            vol->setEnabled(option);
+            changed();
+        });
+        for (QDoubleSpinBox* box : { strike, expiry }) {
+            connect(box, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [changed](double) { changed(); });
+        }
+    }
+    for (QDoubleSpinBox* box : { quantity, vol, entry }) {
         connect(box, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [changed](double) { changed(); });
     }
+}
+
+void StrategyTab::populateStrikeCombo(QComboBox* strikes, double maturity, double selected) const
+{
+    strikes->clear();
+    const ListedExpiry* e = m_chain.expiry(maturity);
+    int selectedIndex = -1;
+    if (e) {
+        for (double k : e->strikes) {
+            strikes->addItem(number(k, 2), k);
+            if (std::fabs(k - selected) < 1e-9) selectedIndex = strikes->count() - 1;
+        }
+    }
+    if (selectedIndex < 0 && selected > 0.0) {
+        // Keep an unlisted strike (workspace legs, or a strike absent from this expiry) visible.
+        strikes->addItem(QStringLiteral("%1 (unlisted)").arg(number(selected, 2)), selected);
+        selectedIndex = strikes->count() - 1;
+    }
+    if (selectedIndex < 0 && strikes->count() > 0) {
+        // Default to the listed strike nearest spot.
+        const double atm = m_chain.nearestStrike(maturity, m_state.market.spot);
+        for (int i = 0; i < strikes->count(); ++i) {
+            if (std::fabs(strikes->itemData(i).toDouble() - atm) < 1e-9) selectedIndex = i;
+        }
+    }
+    strikes->setCurrentIndex(std::max(0, selectedIndex));
+}
+
+void StrategyTab::updateLegFromChain(int row)
+{
+    if (!chainMode() || row < 0 || static_cast<size_t>(row) >= m_position.legs.size()) return;
+    Leg& leg = m_position.legs[static_cast<size_t>(row)];
+    if (markLegToChain(leg, m_chain, activityMarket()) && leg.marketPrice > 0.0) {
+        leg.entryPrice = leg.marketPrice;
+    }
+    m_updating = true;
+    if (auto* entry = qobject_cast<QDoubleSpinBox*>(m_table->cellWidget(row, ColEntry))) entry->setValue(leg.entryPrice);
+    if (auto* vol = qobject_cast<QDoubleSpinBox*>(m_table->cellWidget(row, ColVol))) vol->setValue(leg.volatility * 100.0);
+    m_updating = false;
 }
 
 void StrategyTab::rebuildTable()
@@ -375,16 +497,25 @@ void StrategyTab::readTableIntoPosition()
     for (int row = 0; row < m_table->rowCount(); ++row) {
         auto* kind = qobject_cast<QComboBox*>(m_table->cellWidget(row, ColKind));
         auto* quantity = qobject_cast<QDoubleSpinBox*>(m_table->cellWidget(row, ColQuantity));
-        auto* strike = qobject_cast<QDoubleSpinBox*>(m_table->cellWidget(row, ColStrike));
-        auto* expiry = qobject_cast<QDoubleSpinBox*>(m_table->cellWidget(row, ColExpiry));
         auto* vol = qobject_cast<QDoubleSpinBox*>(m_table->cellWidget(row, ColVol));
         auto* entry = qobject_cast<QDoubleSpinBox*>(m_table->cellWidget(row, ColEntry));
-        if (!kind || !quantity || !strike || !expiry || !vol || !entry) continue;
+        if (!kind || !quantity || !vol || !entry) continue;
         Leg leg;
+        if (static_cast<size_t>(row) < m_position.legs.size()) {
+            leg = m_position.legs[static_cast<size_t>(row)];   // keep market mark and expiry date
+        }
         leg.kind = static_cast<LegKind>(kind->currentData().toInt());
         leg.quantity = quantity->value();
-        leg.strike = strike->value();
-        leg.maturity = expiry->value();
+        if (auto* strikeBox = qobject_cast<QDoubleSpinBox*>(m_table->cellWidget(row, ColStrike))) {
+            leg.strike = strikeBox->value();
+        } else if (auto* strikeCombo = qobject_cast<QComboBox*>(m_table->cellWidget(row, ColStrike))) {
+            leg.strike = strikeCombo->currentData().toDouble();
+        }
+        if (auto* expiryBox = qobject_cast<QDoubleSpinBox*>(m_table->cellWidget(row, ColExpiry))) {
+            leg.maturity = expiryBox->value();
+        } else if (auto* expiryCombo = qobject_cast<QComboBox*>(m_table->cellWidget(row, ColExpiry))) {
+            leg.maturity = expiryCombo->currentData().toDouble();
+        }
         leg.volatility = vol->value() / 100.0;
         leg.entryPrice = entry->value();
         legs.push_back(leg);
@@ -414,8 +545,13 @@ void StrategyTab::setPosition(const Position& position)
 void StrategyTab::loadPreset()
 {
     const auto preset = static_cast<StrategyPreset>(m_presets->currentData().toInt());
-    Position pos = buildPreset(preset, valuationMarket(), m_presetMaturity->value(), m_strikeStep->value());
-    pos.multiplier = m_multiplier->value();
+    Position pos;
+    if (chainMode()) {
+        pos = buildPresetFromChain(preset, m_chain, activityMarket(), presetMaturity(), m_multiplier->value());
+    } else {
+        pos = buildPreset(preset, valuationMarket(), m_presetMaturity->value(), m_strikeStep->value());
+        pos.multiplier = m_multiplier->value();
+    }
     setPosition(pos);
 }
 
@@ -423,10 +559,96 @@ void StrategyTab::repriceEntries()
 {
     const Market market = valuationMarket();
     for (Leg& leg : m_position.legs) {
-        leg.entryPrice = legValue(leg, market, market.spot, 0.0);
+        if (chainMode() && markLegToChain(leg, m_chain, activityMarket()) && leg.marketPrice > 0.0) {
+            leg.entryPrice = leg.marketPrice;
+        } else {
+            leg.entryPrice = legValue(leg, market, market.spot, 0.0);
+        }
     }
     rebuildTable();
     recompute();
+}
+
+double StrategyTab::presetMaturity() const
+{
+    if (chainMode() && m_presetExpiry->count() > 0) {
+        return m_presetExpiry->currentData().toDouble();
+    }
+    return m_presetMaturity->value();
+}
+
+ActivityMarket StrategyTab::activityMarket() const
+{
+    ActivityMarket m;
+    m.model = m_state.market.model;
+    m.spot = m_state.market.spot;
+    m.dividendYield = m_state.market.dividendYield;
+    m.rateFor = [this](double maturity) { return m_state.rateFor(maturity); };
+    return m;
+}
+
+void StrategyTab::refreshChainIndex()
+{
+    const bool wasChain = chainMode();
+    m_chain.build(m_state.chainQuotes);
+    m_chainTicker = m_state.underlyingTicker;
+
+    const bool chain = chainMode();
+    m_presetMaturity->setVisible(!chain);
+    m_presetExpiry->setVisible(chain);
+    m_strikeStep->setVisible(!chain);
+    m_strikeStepLabel->setVisible(!chain);
+    m_repriceEntries->setText(chain ? "Reprice Entries at Market" : "Reprice Entries at Model");
+    m_repriceEntries->setToolTip(chain ? "Set each entry price to the current chain mid" : "Set each entry price to the current model price");
+
+    if (chain) {
+        populateExpiryCombo();
+        const auto expiries = m_chain.expiries();
+        m_chainInfo->setText(QStringLiteral("Driven by the %1 option chain: %2 listed expir%3 (%4 to %5), spot %6%7. Strikes, expiries, entry prices and implied vols come from the chain.")
+                                 .arg(m_chainTicker.isEmpty() ? QStringLiteral("loaded") : m_chainTicker)
+                                 .arg(expiries.size()).arg(expiries.size() == 1 ? "y" : "ies")
+                                 .arg(expiries.empty() ? QString() : QString::fromStdString(expiries.front()->key.expiryDate),
+                                      expiries.empty() ? QString() : QString::fromStdString(expiries.back()->key.expiryDate),
+                                      number(m_state.market.spot, 2),
+                                      m_state.spotSource.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(m_state.spotSource)));
+        // Keep every leg marked to the latest chain (mids and implied vols).
+        markPositionToChain(m_position, m_chain, activityMarket());
+    } else {
+        m_chainInfo->setText("No option chain loaded: legs use model prices and the market volatility. Fetch a chain on the Option Chain tab to drive strategies from listed contracts.");
+        for (Leg& leg : m_position.legs) leg.marketPrice = 0.0;
+    }
+    if (wasChain != chain) {
+        rebuildTable();   // editors switch between free entry and listed-contract pickers
+    } else if (chain) {
+        // Refresh the visible IV cells with the latest marks without disturbing the editors.
+        m_updating = true;
+        for (int row = 0; row < m_table->rowCount() && static_cast<size_t>(row) < m_position.legs.size(); ++row) {
+            if (auto* vol = qobject_cast<QDoubleSpinBox*>(m_table->cellWidget(row, ColVol))) {
+                vol->setValue(m_position.legs[static_cast<size_t>(row)].volatility * 100.0);
+            }
+        }
+        m_updating = false;
+    }
+}
+
+void StrategyTab::populateExpiryCombo()
+{
+    const double previous = m_presetExpiry->count() > 0 ? m_presetExpiry->currentData().toDouble() : -1.0;
+    const QSignalBlocker blocker(m_presetExpiry);
+    m_presetExpiry->clear();
+    int select = -1;
+    const ListedExpiry* preferred = m_chain.firstExpiryAtLeast(25);
+    for (const ListedExpiry* e : m_chain.expiries()) {
+        const QString date = e->key.expiryDate.empty() ? QStringLiteral("T %1y").arg(number(e->key.maturity, 3)) : QString::fromStdString(e->key.expiryDate);
+        m_presetExpiry->addItem(QStringLiteral("%1 · %2 DTE").arg(date).arg(e->key.daysToExpiry), e->key.maturity);
+        if (previous > 0.0 && std::fabs(e->key.maturity - previous) < 1e-6) select = m_presetExpiry->count() - 1;
+    }
+    if (select < 0 && preferred) {
+        for (int i = 0; i < m_presetExpiry->count(); ++i) {
+            if (std::fabs(m_presetExpiry->itemData(i).toDouble() - preferred->key.maturity) < 1e-9) select = i;
+        }
+    }
+    m_presetExpiry->setCurrentIndex(std::max(0, select));
 }
 
 void StrategyTab::applySurfaceToLegs()
@@ -455,14 +677,21 @@ void StrategyTab::recompute()
     m_analysis = analyzePosition(m_position, market);
     m_applySurface->setEnabled(!m_state.surface.empty());
 
-    // Per-leg model prices and P&L.
+    // Per-leg prices and P&L. With a chain loaded the P&L marks to the chain mid; otherwise to model.
     for (int row = 0; row < m_table->rowCount() && static_cast<size_t>(row) < m_position.legs.size(); ++row) {
         const Leg& leg = m_position.legs[static_cast<size_t>(row)];
         const double model = legValue(leg, market, market.spot, 0.0);
-        const double unitPnl = model - leg.entryPrice;
+        const bool haveMarket = leg.marketPrice > 0.0;
+        const double mark = haveMarket ? leg.marketPrice : model;
+        const double unitPnl = mark - leg.entryPrice;
         const double pnl = unitPnl * leg.quantity * m_position.multiplier;
+        QTableWidgetItem* marketItem = m_table->item(row, ColMarket);
+        marketItem->setText(haveMarket ? number(leg.marketPrice) : QStringLiteral("–"));
+        marketItem->setToolTip(haveMarket ? (leg.expiryDate.empty() ? QString() : QStringLiteral("Chain mid for %1 expiry").arg(QString::fromStdString(leg.expiryDate)))
+                                          : (chainMode() && leg.kind != LegKind::Underlying ? QStringLiteral("Contract not listed in the loaded chain") : QString()));
         m_table->item(row, ColModel)->setText(number(model));
         m_table->item(row, ColUnitPnl)->setText(number(unitPnl));
+        m_table->item(row, ColUnitPnl)->setToolTip(haveMarket ? "Chain mid minus entry" : "Model price minus entry");
         m_table->item(row, ColPnl)->setText(signedMoney(pnl));
         m_table->item(row, ColPnl)->setForeground(QBrush(QColor(pnl >= 0 ? m_theme.profit : m_theme.loss)));
     }
@@ -700,6 +929,8 @@ QJsonObject StrategyTab::toJson() const
         l["maturity"] = leg.maturity;
         l["volatility"] = leg.volatility;
         l["entryPrice"] = leg.entryPrice;
+        if (leg.marketPrice > 0.0) l["marketPrice"] = leg.marketPrice;
+        if (!leg.expiryDate.empty()) l["expiryDate"] = QString::fromStdString(leg.expiryDate);
         legs.append(l);
     }
     o["legs"] = legs;
@@ -721,6 +952,8 @@ void StrategyTab::fromJson(const QJsonObject& o)
         leg.maturity = l["maturity"].toDouble(1.0);
         leg.volatility = l["volatility"].toDouble(0.0);
         leg.entryPrice = l["entryPrice"].toDouble(0.0);
+        leg.marketPrice = l["marketPrice"].toDouble(0.0);
+        leg.expiryDate = l["expiryDate"].toString().toStdString();
         pos.legs.push_back(leg);
     }
     m_updating = true;
@@ -735,12 +968,14 @@ QString StrategyTab::resultsCsv() const
     QString out;
     QTextStream s(&out);
     const Market market = valuationMarket();
-    s << "kind,quantity,strike,maturity_years,volatility,entry_price,model_price,unit_pnl,position_pnl\n";
+    s << "kind,quantity,strike,expiry_date,maturity_years,volatility,entry_price,market_mid,model_price,unit_pnl,position_pnl\n";
     for (const Leg& leg : m_position.legs) {
         const double model = legValue(leg, market, market.spot, 0.0);
-        s << legKindName(leg.kind) << "," << leg.quantity << "," << leg.strike << "," << leg.maturity << ","
-          << (leg.volatility > 0 ? leg.volatility : market.volatility) << "," << leg.entryPrice << "," << model << ","
-          << (model - leg.entryPrice) << "," << (model - leg.entryPrice) * leg.quantity * m_position.multiplier << "\n";
+        const double mark = leg.marketPrice > 0.0 ? leg.marketPrice : model;
+        s << legKindName(leg.kind) << "," << leg.quantity << "," << leg.strike << "," << QString::fromStdString(leg.expiryDate) << "," << leg.maturity << ","
+          << (leg.volatility > 0 ? leg.volatility : market.volatility) << "," << leg.entryPrice << ","
+          << (leg.marketPrice > 0.0 ? QString::number(leg.marketPrice) : QString()) << "," << model << ","
+          << (mark - leg.entryPrice) << "," << (mark - leg.entryPrice) * leg.quantity * m_position.multiplier << "\n";
     }
     s << "\nmetric,value\n";
     s << "net_premium," << m_analysis.netPremium << "\n";

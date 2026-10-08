@@ -73,8 +73,12 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   implied vols per strike, arbitrage flags, SVI fit per expiry, smile and term-structure
   charts, hand-off to the pricer and to strategy legs. A strike filter (all, a band
   around the forward, or a custom min/max) limits the table and smile chart; the SVI fit
-  always uses every quote. Drag the grip under the table or use Hide Charts to see more
-  strikes.
+  always uses every quote. The expiry title and underlying price sit above the table and
+  stay fixed; the column header is part of the table and stays fixed while rows scroll.
+  Columns are resizable (double-click a divider to fit). Drag the grip under the table or
+  use Hide Charts to see more strikes; the chart pane scrolls when squeezed. Hovering a
+  point on the smile or term-structure chart shows its strike, implied vol, quote
+  details and fitted vol both as a tooltip and in the readout under the chart.
 
 - **Heatmap**: activity view of the loaded chain. A strike x expiry grid coloured by
   volume, open interest, both, or turnover; summary cards (call/put volume and open

@@ -31,6 +31,8 @@ struct Leg {
     double maturity = 1.0;        ///< years, ignored for Underlying
     double volatility = 0.0;      ///< per-leg implied vol; 0 means use the market volatility
     double entryPrice = 0.0;      ///< premium per unit paid (long) or received (short); purchase price for Underlying
+    double marketPrice = 0.0;     ///< current chain mid for the contract when a chain is loaded; 0 = unknown
+    std::string expiryDate;       ///< ISO expiration date when the leg came from a chain
 };
 
 /// Market state shared by every leg.

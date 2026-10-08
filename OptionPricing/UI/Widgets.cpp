@@ -119,6 +119,46 @@ QChartView* makeChartView(QWidget* parent, QChart* chart, int minimumHeight)
     return view;
 }
 
+QPixmap roundedLogo(const QImage& image, int size, qreal devicePixelRatio)
+{
+    const int px = static_cast<int>(size * devicePixelRatio);
+    QPixmap out(px, px);
+    out.fill(Qt::transparent);
+    QPainter painter(&out);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    QPainterPath clip;
+    clip.addRoundedRect(QRectF(0, 0, px, px), px * 0.22, px * 0.22);
+    painter.setClipPath(clip);
+    const QImage scaled = image.scaled(px, px, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+    painter.drawImage(QRect((px - scaled.width()) / 2, (px - scaled.height()) / 2, scaled.width(), scaled.height()), scaled);
+    painter.end();
+    out.setDevicePixelRatio(devicePixelRatio);
+    return out;
+}
+
+QPixmap monogramBadge(const QString& text, const QColor& background, const QColor& foreground, int size, qreal devicePixelRatio)
+{
+    const int px = static_cast<int>(size * devicePixelRatio);
+    QPixmap out(px, px);
+    out.fill(Qt::transparent);
+    QPainter painter(&out);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setBrush(background);
+    painter.setPen(Qt::NoPen);
+    painter.drawRoundedRect(QRectF(0, 0, px, px), px * 0.22, px * 0.22);
+    QFont font("Menlo");
+    font.setBold(true);
+    const QString letters = text.left(text.size() >= 4 ? 2 : (text.size() >= 2 ? 2 : 1)).toUpper();
+    font.setPixelSize(static_cast<int>(px * (letters.size() > 1 ? 0.42 : 0.55)));
+    painter.setFont(font);
+    painter.setPen(foreground);
+    painter.drawText(QRect(0, 0, px, px), Qt::AlignCenter, letters);
+    painter.end();
+    out.setDevicePixelRatio(devicePixelRatio);
+    return out;
+}
+
 QTableWidgetItem* makeCell(const QString& text, Qt::Alignment alignment)
 {
     auto* item = new QTableWidgetItem(text);

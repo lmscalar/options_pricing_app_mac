@@ -74,6 +74,7 @@
 		F37616673077EF8F00F5524A /* Activity.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Activity.h; sourceTree = "<group>"; };
 		F37616683077EF9900F5524A /* HeatmapTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HeatmapTab.h; sourceTree = "<group>"; };
 		F37616693077EFF800F5524A /* HeatmapTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = HeatmapTab.cpp; sourceTree = "<group>"; };
+		F376166B30781BB500F5524A /* ChainStrategy.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ChainStrategy.h; sourceTree = "<group>"; };
 		F3B6FAFE2988347000563EB6 /* OptionPricing */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = OptionPricing; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3B6FB012988347000563EB6 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -115,6 +116,7 @@
 				F3761630307722B100F5524A /* Scenario.h */,
 				F3761631307722D000F5524A /* VolSurface.h */,
 				F37616673077EF8F00F5524A /* Activity.h */,
+				F376166B30781BB500F5524A /* ChainStrategy.h */,
 			);
 			path = Pricing;
 			sourceTree = "<group>";

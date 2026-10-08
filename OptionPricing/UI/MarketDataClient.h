@@ -47,6 +47,17 @@ public:
         std::vector<pricing::RatePoint> points;   ///< continuously compounded zero rates
     };
 
+    struct TickerDetails {
+        QString ticker;
+        QString name;                ///< company name, e.g. "Nvidia Corp"
+        QString exchange;            ///< primary exchange MIC, e.g. "XNAS"
+        QString type;                ///< "CS" common stock, "ETF", ...
+        QString iconUrl;             ///< square icon (PNG/JPEG), empty if none
+        QString logoUrl;             ///< wordmark (often SVG), empty if none
+        QString description;
+        double marketCap = 0.0;
+    };
+
     struct DividendInfo {
         double cashAmount = 0.0;
         int frequency = 0;           ///< payments per year (4 = quarterly)
@@ -73,6 +84,9 @@ public:
                      std::function<void(int pages, int contracts)> progress,
                      std::function<void(const ChainDownload&)> ok, ErrorHandler err);
     void fetchTreasuryCurve(std::function<void(const TreasuryCurve&)> ok, ErrorHandler err);
+    void fetchTickerDetails(const QString& ticker, std::function<void(const TickerDetails&)> ok, ErrorHandler err);
+    /// Downloads an image behind the API (branding icons need the bearer token).
+    void fetchImage(const QString& url, std::function<void(const QImage&)> ok, ErrorHandler err);
     void fetchDividends(const QString& ticker, const QDate& valuationDate, double horizonYears,
                         std::function<void(const DividendInfo&)> ok, ErrorHandler err);
 

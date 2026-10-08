@@ -51,6 +51,11 @@ public:
 
     QString resultsCsv() const;
 
+protected:
+    void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+
+public:
     std::function<void(double strike, double maturity, double volatility, const QString& expiryDate)> onSendToPricer;
     std::function<void(bool ok, const QString& message)> onLiveOperationFinished;
 
@@ -69,6 +74,11 @@ private:
     void applySpotPolicy();
     void updateSpotLabels();
     void updateTimers();
+    /// Fetches company name and icon for the current ticker (served from the disk cache when possible).
+    void ensureBranding();
+    static QString logoCachePath(const QString& ticker);
+    /// Sizes columns to their content and shares spare width, unless the user has resized them.
+    void fitColumns();
     void setLiveBusy(bool busy, const QString& status);
     void finishLive(bool ok, const QString& message);
     void refreshKeyStatus();
@@ -101,7 +111,11 @@ private:
     QLabel* m_tableTitle = nullptr;
     QLabel* m_spotLabel = nullptr;
     QLabel* m_spotDetail = nullptr;
+    QLabel* m_logoLabel = nullptr;
+    QString m_brandingRequested;       ///< ticker whose branding fetch is in flight or done
     double m_lastSliceKey = -1.0;      ///< maturity of the slice last shown, to keep scroll position on refresh
+    bool m_fittingColumns = false;     ///< true while fitColumns() adjusts widths programmatically
+    bool m_userResizedColumns = false; ///< set once the user drags a column divider
     bool m_atmCentered = false;        ///< whether the current slice has been centred on the ATM row while visible
 
     // Auto-refresh
@@ -129,7 +143,12 @@ private:
     QChart* m_smileChart = nullptr;
     QValueAxis* m_smileX = nullptr;
     QValueAxis* m_smileY = nullptr;
+    QLabel* m_smileHover = nullptr;
     QChart* m_termChart = nullptr;
     QValueAxis* m_termX = nullptr;
     QValueAxis* m_termY = nullptr;
+    QLabel* m_termHover = nullptr;
+
+    /// Shows a chart hover readout both as a tooltip at the cursor and in the label under the chart.
+    void showChartHover(QLabel* readout, const QString& text, bool state);
 };

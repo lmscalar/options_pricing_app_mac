@@ -330,6 +330,51 @@ void MarketDataClient::fetchChains(const QString& ticker, const QDate& valuation
     }, err);
 }
 
+void MarketDataClient::fetchTickerDetails(const QString& ticker, std::function<void(const TickerDetails&)> ok, ErrorHandler err)
+{
+    const QString symbol = ticker.trimmed().toUpper();
+    get(endpoint(QStringLiteral("/v3/reference/tickers/%1").arg(symbol)), [symbol, ok](const QJsonObject& body) {
+        const QJsonObject r = body["results"].toObject();
+        const QJsonObject branding = r["branding"].toObject();
+        TickerDetails d;
+        d.ticker = symbol;
+        d.name = r["name"].toString();
+        d.exchange = r["primary_exchange"].toString();
+        d.type = r["type"].toString();
+        d.iconUrl = branding["icon_url"].toString();
+        d.logoUrl = branding["logo_url"].toString();
+        d.description = r["description"].toString();
+        d.marketCap = r["market_cap"].toDouble();
+        ok(d);
+    }, err);
+}
+
+void MarketDataClient::fetchImage(const QString& url, std::function<void(const QImage&)> ok, ErrorHandler err)
+{
+    if (m_apiKey.isEmpty() || url.isEmpty()) {
+        err("No image URL or API key.");
+        return;
+    }
+    QNetworkRequest request{ QUrl(url) };
+    request.setRawHeader("Authorization", "Bearer " + m_apiKey.toUtf8());
+    request.setTransferTimeout(20000);
+    QNetworkReply* reply = m_manager.get(request);
+    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, ok = std::move(ok), err = std::move(err)] {
+        reply->deleteLater();
+        const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (reply->error() != QNetworkReply::NoError || status >= 400) {
+            err(describeFailure(status, QJsonObject(), reply->errorString()));
+            return;
+        }
+        QImage image;
+        if (!image.loadFromData(reply->readAll())) {
+            err("The branding image could not be decoded.");
+            return;
+        }
+        ok(image);
+    });
+}
+
 void MarketDataClient::fetchTreasuryCurve(std::function<void(const TreasuryCurve&)> ok, ErrorHandler err)
 {
     get(endpoint("/fed/v1/treasury-yields", { { "limit", "1" }, { "sort", "date.desc" } }),

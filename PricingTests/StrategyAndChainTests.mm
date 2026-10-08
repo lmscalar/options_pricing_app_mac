@@ -8,6 +8,7 @@
 #import <XCTest/XCTest.h>
 
 #include "../OptionPricing/Pricing/Activity.h"
+#include "../OptionPricing/Pricing/ChainStrategy.h"
 #include "../OptionPricing/Pricing/Csv.h"
 #include "../OptionPricing/Pricing/Scenario.h"
 #include "../OptionPricing/Pricing/Strategy.h"
@@ -377,6 +378,74 @@ using namespace pricing;
     XCTAssertEqualWithAccuracy(summary.busiestStrike, 105.0, 1e-12);
     XCTAssertEqualWithAccuracy(summary.putCallVolumeRatio, 140.0 / 630.0, 1e-9);
     XCTAssertEqual(summary.contracts, 28);
+}
+
+- (void)testChainIndexAndChainDrivenPresets
+{
+    ChainMarket cm;
+    cm.spot = 100; cm.riskFreeRate = 0.05; cm.dividendYield = 0.0;
+    std::vector<ChainQuote> chain = syntheticChain(cm, { 30.0 / 365.0, 91.0 / 365.0 }, 0.25, 0.0, 0.0, 5.0, 4);
+    for (ChainQuote& q : chain) {
+        q.expiryDate = q.maturity < 0.2 ? "2026-11-07" : "2027-01-07";
+        q.daysToExpiry = q.maturity < 0.2 ? 30 : 91;
+    }
+    const ChainIndex index(chain);
+    XCTAssertFalse(index.empty());
+    XCTAssertEqual(index.expiries().size(), 2u);
+    XCTAssertEqual(index.expiries()[0]->key.expiryDate, "2026-11-07");
+    XCTAssertEqual(index.expiries()[0]->strikes.size(), 9u);          // 80..120 by 5
+    XCTAssertEqualWithAccuracy(index.nearestStrike(30.0 / 365.0, 101.9), 100.0, 1e-12);
+    XCTAssertEqualWithAccuracy(index.strikeOffset(30.0 / 365.0, 100.0, 2), 110.0, 1e-12);
+    XCTAssertEqualWithAccuracy(index.strikeOffset(30.0 / 365.0, 120.0, 3), 120.0, 1e-12);   // clamped at the top
+    XCTAssertEqualWithAccuracy(index.strikeOffset(30.0 / 365.0, 97.0, 1), 97.0, 1e-12);     // unlisted stays put
+    XCTAssertTrue(index.quote(30.0 / 365.0, 100.0, OptionType::Call) != nullptr);
+    XCTAssertTrue(index.quote(30.0 / 365.0, 97.0, OptionType::Call) == nullptr);
+    XCTAssertEqual(index.firstExpiryAtLeast(25)->key.daysToExpiry, 30);
+    XCTAssertEqual(index.firstExpiryAtLeast(60)->key.daysToExpiry, 91);
+    XCTAssertEqual(index.firstExpiryAtLeast(500)->key.daysToExpiry, 91);          // falls back to the last
+
+    ActivityMarket market;
+    market.spot = 100.0;
+    market.rateFor = [](double) { return 0.05; };
+
+    Leg leg;
+    leg.kind = LegKind::Put;
+    leg.strike = 95.0;
+    leg.maturity = 30.0 / 365.0;
+    XCTAssertTrue(markLegToChain(leg, index, market));
+    XCTAssertEqual(leg.expiryDate, "2026-11-07");
+    XCTAssertGreaterThan(leg.marketPrice, 0.0);
+    XCTAssertEqualWithAccuracy(leg.volatility, 0.25, 1e-4);          // synthetic mids are exact model prices
+    leg.strike = 97.0;
+    XCTAssertFalse(markLegToChain(leg, index, market));
+    XCTAssertEqualWithAccuracy(leg.marketPrice, 0.0, 0.0);
+
+    const Position condor = buildPresetFromChain(StrategyPreset::IronCondor, index, market, 30.0 / 365.0, 100.0);
+    XCTAssertEqual(condor.legs.size(), 4u);
+    XCTAssertEqualWithAccuracy(condor.legs[0].strike, 90.0, 1e-12);   // two listed strikes below ATM
+    XCTAssertEqualWithAccuracy(condor.legs[1].strike, 95.0, 1e-12);
+    XCTAssertEqualWithAccuracy(condor.legs[2].strike, 105.0, 1e-12);
+    XCTAssertEqualWithAccuracy(condor.legs[3].strike, 110.0, 1e-12);
+    for (const Leg& l : condor.legs) {
+        XCTAssertEqual(l.expiryDate, "2026-11-07");
+        XCTAssertEqualWithAccuracy(l.entryPrice, l.marketPrice, 1e-12);   // entered at the chain mid
+        XCTAssertGreaterThan(l.marketPrice, 0.0);
+    }
+    // Entered at chain mids that equal model prices, so the position starts flat.
+    Market m;
+    m.spot = 100; m.riskFreeRate = 0.05; m.volatility = 0.25;
+    XCTAssertEqualWithAccuracy(positionPnl(condor, m, 100.0, 0.0), 0.0, 1e-6);
+
+    const Position calendar = buildPresetFromChain(StrategyPreset::CallCalendar, index, market, 30.0 / 365.0, 100.0);
+    XCTAssertEqual(calendar.legs.size(), 2u);
+    XCTAssertEqual(calendar.legs[0].expiryDate, "2026-11-07");
+    XCTAssertEqual(calendar.legs[1].expiryDate, "2027-01-07");          // next listed expiry at least twice as far
+    XCTAssertEqualWithAccuracy(calendar.legs[1].maturity, 91.0 / 365.0, 1e-12);
+
+    const Position covered = buildPresetFromChain(StrategyPreset::CoveredCall, index, market, 30.0 / 365.0, 100.0);
+    XCTAssertEqual(covered.legs[0].kind, LegKind::Underlying);
+    XCTAssertEqualWithAccuracy(covered.legs[0].entryPrice, 100.0, 1e-12);
+    XCTAssertEqualWithAccuracy(covered.legs[1].strike, 105.0, 1e-12);
 }
 
 - (void)testSviFitReproducesKnownParameters

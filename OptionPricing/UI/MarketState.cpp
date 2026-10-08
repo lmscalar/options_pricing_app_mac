@@ -54,6 +54,9 @@ QJsonObject MarketState::toJson() const
     root["useRateCurve"] = useRateCurve;
     root["chain"] = chain;
     if (!underlyingTicker.isEmpty()) root["underlyingTicker"] = underlyingTicker;
+    if (!companyName.isEmpty()) root["companyName"] = companyName;
+    if (!exchange.isEmpty()) root["exchange"] = exchange;
+    if (previousClose > 0.0) root["previousClose"] = previousClose;
     if (!spotSource.isEmpty()) {
         root["spotSource"] = spotSource;
         root["spotTime"] = spotTime.toString(Qt::ISODate);
@@ -87,6 +90,10 @@ void MarketState::fromJson(const QJsonObject& root)
     useRateCurve = root["useRateCurve"].toBool(false);
 
     underlyingTicker = root["underlyingTicker"].toString();
+    companyName = root["companyName"].toString();
+    exchange = root["exchange"].toString();
+    logo = QImage();   // re-fetched (or served from the disk cache) when the chain tab sees the ticker
+    previousClose = root["previousClose"].toDouble(0.0);
     spotSource = root["spotSource"].toString();
     spotTime = QDateTime::fromString(root["spotTime"].toString(), Qt::ISODate);
 

@@ -26,6 +26,7 @@
 #include <QtCore/QLocale>
 #include <QtCore/QProcessEnvironment>
 #include <QtCore/QSettings>
+#include <QtCore/QStandardPaths>
 #include <QtCore/QSignalBlocker>
 #include <QtCore/QString>
 #include <QtCore/QStringList>
@@ -44,8 +45,14 @@
 #include <QtGui/QBrush>
 #include <QtGui/QClipboard>
 #include <QtGui/QCloseEvent>
+#include <QtGui/QResizeEvent>
+#include <QtGui/QShowEvent>
 #include <QtGui/QColor>
+#include <QtGui/QCursor>
 #include <QtGui/QFont>
+#include <QtGui/QImage>
+#include <QtGui/QPainterPath>
+#include <QtGui/QPixmap>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QKeySequence>
 #include <QtGui/QPainter>
@@ -88,6 +95,7 @@
 #include <QtWidgets/QTableWidget>
 #include <QtWidgets/QTableWidgetItem>
 #include <QtWidgets/QToolButton>
+#include <QtWidgets/QToolTip>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
 

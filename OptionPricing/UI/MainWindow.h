@@ -33,6 +33,8 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
 private:
     void buildUi();
@@ -72,6 +74,21 @@ private:
     HeatmapTab* m_heatmap = nullptr;
     QPushButton* m_themeToggle = nullptr;
     QLabel* m_subtitle = nullptr;
+
+    // Quote banner in the header: ticker, price, daily change, provenance
+    QFrame* m_banner = nullptr;
+    QLabel* m_bannerLogo = nullptr;
+    QLabel* m_bannerName = nullptr;
+    QLabel* m_bannerSymbol = nullptr;
+    QLabel* m_bannerPrice = nullptr;
+    QLabel* m_bannerChange = nullptr;
+    QLabel* m_bannerMeta = nullptr;
+    QString m_bannerMetaFull;
+    QString m_bannerNameFull;
+    void updateBanner();
+    /// Elides the banner's name and meta text to the space available so the header never
+    /// grows wider than the window.
+    void elideBanner();
     QMenu* m_recentMenu = nullptr;
     QAction* m_darkAction = nullptr;
 };

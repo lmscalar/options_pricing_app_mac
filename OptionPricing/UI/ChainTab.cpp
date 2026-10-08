@@ -46,6 +46,9 @@ void ChainTab::buildUi()
     m_setKey = ui::makeButton(this, "Set Key…", "secondary", "Enter a Massive.com API key");
     m_keyStatus = new QLabel(this);
     m_keyStatus->setObjectName("muted");
+    m_keyStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_keyStatus->setMinimumWidth(120);
+    m_keyStatus->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_liveStatus = new QLabel(this);
     m_liveStatus->setObjectName("muted");
     m_liveStatus->setWordWrap(true);
@@ -94,14 +97,20 @@ void ChainTab::buildUi()
     m_sample = ui::makeButton(this, "Generate Sample Chain", "secondary", "Create a synthetic chain with skew and smile for exploration");
     m_clear = ui::makeButton(this, "Clear", "secondary", "Remove the loaded chain");
     m_defaultMaturity = ui::makeSpinBox(this, 0.001, 20.0, 0.25, 3, 0.25, " yrs");
-    m_defaultMaturity->setToolTip("Expiry assumed for CSV rows that do not carry one");
+    m_defaultMaturity->setToolTip("Expiry assumed for imported CSV rows that do not carry one");
     m_expiry = new QComboBox(this);
     m_expiry->setToolTip("Expiry slice to display");
-    m_useAtm = ui::makeButton(this, "Use ATM Vol as Market σ", "secondary", "Copy this expiry's at-the-money fitted volatility into the market inputs");
+    // Size to a fixed character count rather than the longest entry, so a long label
+    // never widens the whole window.
+    m_expiry->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_expiry->setMinimumContentsLength(30);
+    m_expiry->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_useAtm = ui::makeButton(this, "Use ATM Vol as σ", "secondary", "Copy this expiry's at-the-money fitted volatility into the market inputs");
     m_useAtm->setEnabled(false);
 
     m_marketInfo = new QLabel(this);
     m_marketInfo->setObjectName("muted");
+    m_marketInfo->setWordWrap(true);
     m_summary = new QLabel(this);
     m_summary->setObjectName("muted");
     m_summary->setWordWrap(true);
@@ -113,7 +122,7 @@ void ChainTab::buildUi()
     controls->addWidget(m_import, 0, 0);
     controls->addWidget(m_sample, 0, 1);
     controls->addWidget(m_clear, 0, 2);
-    controls->addWidget(new QLabel("Default expiry", controlsBox), 0, 3);
+    controls->addWidget(new QLabel("CSV expiry", controlsBox), 0, 3);
     controls->addWidget(m_defaultMaturity, 0, 4);
     controls->addWidget(new QLabel("Show expiry", controlsBox), 0, 5);
     controls->addWidget(m_expiry, 0, 6);
@@ -154,32 +163,52 @@ void ChainTab::buildUi()
     m_spotDetail = new QLabel(this);
     m_spotDetail->setObjectName("muted");
     m_spotDetail->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    // The provenance line is long; wrap it rather than letting it widen the window.
+    m_spotDetail->setWordWrap(true);
+    m_spotDetail->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_spotDetail->setMinimumWidth(260);
     auto* spotColumn = new QVBoxLayout;
     spotColumn->setContentsMargins(0, 0, 0, 0);
     spotColumn->setSpacing(0);
     spotColumn->addWidget(m_spotLabel);
     spotColumn->addWidget(m_spotDetail);
+    m_logoLabel = new QLabel(this);
+    m_logoLabel->setFixedSize(40, 40);
+    m_logoLabel->setAlignment(Qt::AlignCenter);
+    m_logoLabel->setVisible(false);
+    m_tableTitle->setWordWrap(true);
+    m_tableTitle->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_tableTitle->setMinimumWidth(200);
     auto* tableHeader = new QHBoxLayout;
     tableHeader->setContentsMargins(0, 0, 0, 0);
-    tableHeader->addWidget(m_tableTitle, 1);
-    tableHeader->addLayout(spotColumn);
+    tableHeader->addWidget(m_tableTitle, 2);
+    tableHeader->addWidget(m_logoLabel);
+    tableHeader->addSpacing(8);
+    tableHeader->addLayout(spotColumn, 3);
     tableHeader->addSpacing(12);
     tableHeader->addWidget(m_toggleCharts);
 
     m_table = new QTableWidget(0, ColumnCount, this);
     m_table->setHorizontalHeaderLabels({ "Strike", "Call Bid", "Call Ask", "Call Mid", "Call IV", "Fit IV", "Put Bid", "Put Ask", "Put Mid", "Put IV", "Flags" });
-    m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    m_table->horizontalHeader()->setSectionResizeMode(ColFlags, QHeaderView::ResizeToContents);
+    // Columns are user-resizable (drag a divider, double-click to fit) and the last one
+    // absorbs leftover width. The header is part of the table frame, so it stays fixed
+    // while rows scroll and while the splitter changes the table height.
+    m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    m_table->horizontalHeader()->setStretchLastSection(false);
+    m_table->horizontalHeader()->setDefaultSectionSize(104);
+    m_table->horizontalHeader()->setMinimumSectionSize(48);
     m_table->horizontalHeader()->setVisible(true);
-    m_table->horizontalHeader()->setMinimumHeight(28);
+    m_table->horizontalHeader()->setFixedHeight(30);
     m_table->horizontalHeader()->setHighlightSections(false);
+    m_table->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_table->setWordWrap(false);
     m_table->verticalHeader()->setVisible(false);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->setAlternatingRowColors(true);
     m_table->setToolTip("Double-click a strike to send it to the Pricer tab with its implied volatility");
-    m_table->setMinimumHeight(220);
+    m_table->setMinimumHeight(140);   // header plus a few rows; drag the grip or hide the charts for more
 
     m_smileChart = new QChart;
     m_smileChart->setTitle("Implied volatility smile");
@@ -187,11 +216,11 @@ void ChainTab::buildUi()
     m_smileX->setTitleText("Strike");
     m_smileX->setLabelFormat("%.0f");
     m_smileY = new QValueAxis;
-    m_smileY->setTitleText("Implied vol (%)");
+    m_smileY->setTitleText("IV (%)");
     m_smileY->setLabelFormat("%.1f");
     m_smileChart->addAxis(m_smileX, Qt::AlignBottom);
     m_smileChart->addAxis(m_smileY, Qt::AlignLeft);
-    auto* smileView = ui::makeChartView(this, m_smileChart, 230);
+    auto* smileView = ui::makeChartView(this, m_smileChart, 220);
 
     m_termChart = new QChart;
     m_termChart->setTitle("Volatility term structure");
@@ -199,11 +228,11 @@ void ChainTab::buildUi()
     m_termX->setTitleText("Years to expiry");
     m_termX->setLabelFormat("%.2f");
     m_termY = new QValueAxis;
-    m_termY->setTitleText("Implied vol (%)");
+    m_termY->setTitleText("IV (%)");
     m_termY->setLabelFormat("%.1f");
     m_termChart->addAxis(m_termX, Qt::AlignBottom);
     m_termChart->addAxis(m_termY, Qt::AlignLeft);
-    auto* termView = ui::makeChartView(this, m_termChart, 230);
+    auto* termView = ui::makeChartView(this, m_termChart, 220);
 
     m_sviInfo = new QLabel(this);
     m_sviInfo->setObjectName("value");
@@ -211,7 +240,7 @@ void ChainTab::buildUi()
     m_sviInfo->setWordWrap(true);
     m_issues = new QPlainTextEdit(this);
     m_issues->setReadOnly(true);
-    m_issues->setMinimumHeight(90);
+    m_issues->setMinimumHeight(48);
     m_issues->setMaximumHeight(140);
     m_issues->setPlaceholderText("No arbitrage issues detected for this expiry.");
 
@@ -220,40 +249,75 @@ void ChainTab::buildUi()
     fitLayout->addWidget(m_sviInfo);
     fitLayout->addWidget(m_issues, 1);
 
+    m_smileHover = new QLabel("Hover a point for strike, implied vol and quote details.", this);
+    m_smileHover->setObjectName("muted");
+    m_smileHover->setAlignment(Qt::AlignCenter);
+    m_smileHover->setWordWrap(true);
+    m_termHover = new QLabel("Hover a point for the expiry's ATM and wing vols.", this);
+    m_termHover->setObjectName("muted");
+    m_termHover->setAlignment(Qt::AlignCenter);
+    m_termHover->setWordWrap(true);
+    // Fixed two-line height: the readout text changes on every hover, and a label that
+    // grew or shrank with it would resize the chart above and make it jitter.
+    for (QLabel* readout : { m_smileHover, m_termHover }) {
+        readout->setFixedHeight(readout->fontMetrics().lineSpacing() * 2 + 8);
+        readout->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        readout->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    }
+    auto* smileColumn = new QVBoxLayout;
+    smileColumn->setContentsMargins(0, 0, 0, 0);
+    smileColumn->setSpacing(2);
+    smileColumn->addWidget(smileView, 1);
+    smileColumn->addWidget(m_smileHover);
+    auto* termColumn = new QVBoxLayout;
+    termColumn->setContentsMargins(0, 0, 0, 0);
+    termColumn->setSpacing(2);
+    termColumn->addWidget(termView, 1);
+    termColumn->addWidget(m_termHover);
     auto* charts = new QHBoxLayout;
     charts->setSpacing(12);
-    charts->addWidget(smileView, 1);
-    charts->addWidget(termView, 1);
+    charts->addLayout(smileColumn, 1);
+    charts->addLayout(termColumn, 1);
 
     // Vertical splitter: drag the grip between the table and the charts to show more strikes,
     // or hide the charts entirely with the toggle button.
     m_splitter = new QSplitter(Qt::Vertical, this);
     m_splitter->setHandleWidth(10);
+    // The table never collapses; the charts pane may, so a short window shrinks the
+    // charts instead of forcing a tall minimum window height.
     m_splitter->setChildrenCollapsible(false);
-    auto* top = new QWidget(m_splitter);
-    auto* topLayout = new QVBoxLayout(top);
-    topLayout->setContentsMargins(0, 0, 0, 0);
-    topLayout->setSpacing(6);
-    topLayout->addLayout(tableHeader);
-    topLayout->addWidget(m_table, 1);
-    m_bottomPane = new QWidget(m_splitter);
-    auto* bottomLayout = new QVBoxLayout(m_bottomPane);
+    // The table itself is the top pane; its title and the price header sit above the
+    // splitter so they stay put however the panes are dragged.
+    m_table->setParent(m_splitter);
+    // The charts and fit summary live in a scroll area so a squeezed pane scrolls instead
+    // of overlapping, which lets the pane's minimum height stay small.
+    auto* bottomContent = new QWidget;
+    auto* bottomLayout = new QVBoxLayout(bottomContent);
     bottomLayout->setContentsMargins(0, 0, 0, 0);
     bottomLayout->setSpacing(12);
     bottomLayout->addLayout(charts, 1);
     bottomLayout->addWidget(fitBox);
-    m_bottomPane->setMinimumHeight(440);
-    m_splitter->addWidget(top);
+    auto* bottomScroll = new QScrollArea(m_splitter);
+    bottomScroll->setWidgetResizable(true);
+    bottomScroll->setWidget(bottomContent);
+    bottomScroll->setFrameShape(QFrame::NoFrame);
+    bottomScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    bottomScroll->setMinimumHeight(120);
+    m_bottomPane = bottomScroll;
+    m_splitter->addWidget(m_table);
     m_splitter->addWidget(m_bottomPane);
+    m_splitter->setCollapsible(0, false);
+    m_splitter->setCollapsible(1, true);
     m_splitter->setStretchFactor(0, 3);
     m_splitter->setStretchFactor(1, 2);
-    m_splitter->setSizes({ 420, 440 });
+    m_splitter->setSizes({ 380, 480 });
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(20, 16, 20, 16);
     root->setSpacing(12);
     root->addWidget(liveBox);
     root->addWidget(controlsBox);
+    root->addLayout(tableHeader);
     root->addWidget(m_splitter, 1);
     updateStrikeControls();
 }
@@ -292,6 +356,9 @@ void ChainTab::wire()
         m_toggleCharts->setText(hide ? "Show Charts" : "Hide Charts");
     });
 
+    connect(m_table->horizontalHeader(), &QHeaderView::sectionResized, this, [this](int, int, int) {
+        if (!m_fittingColumns) m_userResizedColumns = true;
+    });
     connect(m_fetch, &QPushButton::clicked, this, [this] { fetchLiveChain(); });
     connect(m_ticker, &QLineEdit::returnPressed, this, [this] { fetchLiveChain(); });
     connect(m_autoRefresh, &QCheckBox::toggled, this, [this](bool) { updateTimers(); });
@@ -463,16 +530,28 @@ void ChainTab::showSlice(int index)
         }
         m_table->setItem(r, ColStrike, strikeItem);
 
-        auto fill = [&](const ImpliedQuote* q, int bid, int ask, int mid, int iv, const QString& colour) {
+        const double spotForMoneyness = m_state.market.spot;
+        auto fill = [&](const ImpliedQuote* q, int bid, int ask, int mid, int iv, const QString& colour, bool isCall) {
+            // In-the-money cells get the side's tint, as on exchange and broker chains.
+            const bool inTheMoney = isCall ? strike < spotForMoneyness : strike > spotForMoneyness;
+            const QColor tint(isCall ? m_theme.itmCall : m_theme.itmPut);
+            auto place = [&](int col, QTableWidgetItem* item) {
+                if (inTheMoney) item->setBackground(QBrush(tint));
+                m_table->setItem(r, col, item);
+            };
             if (!q) {
-                for (int c : { bid, ask, mid, iv }) m_table->setItem(r, c, ui::makeCell("–"));
+                for (int c : { bid, ask, mid, iv }) place(c, ui::makeCell("–"));
                 return;
             }
-            m_table->setItem(r, bid, ui::makeCell(q->quote.bid > 0 ? ui::number(q->quote.bid, 2) : "–"));
-            m_table->setItem(r, ask, ui::makeCell(q->quote.ask > 0 ? ui::number(q->quote.ask, 2) : "–"));
+            auto* bidItem = ui::makeCell(q->quote.bid > 0 ? ui::number(q->quote.bid, 2) : "–");
+            if (q->quote.bid > 0) bidItem->setForeground(QBrush(QColor(m_theme.up)));
+            auto* askItem = ui::makeCell(q->quote.ask > 0 ? ui::number(q->quote.ask, 2) : "–");
+            if (q->quote.ask > 0) askItem->setForeground(QBrush(QColor(m_theme.down)));
+            place(bid, bidItem);
+            place(ask, askItem);
             auto* midItem = ui::makeCell(ui::number(q->quote.mid, 2));
             if (q->quote.bid <= 0 && q->quote.ask <= 0) midItem->setToolTip("Last trade / day close (no bid-ask quote available)");
-            m_table->setItem(r, mid, midItem);
+            place(mid, midItem);
             auto* ivItem = ui::makeCell(q->solved ? ui::percent(q->impliedVol, 2) : QString::fromStdString(q->note));
             ivItem->setForeground(QBrush(QColor(q->solved ? colour : m_theme.textMuted)));
             QStringList tip;
@@ -480,10 +559,10 @@ void ChainTab::showSlice(int index)
             if (q->quote.volume > 0) tip << QStringLiteral("Volume %1").arg(ui::number(q->quote.volume, 0));
             if (q->quote.openInterest > 0) tip << QStringLiteral("Open interest %1").arg(ui::number(q->quote.openInterest, 0));
             if (!tip.isEmpty()) ivItem->setToolTip(tip.join("\n"));
-            m_table->setItem(r, iv, ivItem);
+            place(iv, ivItem);
         };
-        fill(data.call, ColCallBid, ColCallAsk, ColCallMid, ColCallIv, m_theme.call);
-        fill(data.put, ColPutBid, ColPutAsk, ColPutMid, ColPutIv, m_theme.put);
+        fill(data.call, ColCallBid, ColCallAsk, ColCallMid, ColCallIv, m_theme.call, true);
+        fill(data.put, ColPutBid, ColPutAsk, ColPutMid, ColPutIv, m_theme.put, false);
         m_table->setItem(r, ColFitIv, ui::makeCell(slice.fitted ? ui::percent(slice.smileVol(strike), 2) : "–"));
 
         const auto flagIt = flags.find(strike);
@@ -530,7 +609,11 @@ void ChainTab::showSlice(int index)
         }
     }
     const bool sameSlice = std::fabs(slice.maturity - m_lastSliceKey) < 1e-9;
-    if (!sameSlice) m_atmCentered = false;
+    if (!sameSlice) {
+        m_atmCentered = false;
+        m_userResizedColumns = false;   // a new slice starts from content-fitted widths
+        fitColumns();
+    }
     m_lastSliceKey = slice.maturity;
     if (sameSlice && m_atmCentered) {
         // Auto-refresh of the slice already on screen: keep the user's scroll position.
@@ -593,18 +676,48 @@ void ChainTab::updateCharts(const ExpirySlice* slice)
         puts->setColor(QColor(m_theme.put));
         puts->setBorderColor(Qt::transparent);
         double kMin = INFINITY, kMax = -INFINITY, vMin = INFINITY, vMax = -INFINITY;
+        // Hover readouts keyed by strike, built alongside the points.
+        auto callTips = std::make_shared<std::map<double, QString>>();
+        auto putTips = std::make_shared<std::map<double, QString>>();
+        const QString expiryText = slice->expiryDate.empty() ? QStringLiteral("%1 DTE").arg(slice->daysToExpiry)
+                                                             : QStringLiteral("%1 (%2 DTE)").arg(QString::fromStdString(slice->expiryDate)).arg(slice->daysToExpiry);
+        auto describe = [&](const ImpliedQuote& q, const char* side) {
+            QString text = QStringLiteral("%1 %2 · strike %3 · IV %4 · mid %5")
+                               .arg(side, expiryText, ui::number(q.quote.strike, 2), ui::percent(q.impliedVol, 2), ui::number(q.quote.mid, 2));
+            if (q.quote.bid > 0 || q.quote.ask > 0) text += QStringLiteral(" (bid %1 / ask %2)").arg(ui::number(q.quote.bid, 2), ui::number(q.quote.ask, 2));
+            if (slice->fitted) text += QStringLiteral(" · fit %1").arg(ui::percent(slice->smileVol(q.quote.strike), 2));
+            if (q.quote.vendorImpliedVol > 0) text += QStringLiteral(" · vendor IV %1").arg(ui::percent(q.quote.vendorImpliedVol, 2));
+            if (q.quote.volume > 0) text += QStringLiteral(" · vol %1").arg(ui::number(q.quote.volume, 0));
+            if (q.quote.openInterest > 0) text += QStringLiteral(" · OI %1").arg(ui::number(q.quote.openInterest, 0));
+            return text;
+        };
         for (const ImpliedQuote& q : slice->calls) {
             if (!q.solved || !strikeInRange(q.quote.strike, slice->forward)) continue;
             calls->append(q.quote.strike, q.impliedVol * 100.0);
+            (*callTips)[q.quote.strike] = describe(q, "Call");
             kMin = std::min(kMin, q.quote.strike); kMax = std::max(kMax, q.quote.strike);
             vMin = std::min(vMin, q.impliedVol * 100.0); vMax = std::max(vMax, q.impliedVol * 100.0);
         }
         for (const ImpliedQuote& q : slice->puts) {
             if (!q.solved || !strikeInRange(q.quote.strike, slice->forward)) continue;
             puts->append(q.quote.strike, q.impliedVol * 100.0);
+            (*putTips)[q.quote.strike] = describe(q, "Put");
             kMin = std::min(kMin, q.quote.strike); kMax = std::max(kMax, q.quote.strike);
             vMin = std::min(vMin, q.impliedVol * 100.0); vMax = std::max(vMax, q.impliedVol * 100.0);
         }
+        auto nearestTip = [](const std::map<double, QString>& tips, double strike) -> QString {
+            if (tips.empty()) return QString();
+            auto it = tips.lower_bound(strike);
+            if (it == tips.end()) return std::prev(it)->second;
+            if (it != tips.begin() && std::fabs(std::prev(it)->first - strike) < std::fabs(it->first - strike)) return std::prev(it)->second;
+            return it->second;
+        };
+        connect(calls, &QScatterSeries::hovered, this, [this, callTips, nearestTip](const QPointF& point, bool state) {
+            showChartHover(m_smileHover, nearestTip(*callTips, point.x()), state);
+        });
+        connect(puts, &QScatterSeries::hovered, this, [this, putTips, nearestTip](const QPointF& point, bool state) {
+            showChartHover(m_smileHover, nearestTip(*putTips, point.x()), state);
+        });
         if (std::isfinite(kMin)) {
             auto* fit = new QLineSeries;
             fit->setName("SVI fit");
@@ -616,6 +729,16 @@ void ChainTab::updateCharts(const ExpirySlice* slice)
                     fit->append(k, v);
                     vMin = std::min(vMin, v); vMax = std::max(vMax, v);
                 }
+                const SviParams svi = slice->svi;
+                const double forward = slice->forward, maturity = slice->maturity;
+                connect(fit, &QLineSeries::hovered, this, [this, svi, forward, maturity, expiryText](const QPointF& point, bool state) {
+                    const double k = point.x();
+                    const double vol = k > 0.0 ? sviVol(svi, std::log(k / forward), maturity) : 0.0;
+                    showChartHover(m_smileHover,
+                                   QStringLiteral("SVI fit %1 · strike %2 · IV %3 · log-moneyness %4")
+                                       .arg(expiryText, ui::number(k, 2), ui::percent(vol, 2), ui::number(std::log(k / forward), 4)),
+                                   state);
+                });
             }
             auto* forwardLine = new QLineSeries;
             const double pad = std::max((vMax - vMin) * 0.15, 0.5);
@@ -657,6 +780,7 @@ void ChainTab::updateCharts(const ExpirySlice* slice)
         high->setPen(QPen(QColor(m_theme.call), 1.6, Qt::DashLine));
         high->setPointsVisible(true);
         double vMin = INFINITY, vMax = -INFINITY;
+        auto termTips = std::make_shared<std::map<double, QString>>();
         for (const ExpirySlice& s : fitted) {
             const double a = s.atmVol() * 100.0;
             const double l = s.smileVol(s.forward * 0.9) * 100.0;
@@ -665,11 +789,26 @@ void ChainTab::updateCharts(const ExpirySlice* slice)
             low->append(s.maturity, l);
             high->append(s.maturity, h);
             for (double v : { a, l, h }) { vMin = std::min(vMin, v); vMax = std::max(vMax, v); }
+            const QString date = s.expiryDate.empty() ? QStringLiteral("T = %1 yrs").arg(ui::number(s.maturity, 3)) : QString::fromStdString(s.expiryDate);
+            (*termTips)[s.maturity] = QStringLiteral("%1 · %2 DTE · ATM %3 · 90% strike %4 · 110% strike %5 · forward %6 · fit RMSE %7 pts")
+                                          .arg(date).arg(s.daysToExpiry)
+                                          .arg(ui::number(a, 2) + "%", ui::number(l, 2) + "%", ui::number(h, 2) + "%", ui::number(s.forward, 2),
+                                               ui::number(s.fitRmse * 100.0, 2));
         }
+        auto nearestTerm = [termTips](double maturity) -> QString {
+            if (termTips->empty()) return QString();
+            auto it = termTips->lower_bound(maturity);
+            if (it == termTips->end()) return std::prev(it)->second;
+            if (it != termTips->begin() && std::fabs(std::prev(it)->first - maturity) < std::fabs(it->first - maturity)) return std::prev(it)->second;
+            return it->second;
+        };
         for (QLineSeries* s : { low, high, atm }) {
             m_termChart->addSeries(s);
             s->attachAxis(m_termX);
             s->attachAxis(m_termY);
+            connect(s, &QLineSeries::hovered, this, [this, nearestTerm](const QPointF& point, bool state) {
+                showChartHover(m_termHover, nearestTerm(point.x()), state);
+            });
         }
         const double pad = std::max((vMax - vMin) * 0.15, 0.5);
         m_termX->setRange(0.0, fitted.back().maturity * 1.05);
@@ -681,6 +820,23 @@ void ChainTab::updateCharts(const ExpirySlice* slice)
 
     styleChart(m_smileChart, m_theme);
     styleChart(m_termChart, m_theme);
+}
+
+void ChainTab::showChartHover(QLabel* readout, const QString& text, bool state)
+{
+    // Only re-polish the style when the state flips; polishing on every mouse move
+    // forces a relayout and visibly shakes the chart.
+    const QString wanted = (state && !text.isEmpty()) ? QStringLiteral("value") : QStringLiteral("muted");
+    if (state && !text.isEmpty()) {
+        if (readout->text() != text) readout->setText(text);
+        QToolTip::showText(QCursor::pos(), text, readout);
+    } else {
+        QToolTip::hideText();
+    }
+    if (readout->objectName() != wanted) {
+        readout->setObjectName(wanted);
+        ui::restyle(readout);
+    }
 }
 
 bool ChainTab::strikeInRange(double strike, double reference) const
@@ -737,7 +893,10 @@ QString ChainTab::ticker() const
 void ChainTab::refreshKeyStatus()
 {
     if (m_client.hasApiKey()) {
-        m_keyStatus->setText(QStringLiteral("Key: %1").arg(m_client.apiKeySource()));
+        const QString source = m_client.apiKeySource();
+        m_keyStatus->setText(source.startsWith("environment") ? QStringLiteral("Key: environment")
+                                                                : (source.startsWith("application") ? QStringLiteral("Key: preferences") : QStringLiteral("Key: %1").arg(source)));
+        m_keyStatus->setToolTip(QStringLiteral("API key source: %1").arg(source));
         m_keyStatus->setObjectName("muted");
     } else {
         m_keyStatus->setText("No API key");
@@ -828,8 +987,15 @@ void ChainTab::fetchLiveChain(bool automatic)
             },
             [this, symbol, snap, today, automatic](const MarketDataClient::ChainDownload& download) {
                 m_state.chainQuotes = download.quotes;
+                if (m_state.underlyingTicker != symbol) {
+                    m_state.companyName.clear();
+                    m_state.exchange.clear();
+                    m_state.logo = QImage();
+                    m_brandingRequested.clear();
+                }
                 m_state.underlyingTicker = symbol;
                 m_state.vendorSpot = snap.price;
+                m_state.previousClose = snap.previousClose;
                 m_vendorSource = snap.priceSource;
                 m_state.spotAsOf = snap.asOf;
                 m_state.spotTime = QDateTime::currentDateTime();
@@ -878,6 +1044,7 @@ void ChainTab::refreshUnderlying(bool automatic)
     m_client.fetchUnderlying(symbol, [this, symbol](const MarketDataClient::UnderlyingSnapshot& snap) {
         m_state.underlyingTicker = symbol;
         m_state.vendorSpot = snap.price;
+        m_state.previousClose = snap.previousClose;
         m_vendorSource = snap.priceSource;
         m_state.spotAsOf = snap.asOf;
         m_state.spotTime = QDateTime::currentDateTime();
@@ -917,11 +1084,37 @@ void ChainTab::updateSpotLabels()
 {
     const Market& m = m_state.market;
     const QString symbol = m_state.underlyingTicker.isEmpty() ? QStringLiteral("Underlying") : m_state.underlyingTicker;
-    m_spotLabel->setText(QStringLiteral("%1  %2").arg(symbol, ui::number(m.spot, 2)));
+
+    // Company identity: real icon when we have one, otherwise a monogram badge.
+    if (m_state.underlyingTicker.isEmpty()) {
+        m_logoLabel->setVisible(false);
+    } else {
+        const qreal dpr = devicePixelRatioF();
+        m_logoLabel->setPixmap(m_state.logo.isNull()
+                                   ? ui::monogramBadge(m_state.underlyingTicker, QColor(m_theme.accent2), QColor(m_theme.window), 40, dpr)
+                                   : ui::roundedLogo(m_state.logo, 40, dpr));
+        m_logoLabel->setToolTip(m_state.companyName.isEmpty() ? m_state.underlyingTicker
+                                                              : QStringLiteral("%1 · %2%3").arg(m_state.companyName, m_state.underlyingTicker,
+                                                                                                 m_state.exchange.isEmpty() ? QString() : " · " + m_state.exchange));
+        m_logoLabel->setVisible(true);
+    }
+    ensureBranding();
+    if (m_state.hasDayChange()) {
+        const double change = m_state.dayChange();
+        m_spotLabel->setText(QStringLiteral("%1  %2  %3%4 (%5%6%)")
+                                 .arg(symbol, ui::number(m.spot, 2), change >= 0 ? "+" : "−", ui::number(std::fabs(change), 2),
+                                      change >= 0 ? "+" : "−", ui::number(std::fabs(m_state.dayChangePercent()), 2)));
+        m_spotLabel->setObjectName(change >= 0 ? "priceUp" : "priceDown");
+    } else {
+        m_spotLabel->setText(QStringLiteral("%1  %2").arg(symbol, ui::number(m.spot, 2)));
+        m_spotLabel->setObjectName("ivValue");
+    }
+    ui::restyle(m_spotLabel);
 
     QStringList parts;
     QStringList tip;
     tip << QStringLiteral("Current underlying price: %1").arg(ui::number(m.spot, 2));
+    if (!m_state.companyName.isEmpty()) parts << m_state.companyName;
     const QDateTime now = QDateTime::currentDateTime();
     if (m_state.spotSource == "option parity" && !m_state.impliedSpotNote.isEmpty()) {
         parts << m_state.impliedSpotNote;
@@ -947,6 +1140,89 @@ void ChainTab::updateSpotLabels()
     tip << "The highlighted table rows are the strikes bracketing this price.";
     m_spotLabel->setToolTip(tip.join("\n"));
     m_spotDetail->setToolTip(m_spotLabel->toolTip());
+}
+
+void ChainTab::fitColumns()
+{
+    if (m_userResizedColumns || m_table->rowCount() == 0) return;
+    m_fittingColumns = true;
+    m_table->resizeColumnsToContents();
+    int total = 0;
+    for (int col = 0; col < ColumnCount; ++col) {
+        m_table->setColumnWidth(col, std::max(m_table->columnWidth(col) + 18, col == ColStrike ? 96 : 84));
+        total += m_table->columnWidth(col);
+    }
+    // Share any spare width across the columns instead of leaving a gap on the right.
+    const int available = m_table->viewport()->width();
+    if (available > total && total > 0) {
+        const double factor = static_cast<double>(available) / total;
+        for (int col = 0; col < ColumnCount; ++col) {
+            m_table->setColumnWidth(col, static_cast<int>(m_table->columnWidth(col) * factor));
+        }
+    }
+    m_fittingColumns = false;
+}
+
+void ChainTab::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    fitColumns();
+}
+
+void ChainTab::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    // The viewport only has its real width once the tab is on screen.
+    QTimer::singleShot(0, this, [this] { fitColumns(); });
+}
+
+QString ChainTab::logoCachePath(const QString& ticker)
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::CacheLocation) + "/logos";
+    QDir().mkpath(dir);
+    return dir + "/" + ticker.toUpper() + ".png";
+}
+
+void ChainTab::ensureBranding()
+{
+    const QString symbol = m_state.underlyingTicker;
+    if (symbol.isEmpty() || symbol == m_brandingRequested) return;
+    m_brandingRequested = symbol;
+
+    // Disk cache first: icons rarely change and the API is rate limited.
+    const QString cachePath = logoCachePath(symbol);
+    QImage cached(cachePath);
+    if (!cached.isNull() && !m_state.companyName.isEmpty()) {
+        m_state.logo = cached;
+        updateSpotLabels();
+        m_state.notify();
+        return;
+    }
+    if (!m_client.hasApiKey()) return;
+
+    m_client.fetchTickerDetails(symbol, [this, symbol, cachePath, cached](const MarketDataClient::TickerDetails& details) {
+        if (m_state.underlyingTicker != symbol) return;
+        m_state.companyName = details.name;
+        m_state.exchange = details.exchange;
+        if (!cached.isNull()) {
+            m_state.logo = cached;
+            m_state.notify();
+            return;
+        }
+        if (details.iconUrl.isEmpty()) {
+            m_state.notify();   // name only; the badge stays a monogram
+            return;
+        }
+        m_client.fetchImage(details.iconUrl, [this, symbol, cachePath](const QImage& image) {
+            if (m_state.underlyingTicker != symbol) return;
+            m_state.logo = image;
+            image.scaled(160, 160, Qt::KeepAspectRatio, Qt::SmoothTransformation).save(cachePath, "PNG");
+            m_state.notify();
+        }, [](const QString&) { /* icon is decorative; silently keep the monogram */ });
+    }, [this, symbol](const QString&) {
+        // Allow a retry on the next refresh if the lookup failed.
+        if (m_brandingRequested == symbol) m_brandingRequested.clear();
+    });
 }
 
 void ChainTab::updateTimers()

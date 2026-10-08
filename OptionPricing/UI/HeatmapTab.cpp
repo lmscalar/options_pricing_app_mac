@@ -122,7 +122,7 @@ void HeatmapTab::buildUi()
     m_heatmap->verticalHeader()->setDefaultSectionSize(24);
     m_heatmap->verticalHeader()->setMinimumWidth(64);
     m_heatmap->setAlternatingRowColors(false);
-    m_heatmap->setMinimumHeight(220);
+    m_heatmap->setMinimumHeight(160);
     m_heatmap->setToolTip("Rows are strikes, columns are expiries. Double-click a cell to price that strike and expiry.");
     m_toggleTables = ui::makeButton(this, "Hide Tables", "secondary", "Give the heatmap the whole tab, or bring the tables back");
     auto* heatHeader = new QHBoxLayout;
@@ -183,9 +183,13 @@ void HeatmapTab::buildUi()
     auto* lowerLayout = new QVBoxLayout(m_lowerPane);
     lowerLayout->setContentsMargins(0, 0, 0, 0);
     lowerLayout->addLayout(tables);
-    m_lowerPane->setMinimumHeight(240);
+    m_lowerPane->setMinimumHeight(120);
+    m_active->setMinimumHeight(80);
+    m_parityTable->setMinimumHeight(80);
     m_splitter->addWidget(upper);
     m_splitter->addWidget(m_lowerPane);
+    m_splitter->setCollapsible(0, false);
+    m_splitter->setCollapsible(1, true);   // tables may collapse in a short window; the grid never does
     m_splitter->setStretchFactor(0, 3);
     m_splitter->setStretchFactor(1, 2);
     m_splitter->setSizes({ 420, 320 });

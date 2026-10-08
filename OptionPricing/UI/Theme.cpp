@@ -37,21 +37,30 @@ Theme lightTheme()
     t.profit        = "#16a34a";
     t.loss          = "#dc2626";
     t.gridLine      = "#e5e7eb";
+    t.up            = "#15803d";
+    t.down          = "#dc2626";
+    t.flat          = "#6b7280";
+    t.accent2       = "#b45309";
+    t.accent3       = "#0e7490";
+    t.itmCall       = "#e8f5ec";
+    t.itmPut        = "#fbeaea";
     t.dark = false;
     return t;
 }
 
 Theme darkTheme()
 {
+    // Trading-desk palette: near-black navy, amber section titles, cyan highlights,
+    // saturated green/red for direction.
     Theme t;
-    t.window        = "#0f172a";
-    t.surface       = "#1e293b";
-    t.surfaceAlt    = "#263448";
-    t.border        = "#334155";
-    t.borderHover   = "#64748b";
-    t.text          = "#cbd5e1";
-    t.textStrong    = "#f1f5f9";
-    t.textMuted     = "#94a3b8";
+    t.window        = "#0a0f1c";
+    t.surface       = "#121a2b";
+    t.surfaceAlt    = "#192338";
+    t.border        = "#273449";
+    t.borderHover   = "#4b5d7a";
+    t.text          = "#c7d2e3";
+    t.textStrong    = "#f3f6fb";
+    t.textMuted     = "#8294ad";
     t.accent        = "#3b82f6";
     t.accentHover   = "#2563eb";
     t.accentPressed = "#1d4ed8";
@@ -60,19 +69,33 @@ Theme darkTheme()
     t.put           = "#f87171";
     t.error         = "#f87171";
     t.warning       = "#fbbf24";
-    t.separator     = "#334155";
-    t.buttonBg      = "#1e293b";
-    t.buttonHover   = "#263448";
-    t.buttonPressed = "#334155";
-    t.disabledBg    = "#1a2435";
-    t.disabledText  = "#64748b";
-    t.tooltipBg     = "#f1f5f9";
-    t.tooltipText   = "#0f172a";
+    t.separator     = "#273449";
+    t.buttonBg      = "#162038";
+    t.buttonHover   = "#1e2b45";
+    t.buttonPressed = "#273449";
+    t.disabledBg    = "#121a2b";
+    t.disabledText  = "#5b6b85";
+    t.tooltipBg     = "#f3f6fb";
+    t.tooltipText   = "#0a0f1c";
     t.profit        = "#22c55e";
     t.loss          = "#ef4444";
-    t.gridLine      = "#334155";
+    t.gridLine      = "#1f2a3f";
+    t.up            = "#22c55e";
+    t.down          = "#ef4444";
+    t.flat          = "#8294ad";
+    t.accent2       = "#f59e0b";
+    t.accent3       = "#22d3ee";
+    t.itmCall       = "#15291f";
+    t.itmPut        = "#2c1a22";
     t.dark = true;
     return t;
+}
+
+QString changeColor(const Theme& t, double change)
+{
+    if (change > 1e-9) return t.up;
+    if (change < -1e-9) return t.down;
+    return t.flat;
 }
 
 QPalette paletteFor(const Theme& t)
@@ -163,6 +186,11 @@ QString styleSheetFor(const Theme& t)
             padding: 0 6px;
             background: @surface;
             border-radius: 4px;
+            color: @accent2;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
         }
         QDoubleSpinBox, QSpinBox, QComboBox, QDateEdit, QLineEdit {
             background: @surface;
@@ -227,6 +255,7 @@ QString styleSheetFor(const Theme& t)
         QTabBar::tab:selected {
             background: @window;
             color: @textStrong;
+            border-top: 2px solid @accent;
         }
         QTabBar::tab:hover:!selected {
             background: @buttonHover;
@@ -278,7 +307,69 @@ QString styleSheetFor(const Theme& t)
         QLabel#cardTitle {
             font-size: 11px;
             font-weight: 700;
+            color: @accent3;
+            letter-spacing: 1px;
+        }
+        QFrame#tickerBanner {
+            background: @surface;
+            border: 1px solid @border;
+            border-left: 3px solid @accent2;
+            border-radius: 8px;
+        }
+        QLabel#tickerSymbol {
+            font-family: "Menlo", "SF Mono", monospace;
+            font-size: 15px;
+            font-weight: 700;
+            color: @accent2;
+            letter-spacing: 1px;
+        }
+        QLabel#tickerPrice {
+            font-family: "Menlo", "SF Mono", monospace;
+            font-size: 26px;
+            font-weight: 700;
+            color: @textStrong;
+        }
+        QLabel#tickerUp {
+            font-family: "Menlo", "SF Mono", monospace;
+            font-size: 14px;
+            font-weight: 700;
+            color: @up;
+        }
+        QLabel#tickerDown {
+            font-family: "Menlo", "SF Mono", monospace;
+            font-size: 14px;
+            font-weight: 700;
+            color: @down;
+        }
+        QLabel#tickerFlat {
+            font-family: "Menlo", "SF Mono", monospace;
+            font-size: 14px;
+            font-weight: 700;
+            color: @flat;
+        }
+        QLabel#tickerMeta {
+            font-size: 11px;
             color: @textMuted;
+        }
+        QLabel#priceUp {
+            font-family: "Menlo", "SF Mono", monospace;
+            font-size: 24px;
+            font-weight: 700;
+            color: @up;
+        }
+        QLabel#priceDown {
+            font-family: "Menlo", "SF Mono", monospace;
+            font-size: 24px;
+            font-weight: 700;
+            color: @down;
+        }
+        QLabel#bidValue {
+            font-family: "Menlo", "SF Mono", monospace;
+            color: @up;
+        }
+        QLabel#askValue {
+            font-family: "Menlo", "SF Mono", monospace;
+            color: @down;
         }
         QLabel#cardSubtitle {
             font-size: 11px;
@@ -432,6 +523,11 @@ QString styleSheetFor(const Theme& t)
         { "@tooltipText",   t.tooltipText },
         { "@profit",        t.profit },
         { "@loss",          t.loss },
+        { "@up",            t.up },
+        { "@down",          t.down },
+        { "@flat",          t.flat },
+        { "@accent2",       t.accent2 },
+        { "@accent3",       t.accent3 },
     };
     for (const auto& tok : tokens) {
         css.replace(QLatin1String(tok.token), tok.value);

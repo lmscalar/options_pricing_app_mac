@@ -13,6 +13,7 @@
 #include "MarketState.h"
 #include "Theme.h"
 #include "Widgets.h"
+#include "../Pricing/ChainStrategy.h"
 #include "../Pricing/Strategy.h"
 
 #include <functional>
@@ -41,7 +42,7 @@ public:
     std::function<void()> onPositionChanged;
 
 private:
-    enum Column { ColKind = 0, ColQuantity, ColStrike, ColExpiry, ColVol, ColEntry, ColModel, ColUnitPnl, ColPnl, ColumnCount };
+    enum Column { ColKind = 0, ColQuantity, ColStrike, ColExpiry, ColVol, ColEntry, ColMarket, ColModel, ColUnitPnl, ColPnl, ColumnCount };
 
     void buildUi();
     void buildCharts(QVBoxLayout* column);
@@ -55,16 +56,31 @@ private:
     void applySurfaceToLegs();
     void setPosition(const pricing::Position& position);
 
+    // Chain-driven mode (active whenever the Option Chain tab has a chain loaded)
+    bool chainMode() const { return !m_chain.empty(); }
+    pricing::ActivityMarket activityMarket() const;
+    void refreshChainIndex();
+    void populateExpiryCombo();
+    void populateStrikeCombo(QComboBox* strikes, double maturity, double selected) const;
+    double presetMaturity() const;
+    void updateLegFromChain(int row);
+
     MarketState& m_state;
     Theme m_theme;
     pricing::Position m_position;
     pricing::StrategyAnalysis m_analysis;
+    pricing::ChainIndex m_chain;
+    QString m_chainTicker;
     bool m_updating = false;
 
     // Controls
     QComboBox* m_presets = nullptr;
     QLabel* m_presetDescription = nullptr;
     QDoubleSpinBox* m_presetMaturity = nullptr;
+    QComboBox* m_presetExpiry = nullptr;
+    QLabel* m_presetExpiryLabel = nullptr;
+    QLabel* m_strikeStepLabel = nullptr;
+    QLabel* m_chainInfo = nullptr;
     QDoubleSpinBox* m_strikeStep = nullptr;
     QDoubleSpinBox* m_multiplier = nullptr;
     QPushButton* m_loadPreset = nullptr;

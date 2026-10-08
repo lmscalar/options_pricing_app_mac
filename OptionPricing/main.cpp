@@ -31,8 +31,19 @@ int main(int argc, char* argv[])
     MainWindow window;
     window.show();
 
-    // Developer aid: `OptionPricing --screenshot <dir>` renders every tab to PNG and exits.
+    // Developer aid: `OptionPricing --window 1280x720` forces an initial window size.
     const QStringList args = QCoreApplication::arguments();
+    const qsizetype sizeFlag = args.indexOf("--window");
+    if (sizeFlag >= 0 && sizeFlag + 1 < args.size()) {
+        const QStringList parts = args.at(sizeFlag + 1).split('x');
+        if (parts.size() == 2) {
+            // Apply after the restored geometry has been committed by the first event-loop pass.
+            const int w = parts[0].toInt(), h = parts[1].toInt();
+            window.resize(w, h);
+        }
+    }
+
+    // Developer aid: `OptionPricing --screenshot <dir>` renders every tab to PNG and exits.
     const qsizetype flag = args.indexOf("--screenshot");
     if (flag >= 0 && flag + 1 < args.size()) {
         const QString directory = args.at(flag + 1);
