@@ -19,6 +19,8 @@
 
 int main(int argc, char* argv[])
 {
+    // Qt WebEngine (Quotes tab charts) requires shared OpenGL contexts before the application exists.
+    QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
     QApplication app(argc, argv);
     QApplication::setApplicationName("Option Pricing");
     QApplication::setOrganizationName("Luis Molina");

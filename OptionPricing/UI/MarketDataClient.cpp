@@ -375,6 +375,81 @@ void MarketDataClient::fetchImage(const QString& url, std::function<void(const Q
     });
 }
 
+void MarketDataClient::fetchAggregates(const QString& ticker, int multiplier, const QString& timespan, const QDate& from, const QDate& to,
+                                       std::function<void(const BarSeries&)> ok, ErrorHandler err)
+{
+    auto series = std::make_shared<BarSeries>();
+    series->ticker = ticker.trimmed().toUpper();
+    series->multiplier = multiplier;
+    series->timespan = timespan;
+    const QUrl url = endpoint(QStringLiteral("/v2/aggs/ticker/%1/range/%2/%3/%4/%5")
+                                  .arg(series->ticker).arg(multiplier).arg(timespan, from.toString(Qt::ISODate), to.toString(Qt::ISODate)),
+                              { { "adjusted", "true" }, { "sort", "asc" }, { "limit", "50000" } });
+    getPaged(url, 20,
+             [series](const QJsonArray& results) {
+                 for (const QJsonValue v : results) {
+                     const QJsonObject o = v.toObject();
+                     Bar bar;
+                     bar.timeMs = static_cast<qint64>(o["t"].toDouble());
+                     bar.open = o["o"].toDouble();
+                     bar.high = o["h"].toDouble();
+                     bar.low = o["l"].toDouble();
+                     bar.close = o["c"].toDouble();
+                     bar.volume = o["v"].toDouble();
+                     if (bar.timeMs > 0 && bar.close > 0.0) series->bars.push_back(bar);
+                 }
+             },
+             [series, ok, err] {
+                 if (series->bars.empty()) {
+                     err(QStringLiteral("No price history returned for %1 in that range.").arg(series->ticker));
+                     return;
+                 }
+                 std::sort(series->bars.begin(), series->bars.end(), [](const Bar& a, const Bar& b) { return a.timeMs < b.timeMs; });
+                 ok(*series);
+             },
+             err);
+}
+
+void MarketDataClient::fetchQuotes(const QStringList& tickers, std::function<void(const std::vector<Quote>&)> ok, ErrorHandler err)
+{
+    if (tickers.isEmpty()) {
+        ok({});
+        return;
+    }
+    QStringList symbols;
+    for (const QString& t : tickers) symbols << t.trimmed().toUpper();
+    get(endpoint("/v2/snapshot/locale/us/markets/stocks/tickers", { { "tickers", symbols.join(',') } }),
+        [ok](const QJsonObject& body) {
+            std::vector<Quote> quotes;
+            for (const QJsonValue v : body["tickers"].toArray()) {
+                const QJsonObject t = v.toObject();
+                Quote q;
+                q.ticker = t["ticker"].toString();
+                const QJsonObject day = t["day"].toObject();
+                const QJsonObject minute = t["min"].toObject();
+                const QJsonObject prev = t["prevDay"].toObject();
+                q.previousClose = prev["c"].toDouble();
+                const double minuteClose = minute["c"].toDouble();
+                const double dayClose = day["c"].toDouble();
+                q.last = minuteClose > 0.0 ? minuteClose : (dayClose > 0.0 ? dayClose : q.previousClose);
+                q.dayOpen = day["o"].toDouble();
+                q.dayHigh = day["h"].toDouble();
+                q.dayLow = day["l"].toDouble();
+                q.dayVolume = day["v"].toDouble();
+                // The feed's own change figures reflect the session; fall back to our own arithmetic.
+                q.change = t.contains("todaysChange") ? t["todaysChange"].toDouble() : (q.previousClose > 0.0 ? q.last - q.previousClose : 0.0);
+                q.changePercent = t.contains("todaysChangePerc") ? t["todaysChangePerc"].toDouble()
+                                                                 : (q.previousClose > 0.0 ? (q.last / q.previousClose - 1.0) * 100.0 : 0.0);
+                const qint64 minuteMillis = static_cast<qint64>(minute["t"].toDouble());
+                const qint64 updatedNanos = static_cast<qint64>(t["updated"].toDouble());
+                if (minuteMillis > 0) q.asOf = QDateTime::fromMSecsSinceEpoch(minuteMillis);
+                else if (updatedNanos > 0) q.asOf = QDateTime::fromMSecsSinceEpoch(updatedNanos / 1000000);
+                if (!q.ticker.isEmpty()) quotes.push_back(q);
+            }
+            ok(quotes);
+        }, err);
+}
+
 void MarketDataClient::fetchTreasuryCurve(std::function<void(const TreasuryCurve&)> ok, ErrorHandler err)
 {
     get(endpoint("/fed/v1/treasury-yields", { { "limit", "1" }, { "sort", "date.desc" } }),

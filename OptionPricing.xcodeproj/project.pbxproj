@@ -19,6 +19,9 @@
 		F37616523077272300F5524A /* MainWindow.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616513077272300F5524A /* MainWindow.cpp */; };
 		F3761666307730A400F5524A /* MarketDataClient.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3761665307730A400F5524A /* MarketDataClient.cpp */; };
 		F376166A3077EFF800F5524A /* HeatmapTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616693077EFF800F5524A /* HeatmapTab.cpp */; };
+		F376166E307846F900F5524A /* LightweightChartsJs.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376166D307846F900F5524A /* LightweightChartsJs.cpp */; };
+		F37616713078471300F5524A /* ChartPage.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616703078471300F5524A /* ChartPage.cpp */; };
+		F37616743078478900F5524A /* QuotesTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616733078478900F5524A /* QuotesTab.cpp */; };
 		F3B6FB022988347000563EB6 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3B6FB012988347000563EB6 /* main.cpp */; };
 /* End PBXBuildFile section */
 
@@ -75,6 +78,12 @@
 		F37616683077EF9900F5524A /* HeatmapTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HeatmapTab.h; sourceTree = "<group>"; };
 		F37616693077EFF800F5524A /* HeatmapTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = HeatmapTab.cpp; sourceTree = "<group>"; };
 		F376166B30781BB500F5524A /* ChainStrategy.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ChainStrategy.h; sourceTree = "<group>"; };
+		F376166C307846F900F5524A /* LightweightChartsJs.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = LightweightChartsJs.h; sourceTree = "<group>"; };
+		F376166D307846F900F5524A /* LightweightChartsJs.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = LightweightChartsJs.cpp; sourceTree = "<group>"; };
+		F376166F307846F900F5524A /* ChartPage.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ChartPage.h; sourceTree = "<group>"; };
+		F37616703078471300F5524A /* ChartPage.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ChartPage.cpp; sourceTree = "<group>"; };
+		F37616723078472B00F5524A /* QuotesTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = QuotesTab.h; sourceTree = "<group>"; };
+		F37616733078478900F5524A /* QuotesTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = QuotesTab.cpp; sourceTree = "<group>"; };
 		F3B6FAFE2988347000563EB6 /* OptionPricing */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = OptionPricing; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3B6FB012988347000563EB6 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -150,6 +159,12 @@
 				F3761665307730A400F5524A /* MarketDataClient.cpp */,
 				F37616683077EF9900F5524A /* HeatmapTab.h */,
 				F37616693077EFF800F5524A /* HeatmapTab.cpp */,
+				F376166C307846F900F5524A /* LightweightChartsJs.h */,
+				F376166D307846F900F5524A /* LightweightChartsJs.cpp */,
+				F376166F307846F900F5524A /* ChartPage.h */,
+				F37616703078471300F5524A /* ChartPage.cpp */,
+				F37616723078472B00F5524A /* QuotesTab.h */,
+				F37616733078478900F5524A /* QuotesTab.cpp */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -282,14 +297,17 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F376166E307846F900F5524A /* LightweightChartsJs.cpp in Sources */,
 				F376164C307726C700F5524A /* RateCurveDialog.cpp in Sources */,
 				F37616433077260600F5524A /* StrategyTab.cpp in Sources */,
 				F37616463077263B00F5524A /* ScenarioTab.cpp in Sources */,
 				F37616403077255400F5524A /* PricerTab.cpp in Sources */,
 				F376166A3077EFF800F5524A /* HeatmapTab.cpp in Sources */,
+				F37616743078478900F5524A /* QuotesTab.cpp in Sources */,
 				F3B6FB022988347000563EB6 /* main.cpp in Sources */,
 				F376163D3077248000F5524A /* MarketState.cpp in Sources */,
 				F376164F307726DE00F5524A /* BatchDialog.cpp in Sources */,
+				F37616713078471300F5524A /* ChartPage.cpp in Sources */,
 				F37616523077272300F5524A /* MainWindow.cpp in Sources */,
 				F37616363077241000F5524A /* Theme.cpp in Sources */,
 				F376163A3077246A00F5524A /* Widgets.cpp in Sources */,
@@ -471,7 +489,7 @@
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
 				"FRAMEWORK_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/lib;
-				HEADER_SEARCH_PATHS = "";
+				HEADER_SEARCH_PATHS = /opt/homebrew/opt/qt/include;
 				LD_RUNPATH_SEARCH_PATHS = "/opt​/homebrew​/opt​/qt​/lib";
 				"LD_RUNPATH_SEARCH_PATHS[arch=*]" = "";
 				LIBRARY_SEARCH_PATHS = /opt/homebrew/opt/qt/lib;
@@ -488,6 +506,10 @@
 					QtCharts,
 					"-framework",
 					QtNetwork,
+					"-framework",
+					QtWebEngineWidgets,
+					"-framework",
+					QtWebEngineCore,
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
@@ -500,7 +522,7 @@
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
 				"FRAMEWORK_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/lib;
-				HEADER_SEARCH_PATHS = "";
+				HEADER_SEARCH_PATHS = /opt/homebrew/opt/qt/include;
 				"HEADER_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/include;
 				LD_RUNPATH_SEARCH_PATHS = "/opt​/homebrew​/opt​/qt​/lib";
 				LIBRARY_SEARCH_PATHS = /opt/homebrew/opt/qt/lib;
@@ -517,6 +539,10 @@
 					QtCharts,
 					"-framework",
 					QtNetwork,
+					"-framework",
+					QtWebEngineWidgets,
+					"-framework",
+					QtWebEngineCore,
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};

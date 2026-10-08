@@ -8,6 +8,7 @@
 #include "ChainTab.h"
 #include "HeatmapTab.h"
 #include "PricerTab.h"
+#include "QuotesTab.h"
 #include "RateCurveDialog.h"
 #include "ScenarioTab.h"
 #include "StrategyTab.h"
@@ -48,6 +49,12 @@ void MainWindow::buildUi()
     m_scenario = new ScenarioTab(m_state, [this] { return m_strategy->position(); }, [this] { return m_pricer->currentInputs(); }, this);
     m_chain = new ChainTab(m_state, this);
     m_heatmap = new HeatmapTab(m_state, this);
+    m_quotes = new QuotesTab(m_state, this);
+    m_quotes->onOpenInChain = [this](const QString& ticker) {
+        m_chain->setTicker(ticker);
+        m_tabs->setCurrentWidget(m_chain);
+        m_chain->fetchLiveChain();
+    };
 
     m_pricer->onAddLeg = [this](const pricing::Leg& leg) {
         m_strategy->addLeg(leg);
@@ -84,6 +91,7 @@ void MainWindow::buildUi()
 
     m_tabs = new QTabWidget(this);
     m_tabs->setDocumentMode(true);
+    m_tabs->addTab(m_quotes, "Quotes");
     m_tabs->addTab(m_pricer, "Pricer");
     m_tabs->addTab(m_strategy, "Strategy");
     m_tabs->addTab(m_scenario, "Scenarios");
@@ -235,8 +243,8 @@ void MainWindow::buildMenus()
     m_darkAction = view->addAction("&Dark Mode", QKeySequence(Qt::CTRL | Qt::Key_D), this, [this] { applyTheme(!m_darkMode); });
     m_darkAction->setCheckable(true);
     view->addSeparator();
-    const char* tabNames[] = { "&Pricer", "&Strategy", "S&cenarios", "Option C&hain", "&Heatmap" };
-    for (int i = 0; i < 5; ++i) {
+    const char* tabNames[] = { "&Quotes", "&Pricer", "&Strategy", "S&cenarios", "Option C&hain", "&Heatmap" };
+    for (int i = 0; i < 6; ++i) {
         view->addAction(tabNames[i], QKeySequence(Qt::CTRL | (Qt::Key_1 + i)), this, [this, i] { m_tabs->setCurrentIndex(i); });
     }
 
@@ -266,6 +274,7 @@ void MainWindow::applyTheme(bool dark)
     m_scenario->applyTheme(theme);
     m_chain->applyTheme(theme);
     m_heatmap->applyTheme(theme);
+    m_quotes->applyTheme(theme);
 
     QSettings settings;
     settings.setValue("appearance/darkMode", dark);
@@ -536,6 +545,7 @@ QString MainWindow::currentResultsCsv() const
     if (current == m_scenario) return m_scenario->resultsCsv();
     if (current == m_chain) return m_chain->resultsCsv();
     if (current == m_heatmap) return m_heatmap->resultsCsv();
+    if (current == m_quotes) return m_quotes->resultsCsv();
     return QString();
 }
 
@@ -591,8 +601,8 @@ QStringList MainWindow::captureTabs(const QString& directory)
     }
     qInfo("[screenshot] window %dx%d minimumSizeHint %dx%d", width(), height(), minimumSizeHint().width(), minimumSizeHint().height());
     QStringList paths;
-    const char* names[] = { "pricer", "strategy", "scenarios", "chain", "heatmap" };
-    for (int i = 0; i < m_tabs->count() && i < 5; ++i) {
+    const char* names[] = { "quotes", "pricer", "strategy", "scenarios", "chain", "heatmap" };
+    for (int i = 0; i < m_tabs->count() && i < 6; ++i) {
         m_tabs->setCurrentIndex(i);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
@@ -700,14 +710,23 @@ void MainWindow::runLiveSmoke(const QString& ticker)
             // Render the live-data tabs so the result can be inspected offline.
             const QString shotDir = QDir::tempPath() + "/optshots-live";
             QDir().mkpath(shotDir);
-            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy }) {
+            m_quotes->showTicker(m_chain->ticker());
+            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_quotes }) {
                 m_tabs->setCurrentWidget(tab);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
-                const QString path = shotDir + (tab == m_heatmap ? "/heatmap.png" : (tab == m_chain ? "/chain.png" : "/strategy.png"));
+                if (tab == m_quotes) {
+                    // Give the web view time to fetch bars and paint.
+                    for (int i = 0; i < 12; ++i) QCoreApplication::processEvents(QEventLoop::AllEvents, 250);
+                }
+                const QString path = shotDir + (tab == m_heatmap ? "/heatmap.png" : (tab == m_chain ? "/chain.png" : (tab == m_strategy ? "/strategy.png" : "/quotes.png")));
                 if (grab().save(path)) qInfo("[live-smoke] wrote %s", qPrintable(path));
             }
-            QCoreApplication::exit(0);
+            // The web view cannot be captured by QWidget::grab; ask the chart library for its own image.
+            m_quotes->saveChartImage(shotDir + "/chart.png", [](const QString& written) {
+                qInfo("[live-smoke] chart image %s", written.isEmpty() ? "FAILED" : qPrintable(written));
+                QCoreApplication::exit(written.isEmpty() ? 1 : 0);
+            });
         }
     };
     m_chain->fetchLiveChain();

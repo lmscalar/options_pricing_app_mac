@@ -60,6 +60,7 @@
 #include <QtGui/QPen>
 
 #include <QtWidgets/QAbstractItemView>
+#include <QtWidgets/QButtonGroup>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QCheckBox>
 #include <QtWidgets/QComboBox>
@@ -98,6 +99,11 @@
 #include <QtWidgets/QToolTip>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QWidget>
+
+#include <QtWebEngineCore/QWebEnginePage>
+#include <QtWebEngineCore/QWebEngineProfile>
+#include <QtWebEngineCore/QWebEngineSettings>
+#include <QtWebEngineWidgets/QWebEngineView>
 
 #include <QtCharts/QChart>
 #include <QtCharts/QChartView>

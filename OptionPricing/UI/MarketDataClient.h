@@ -58,6 +58,30 @@ public:
         double marketCap = 0.0;
     };
 
+    /// One OHLCV aggregate bar.
+    struct Bar {
+        qint64 timeMs = 0;           ///< bar start, UTC epoch milliseconds
+        double open = 0, high = 0, low = 0, close = 0, volume = 0;
+    };
+
+    struct BarSeries {
+        QString ticker;
+        int multiplier = 1;
+        QString timespan;            ///< "minute", "hour", "day", "week"
+        std::vector<Bar> bars;       ///< ascending by time
+    };
+
+    /// Bulk stock snapshot row for the watchlist.
+    struct Quote {
+        QString ticker;
+        double last = 0.0;
+        double previousClose = 0.0;
+        double change = 0.0;
+        double changePercent = 0.0;
+        double dayOpen = 0.0, dayHigh = 0.0, dayLow = 0.0, dayVolume = 0.0;
+        QDateTime asOf;
+    };
+
     struct DividendInfo {
         double cashAmount = 0.0;
         int frequency = 0;           ///< payments per year (4 = quarterly)
@@ -85,6 +109,11 @@ public:
                      std::function<void(const ChainDownload&)> ok, ErrorHandler err);
     void fetchTreasuryCurve(std::function<void(const TreasuryCurve&)> ok, ErrorHandler err);
     void fetchTickerDetails(const QString& ticker, std::function<void(const TickerDetails&)> ok, ErrorHandler err);
+    /// Aggregate bars between two dates (inclusive), following pagination.
+    void fetchAggregates(const QString& ticker, int multiplier, const QString& timespan, const QDate& from, const QDate& to,
+                         std::function<void(const BarSeries&)> ok, ErrorHandler err);
+    /// Snapshot quotes for many tickers in one request.
+    void fetchQuotes(const QStringList& tickers, std::function<void(const std::vector<Quote>&)> ok, ErrorHandler err);
     /// Downloads an image behind the API (branding icons need the bearer token).
     void fetchImage(const QString& url, std::function<void(const QImage&)> ok, ErrorHandler err);
     void fetchDividends(const QString& ticker, const QDate& valuationDate, double horizonYears,

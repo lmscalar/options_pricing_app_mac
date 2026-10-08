@@ -282,6 +282,9 @@ QString styleSheetFor(const Theme& t)
             font-weight: 700;
             font-size: 11px;
         }
+        QComboBox#chartTypeCombo {
+            min-width: 128px;
+        }
         QHeaderView#heatmapHeader::section {
             font-size: 10px;
             font-weight: 500;
@@ -301,6 +304,11 @@ QString styleSheetFor(const Theme& t)
         }
         QFrame#card {
             background: @surfaceAlt;
+            border: 1px solid @border;
+            border-radius: 10px;
+        }
+        QFrame#pane {
+            background: @surface;
             border: 1px solid @border;
             border-radius: 10px;
         }
@@ -486,6 +494,15 @@ QString styleSheetFor(const Theme& t)
         QSplitter::handle:vertical:hover {
             background: @accent;
         }
+        QSplitter#quotesSplitter::handle {
+            background: @border;
+            width: 4px;
+            border-radius: 2px;
+            margin: 24px 1px;
+        }
+        QSplitter#quotesSplitter::handle:hover {
+            background: @accent;
+        }
         QToolTip {
             background: @tooltipBg;
             color: @tooltipText;
@@ -508,6 +525,8 @@ QString styleSheetFor(const Theme& t)
         { "@accentHover",   t.accentHover },
         { "@accentPressed", t.accentPressed },
         { "@accentText",    t.accentText },
+        { "@accent2",       t.accent2 },
+        { "@accent3",       t.accent3 },
         { "@accent",        t.accent },
         { "@call",          t.call },
         { "@put",           t.put },
@@ -526,8 +545,6 @@ QString styleSheetFor(const Theme& t)
         { "@up",            t.up },
         { "@down",          t.down },
         { "@flat",          t.flat },
-        { "@accent2",       t.accent2 },
-        { "@accent3",       t.accent3 },
     };
     for (const auto& tok : tokens) {
         css.replace(QLatin1String(tok.token), tok.value);

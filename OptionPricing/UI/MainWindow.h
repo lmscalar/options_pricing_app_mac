@@ -17,6 +17,7 @@ class StrategyTab;
 class ScenarioTab;
 class ChainTab;
 class HeatmapTab;
+class QuotesTab;
 
 class MainWindow : public QMainWindow
 {
@@ -72,6 +73,7 @@ private:
     ScenarioTab* m_scenario = nullptr;
     ChainTab* m_chain = nullptr;
     HeatmapTab* m_heatmap = nullptr;
+    QuotesTab* m_quotes = nullptr;
     QPushButton* m_themeToggle = nullptr;
     QLabel* m_subtitle = nullptr;
 

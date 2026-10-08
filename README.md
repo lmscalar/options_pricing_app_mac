@@ -13,6 +13,8 @@ volatility smiles from option chains and prices batches of contracts from CSV.
 | `OptionPricing/UI/` | Qt Widgets user interface, one file pair per tab. |
 | `OptionPricing/main.cpp` | Application entry point. |
 | `PricingTests/` | XCTest bundle (Objective-C++) exercising the pricing library. |
+| `ThirdParty/` | Vendored TradingView Lightweight Charts bundle and licence. |
+| `Tools/` | `embed_chart_bundle.py`, which regenerates the embedded chart bundle. |
 | `Samples/` | Example CSV files for the chain importer and batch pricer. |
 
 ### Pricing library
@@ -35,9 +37,11 @@ volatility smiles from option chains and prices batches of contracts from CSV.
 ## Building
 
 The project is an Xcode command-line tool target that links Homebrew's Qt 6
-(`/opt/homebrew/opt/qt`). Install Qt with `brew install qt`, open
-`OptionPricing.xcodeproj` and build the `OptionPricing` scheme. Run the tests with the
-`PricingTests` scheme or:
+(`/opt/homebrew/opt/qt`): QtWidgets, QtCharts, QtNetwork and QtWebEngineWidgets (for the
+Quotes chart). Install Qt with `brew install qt`, open `OptionPricing.xcodeproj` and
+build the `OptionPricing` scheme. The target sets `HEADER_SEARCH_PATHS` to
+`/opt/homebrew/opt/qt/include` because the WebEngine headers pull in the header-only
+QtQmlIntegration module. Run the tests with the `PricingTests` scheme or:
 
 ```sh
 xcodebuild test -scheme PricingTests -destination 'platform=macOS'
@@ -59,6 +63,19 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
 
 ## Tabs
 
+- **Quotes**: a watchlist and a chart. The watchlist (Ticker, Last, Price Chg., Pct
+  Change) is user-editable: type a symbol and press Add, or use the Remove button on a
+  row; it is remembered between sessions and auto-refreshes from Massive's bulk snapshot
+  (default every 60 s). Columns are resizable by dragging the header dividers, and
+  clicking a header sorts numerically by Last, Price Chg. or Pct Change (a third click
+  restores watchlist order); widths and sort are remembered. Selecting a row loads its
+  chart; the ticker from the Option Chain tab is added automatically. The chart is TradingView's open-source Lightweight Charts
+  (see below) inside a `QWebEngineView`, with timeframe buttons 1m, 2m, 3m, 5m, 15m, 1H,
+  1D (one year of daily bars) and 1W (five years of weekly bars); Candlestick, Bar,
+  Heikin-Ashi and Line styles; optional SMA and EMA overlays with editable periods; a
+  volume histogram; a crosshair legend with OHLC, volume and moving-average values; Save
+  Image… (rendered by the chart library, so it works headless too) and Open Option Chain.
+  Intraday bars are shown in local time.
 - **Pricer**: market and contract inputs (spot or futures, European or American, negative
   rates allowed, expiry as years or as a date with a day-count convention, cash dividends,
   rate curve), prices with intrinsic/time value or early-exercise premium, eleven Greeks,
@@ -99,6 +116,8 @@ The Option Chain tab and the Market menu pull data from the Massive.com REST API
 | Action | Endpoint | Effect |
 |--------|----------|--------|
 | Fetch Live Chain | stock snapshot, option chain snapshot (paged, filtered by expiration date) | Sets the market spot and replaces the chain with every unexpired expiry, or only the N nearest when a count is set. Each quote carries its expiration date and days to expiry (DTE); the expiry selector, smile title, fit summary and CSV export show them, and double-clicking a strike puts that calendar date into the Pricer. |
+| Quotes watchlist | `/v2/snapshot/locale/us/markets/stocks/tickers?tickers=…` | One bulk request per refresh; last price is the latest minute bar close, with change and percent change versus the previous close. |
+| Quotes chart | `/v2/aggs/ticker/{T}/range/{mult}/{timespan}/{from}/{to}` (paged) | Minute, hour, day or week bars for the selected timeframe. |
 | Treasury Curve | `/fed/v1/treasury-yields` (latest row) | Loads the zero-rate curve and enables it. Bond-equivalent yields are converted to continuous compounding. |
 | Dividends | `/v3/reference/dividends` | Projects the latest regular cash dividend forward at its cadence for three years into the Pricer's cash-dividend schedule and zeroes the continuous yield. |
 
@@ -141,7 +160,27 @@ Notes on the data:
 OptionPricing --live-smoke AAPL
 ```
 
-downloads the chain, curve and dividends for a ticker, prints a summary and exits.
+downloads the chain, curve, dividends, watchlist quotes and a year of daily bars for a
+ticker, prints a summary, renders the live tabs to `$TMPDIR/optshots-live/` (plus
+`chart.png` exported by the chart library itself) and exits. `--window WxH` fixes the
+window size for either flag.
+
+## Third-party code
+
+| Component | Location | Licence |
+|-----------|----------|---------|
+| TradingView Lightweight Charts 4.2.3 | `ThirdParty/lightweight-charts/` | Apache 2.0 |
+
+The chart bundle is embedded in the binary as a string constant
+(`OptionPricing/UI/LightweightChartsJs.inc`). After upgrading the library, regenerate it:
+
+```sh
+python3 Tools/embed_chart_bundle.py
+```
+
+The Apache licence requires the TradingView attribution logo the library draws in the
+chart corner to stay visible. TradingView's commercial Advanced Charts product is a
+separately licensed download and is not used here.
 
 ## CSV formats
 
