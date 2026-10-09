@@ -962,6 +962,7 @@ void QuotesTab::refreshQuotes()
     }
     m_client.fetchQuotes(m_watchlist, [this](const std::vector<MarketDataClient::Quote>& quotes) {
         if (m_store) m_store->putQuotes(quotes);
+        if (onQuotesRefreshed) onQuotesRefreshed(quotes);
         // The active ticker's vendor quote also feeds the shared state (headline, chain, chart).
         bool stateChanged = false;
         for (const MarketDataClient::Quote& q : quotes) {

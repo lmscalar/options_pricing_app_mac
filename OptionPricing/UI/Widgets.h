@@ -9,6 +9,8 @@
 
 #include "QtHeaders.h"
 
+#include <functional>
+
 namespace ui {
 
 QDoubleSpinBox* makeSpinBox(QWidget* parent, double minimum, double maximum, double step, int decimals,
@@ -41,6 +43,31 @@ void restyle(QWidget* widget);
 
 /// Configures a chart view with antialiasing and a sensible minimum size.
 QChartView* makeChartView(QWidget* parent, QChart* chart, int minimumHeight = 260);
+
+/// A chart view with a hover readout: a dashed crosshair at the cursor's x and a box with the
+/// lines `readout(x)` returns. `probe` is any series attached to the axes used for mapping
+/// pixels to values; with no probe or no readout the view behaves like a plain QChartView.
+class HoverChartView : public QChartView
+{
+public:
+    explicit HoverChartView(QChart* chart, QWidget* parent = nullptr);
+    std::function<QStringList(double x)> readout;
+    QAbstractSeries* probe = nullptr;
+    QColor lineColour = QColor("#94a3b8");
+    QColor boxBackground = QColor(15, 23, 42, 235);
+    QColor boxBorder = QColor("#334155");
+    QColor textColour = QColor("#e2e8f0");
+
+protected:
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    QPointF m_cursor;
+    bool m_hovering = false;
+};
+HoverChartView* makeHoverChartView(QWidget* parent, QChart* chart, int minimumHeight = 260);
 
 /// Company icon scaled into a rounded square of `size` device-independent pixels.
 QPixmap roundedLogo(const QImage& image, int size, qreal devicePixelRatio);

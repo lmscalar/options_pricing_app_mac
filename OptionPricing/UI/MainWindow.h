@@ -21,6 +21,8 @@ class ScenarioTab;
 class ChainTab;
 class HeatmapTab;
 class SectorHeatmapTab;
+class PortfolioTab;
+class AlertsTab;
 class QuotesTab;
 class VolatilityTab;
 class AssistantPanel;
@@ -96,6 +98,15 @@ private:
     ChainTab* m_chain = nullptr;
     HeatmapTab* m_heatmap = nullptr;
     SectorHeatmapTab* m_sectorHeatmap = nullptr;
+    PortfolioTab* m_portfolio = nullptr;
+    AlertsTab* m_alerts = nullptr;
+    QFrame* m_alertBanner = nullptr;        ///< in-app toast shown when an alert fires (top-right of the central area)
+    QLabel* m_alertBannerLabel = nullptr;
+    QTimer* m_alertBannerTimer = nullptr;
+    QString m_alertBannerTicker;
+    /// Shows the alert toast for ten seconds; clicking it loads the ticker everywhere.
+    void showAlertBanner(const QString& ticker, const QString& message);
+    bool eventFilter(QObject* watched, QEvent* event) override;
     QuotesTab* m_quotes = nullptr;
     VolatilityTab* m_volatility = nullptr;
     AssistantPanel* m_assistant = nullptr;

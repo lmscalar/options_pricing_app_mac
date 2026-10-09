@@ -151,6 +151,40 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   put-call parity table per expiry with the implied forward, the dividend yield that
   reconciles it, and the worst-offending strike. Double-click a cell or row to price it.
 
+- **Portfolio**: the book, organised as named **strategies**. Each strategy is its own
+  book of positions (New, Save as, Rename, Delete under **Books ▾**; every position shows
+  its strategy; the Add dialog, CSV import and the assistant can target a strategy by
+  name), and **All strategies** is the global portfolio that brings every book together
+  with a per-strategy breakdown in the risk panel: value, P&L, Greeks and each strategy's
+  standalone VaR against the whole book, i.e. the diversification benefit. P&L and risk
+  run on whichever view is selected. Stock and option positions across underlyings (Add/Edit
+  dialog with the trade date, Import Strategy legs, CSV import/export, saved in the preferences), marked from
+  the bulk snapshot (shares) and the in-memory option chains (contract mids and implied
+  vols, falling back to the model), with per-position and aggregate delta, gamma $,
+  vega, theta and P&L; a what-if row re-values the book for a spot shock, a vol shock and
+  days passing. Every trade carries its own currency (a **Ccy** column; the Add dialog,
+  CSV and the assistant accept any ISO code) and the book reports in a chosen
+  **reporting currency** (USD, EUR, GBP, JPY, CHF, CAD, AUD, …): values, P&L, Greeks and
+  risk are converted at vendor forex rates (overridable under **FX rates…**) and shown as
+  signed currency amounts such as `+$1,234` or `−€567`, while entry and mark prices stay
+  in the trade currency. **Risk** (`Pricing/Risk.h`, unit tested): parametric delta-gamma VaR and
+  expected shortfall with component VaR by underlying, historical simulation with full
+  revaluation over a year of aligned daily returns, Monte Carlo with correlated
+  (Cholesky) log-normal returns, at 95/97.5/99% over 1–60 days; a spot × vol stress grid,
+  a time-decay ladder and the simulated P&L distribution with VaR and CVaR marked. The
+  assistant reads and edits the book through `get_portfolio`, `add_position`,
+  `remove_position` and `run_portfolio_risk`.
+- **Alerts**: rules on any ticker — price above/below, day change above/below (percent),
+  ATM implied vol above/below (from the loaded surface or a stored chain), and any
+  numeric TA-Lib indicator above/below a level (computed from daily bars with the live
+  quote as the last close). Rules are checked on every watchlist refresh, once a minute
+  for symbols outside the watchlist, and on **Check now**; a trigger shows an in-app
+  banner (click it to load the ticker everywhere), a macOS notification, a sound and,
+  optionally, a spoken sentence, and is logged; rules disarm until **Re-arm** or re-arm
+  themselves when marked repeat. Rules persist in the preferences. Spoken or typed:
+  “alert me if NVDA goes above 240”, “notify me when AAPL drops 3%”, “alert me when the
+  RSI on TSLA is above 70”, “alert me when SPY implied vol goes above 25%”; the assistant
+  also has `create_alert`, `list_alerts` and `delete_alert`.
 - **Sector Heatmap**: a market treemap in the style of professional terminals. Some 180
   large caps are grouped into sectors (Internet, Software, Semis, Hardware, Consumer,
   Healthcare, Finance, Energy, Industrials, Utilities, Materials, Real Estate); every tile

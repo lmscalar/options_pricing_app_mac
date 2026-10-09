@@ -13,6 +13,8 @@
 #include "Formatting.h"
 #include "HeatmapTab.h"
 #include "SectorHeatmapTab.h"
+#include "PortfolioTab.h"
+#include "AlertsTab.h"
 #include "PricerTab.h"
 #include "QuotesTab.h"
 #include "ScenarioTab.h"
@@ -114,6 +116,54 @@ void MainWindow::buildAssistant()
     });
 }
 
+void MainWindow::showAlertBanner(const QString& ticker, const QString& message)
+{
+    if (!m_alertBanner) {
+        m_alertBanner = new QFrame(centralWidget());
+        m_alertBanner->setObjectName("alertBanner");
+        m_alertBanner->setAttribute(Qt::WA_StyledBackground, true);
+        m_alertBanner->setCursor(Qt::PointingHandCursor);
+        auto* layout = new QHBoxLayout(m_alertBanner);
+        layout->setContentsMargins(14, 10, 12, 10);
+        layout->setSpacing(10);
+        auto* icon = new QLabel("◆", m_alertBanner);
+        icon->setObjectName("alertBannerIcon");
+        m_alertBannerLabel = new QLabel(m_alertBanner);
+        m_alertBannerLabel->setObjectName("alertBannerText");
+        m_alertBannerLabel->setWordWrap(true);
+        m_alertBannerLabel->setMaximumWidth(420);
+        auto* close = new QToolButton(m_alertBanner);
+        close->setText("✕");
+        close->setAutoRaise(true);
+        close->setToolTip("Dismiss");
+        connect(close, &QToolButton::clicked, m_alertBanner, &QWidget::hide);
+        layout->addWidget(icon);
+        layout->addWidget(m_alertBannerLabel, 1);
+        layout->addWidget(close);
+        m_alertBanner->installEventFilter(this);
+        m_alertBannerTimer = new QTimer(this);
+        m_alertBannerTimer->setSingleShot(true);
+        connect(m_alertBannerTimer, &QTimer::timeout, m_alertBanner, &QWidget::hide);
+    }
+    m_alertBannerTicker = ticker;
+    m_alertBannerLabel->setText(QStringLiteral("<b>Alert · %1</b><br>%2<br><span style=\"opacity:0.75\">Click to open %1 everywhere</span>").arg(ticker, message.toHtmlEscaped()));
+    m_alertBanner->adjustSize();
+    m_alertBanner->move(centralWidget()->width() - m_alertBanner->width() - 28, 92);
+    m_alertBanner->raise();
+    m_alertBanner->show();
+    m_alertBannerTimer->start(10000);
+}
+
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_alertBanner && event->type() == QEvent::MouseButtonRelease) {
+        m_alertBanner->hide();
+        if (!m_alertBannerTicker.isEmpty()) showTicker(m_alertBannerTicker, false);
+        return true;
+    }
+    return QMainWindow::eventFilter(watched, event);
+}
+
 void MainWindow::updateCentralMargins()
 {
     if (!m_rootLayout) return;
@@ -143,6 +193,8 @@ QWidget* MainWindow::tabByName(const QString& name) const
     if (wanted.contains("chain") || wanted.contains("option")) return m_chain;
     if (wanted.contains("vol")) return m_volatility;
     if (wanted.contains("sector") || wanted.contains("market map") || wanted.contains("treemap")) return m_sectorHeatmap;
+    if (wanted.contains("portfolio") || wanted.contains("position") || wanted.contains("book") || wanted.contains("risk")) return m_portfolio;
+    if (wanted.contains("alert")) return m_alerts;
     if (wanted.contains("heat")) return m_heatmap;
     if (wanted.contains("quote") || wanted.contains("chart") || wanted.contains("watch")) return m_quotes;
     if (wanted.contains("scenario") || wanted.contains("grid")) return m_scenario;
@@ -195,6 +247,10 @@ void MainWindow::assistantContext(std::function<void(const QString&, const QImag
         s << chainSummary(30) << "\nVisible slice (CSV):\n" << clip(m_chain->resultsCsv(), 7000);
     } else if (current == m_heatmap) {
         s << chainSummary(12) << "\nHeatmap tab (CSV):\n" << clip(m_heatmap->resultsCsv(), 7000);
+    } else if (current == m_alerts) {
+        s << m_alerts->summaryText() << "\nAlerts (CSV):\n" << clip(m_alerts->rulesCsv(), 4000);
+    } else if (current == m_portfolio) {
+        s << m_portfolio->summaryText() << "\nPositions (CSV):\n" << clip(m_portfolio->resultsCsv(), 6000) << "\nRisk (CSV):\n" << clip(m_portfolio->riskCsv(), 3000);
     } else if (current == m_sectorHeatmap) {
         s << m_sectorHeatmap->summaryText() << "\nSector Heatmap (CSV: sector, ticker, name, market cap bn, last, performance %):\n" << clip(m_sectorHeatmap->resultsCsv(), 9000);
     } else if (current == m_strategy) {
@@ -217,7 +273,7 @@ void MainWindow::assistantContext(std::function<void(const QString&, const QImag
 
 std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
 {
-    const QJsonArray tabs{ "Quotes", "Pricer", "Strategy", "Scenarios", "Option Chain", "Heatmap", "Sector Heatmap", "Volatility" };
+    const QJsonArray tabs{ "Quotes", "Portfolio", "Pricer", "Strategy", "Scenarios", "Option Chain", "Heatmap", "Sector Heatmap", "Volatility", "Alerts" };
     const QJsonArray timeframes = QJsonArray::fromStringList(m_quotes->timeframeLabels());
     std::vector<AssistantClient::Tool> tools;
     tools.push_back({ "get_screen_context", "Returns a fresh text description of what is on screen now (same format as the [Screen context] block).", schema({}) });
@@ -262,6 +318,38 @@ std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
     tools.push_back({ "get_option_chain",
                       "Returns the loaded option chain's per-expiry summary (ATM implied vol, forward, contract counts) and the visible strike slice. Use show_ticker first for another symbol.",
                       schema({ { "symbol", prop("string", "Ticker (default: the loaded chain)") } }) });
+    tools.push_back({ "create_alert",
+                      "Creates an alert on a ticker (saved; checked on every quote refresh and every minute). Conditions: price_above, price_below, change_above, change_below (day change, percent), iv_above, iv_below (ATM implied vol, percent), indicator_above, indicator_below (TA-Lib indicator such as RSI with a period). Fires a banner, a notification and optionally speech.",
+                      schema({ { "symbol", prop("string", "Ticker") }, { "condition", prop("string", "Condition", QJsonArray{ "price_above", "price_below", "change_above", "change_below", "iv_above", "iv_below", "indicator_above", "indicator_below" }) },
+                               { "threshold", prop("number", "Level (price, percent, or indicator value)") }, { "indicator", prop("string", "TA-Lib indicator for indicator conditions, e.g. RSI") },
+                               { "period", prop("integer", "Indicator period (default 14)") }, { "repeat", prop("boolean", "Re-arm automatically when the condition clears") }, { "note", prop("string", "Optional note") } },
+                             { "symbol", "condition", "threshold" }) });
+    tools.push_back({ "list_alerts", "Lists every alert with its status and last observed value.", schema({}) });
+    tools.push_back({ "delete_alert", "Deletes alerts by id, by ticker (all alerts on it), or 'all'.", schema({ { "target", prop("string", "Alert id, ticker, or 'all'") } }, { "target" }) });
+    tools.push_back({ "get_portfolio",
+                      "Returns the Portfolio tab's current view (one strategy or 'All strategies'): every position with mark, Greeks and P&L (CSV), exposure, and the latest VaR / CVaR, component VaR and stress results.",
+                      schema({}) });
+    tools.push_back({ "list_portfolios", "Lists the saved strategy books and which view is active ('All strategies' is the global portfolio).", schema({}) });
+    tools.push_back({ "load_portfolio", "Switches the Portfolio tab to a strategy book, or to the global view with 'all'; marks and risk follow.",
+                      schema({ { "name", prop("string", "Strategy name, or 'all'") } }, { "name" }) });
+    tools.push_back({ "create_portfolio", "Creates a new strategy book (optionally copying the positions on screen) and switches to it.",
+                      schema({ { "name", prop("string", "Strategy name") }, { "copy_current", prop("boolean", "Copy the positions currently shown (default false)") } }, { "name" }) });
+    tools.push_back({ "delete_portfolio", "Deletes a strategy book and its positions (the last remaining book cannot be deleted).", schema({ { "name", prop("string", "Strategy name") } }, { "name" }) });
+    tools.push_back({ "add_position",
+                      "Adds a position to the Portfolio tab (saved between sessions). Stock: symbol, quantity (shares, negative = short), entry. Option: also type call|put, strike, expiry (YYYY-MM-DD) and optionally iv (percent).",
+                      schema({ { "symbol", prop("string", "Underlying ticker") }, { "type", prop("string", "Position type", QJsonArray{ "stock", "call", "put" }) },
+                               { "quantity", prop("number", "Shares or contracts; negative for short") }, { "strike", prop("number", "Option strike") },
+                               { "expiry", prop("string", "Option expiry, ISO date") }, { "entry", prop("number", "Price paid per share / per contract unit") },
+                               { "iv", prop("number", "Implied vol in percent to value the option when no stored chain quote matches") },
+                               { "currency", prop("string", "ISO currency of the prices (default: the portfolio's reporting currency), e.g. USD, EUR, GBP") },
+                               { "portfolio", prop("string", "Strategy book to add to (default: the one on screen; a new name creates a strategy)") },
+                               { "trade_date", prop("string", "Date the trade was entered, ISO (default: today)") } },
+                             { "symbol", "quantity" }) });
+    tools.push_back({ "remove_position", "Removes positions from the Portfolio tab by symbol ('all' = every position), optionally only a type and strike.",
+                      schema({ { "symbol", prop("string", "Ticker or 'all'") }, { "type", prop("string", "stock|call|put (default: any)") }, { "strike", prop("number", "Only this strike") } }, { "symbol" }) });
+    tools.push_back({ "run_portfolio_risk",
+                      "Recomputes portfolio risk: parametric delta-gamma, historical simulation and Monte Carlo VaR / CVaR (expected shortfall), component VaR by underlying, the spot x vol stress grid and the time-decay ladder.",
+                      schema({ { "confidence", prop("number", "Confidence level: 95, 97.5 or 99 (percent)") }, { "horizon_days", prop("integer", "Holding period in trading days (1-60)") } }) });
     tools.push_back({ "get_sector_heatmap",
                       "Returns sector and stock performance from the Sector Heatmap (large caps grouped by sector, cap-weighted sector moves, top movers and laggards, CSV of every stock) for a period: Daily, 1W, 30D, 90D or YTD. Optionally switches the view to stocks or sectors.",
                       schema({ { "period", prop("string", "Performance period (default: current)", QJsonArray{ "Daily", "1W", "30D", "90D", "YTD" }) },
@@ -394,6 +482,48 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
             if (m_state.underlyingTicker != symbol) return fail(QStringLiteral("%1 is downloading; call get_option_chain again in a moment.").arg(symbol));
         }
         done(chainSummary(40) + "\nVisible slice (CSV):\n" + clip(m_chain->resultsCsv(), 9000), false);
+    } else if (name == "create_alert") {
+        QString error;
+        int id = 0;
+        if (!m_alerts->addRule(input, &error, &id)) return fail(error);
+        done(QStringLiteral("Alert #%1 armed. %2").arg(id).arg(m_alerts->summaryText()), false);
+    } else if (name == "list_alerts") {
+        done(m_alerts->summaryText() + "\n\n" + m_alerts->rulesCsv(), false);
+    } else if (name == "delete_alert") {
+        const int removed = m_alerts->removeRules(input.value("target").toString());
+        done(QStringLiteral("%1 alert(s) deleted. %2").arg(removed).arg(m_alerts->summaryText()), false);
+    } else if (name == "get_portfolio") {
+        done(m_portfolio->summaryText() + "\n\nPositions (CSV):\n" + clip(m_portfolio->resultsCsv(), 8000) + "\nRisk (CSV):\n" + clip(m_portfolio->riskCsv(), 4000), false);
+    } else if (name == "list_portfolios") {
+        done(QStringLiteral("Strategies: %1. Active view: %2.").arg(m_portfolio->portfolioNames().join(", "), m_portfolio->activePortfolio()), false);
+    } else if (name == "load_portfolio") {
+        const QString target = input.value("name").toString();
+        if (!m_portfolio->loadPortfolio(target)) return fail(QStringLiteral("No strategy named '%1'. Available: %2").arg(target, m_portfolio->portfolioNames().join(", ")));
+        m_tabs->setCurrentWidget(m_portfolio);
+        QTimer::singleShot(1500, this, [this, done] { done(m_portfolio->summaryText(), false); });
+    } else if (name == "create_portfolio") {
+        const QString target = input.value("name").toString();
+        if (!m_portfolio->createPortfolio(target, input.value("copy_current").toBool(false), true)) return fail(QStringLiteral("Could not create '%1' (empty, reserved or already exists).").arg(target));
+        m_tabs->setCurrentWidget(m_portfolio);
+        done(QStringLiteral("Strategy '%1' created and shown. Strategies: %2.").arg(target, m_portfolio->portfolioNames().join(", ")), false);
+    } else if (name == "delete_portfolio") {
+        const QString target = input.value("name").toString();
+        if (!m_portfolio->deletePortfolio(target)) return fail(QStringLiteral("Could not delete '%1' (unknown, or it is the last strategy).").arg(target));
+        done(QStringLiteral("Strategy '%1' deleted. Strategies: %2.").arg(target, m_portfolio->portfolioNames().join(", ")), false);
+    } else if (name == "add_position") {
+        QString error;
+        if (!m_portfolio->addHolding(input, &error)) return fail(error);
+        m_tabs->setCurrentWidget(m_portfolio);
+        done(QStringLiteral("Position added; marks are refreshing. %1").arg(m_portfolio->summaryText().section('\n', 0, 0)), false);
+    } else if (name == "remove_position") {
+        const int removed = m_portfolio->removeHoldings(input.value("symbol").toString(), input.value("type").toString(), input.value("strike").toDouble());
+        done(QStringLiteral("%1 position(s) removed. %2").arg(removed).arg(m_portfolio->summaryText().section('\n', 0, 0)), false);
+    } else if (name == "run_portfolio_risk") {
+        if (m_portfolio->holdingCount() == 0) return fail("The portfolio has no positions.");
+        m_portfolio->setRiskSettings(QString(), input.value("confidence").toDouble(0.0), input.value("horizon_days").toInt(0));
+        m_tabs->setCurrentWidget(m_portfolio);
+        m_portfolio->runRisk();
+        done(m_portfolio->summaryText() + "\n\nRisk (CSV):\n" + clip(m_portfolio->riskCsv(), 4000), false);
     } else if (name == "get_sector_heatmap") {
         const QString period = input.value("period").toString();
         if (!period.isEmpty() && !m_sectorHeatmap->setPeriod(period)) return fail(QStringLiteral("Unknown period '%1'. Use Daily, 1W, 30D, 90D or YTD.").arg(period));
@@ -486,6 +616,22 @@ bool MainWindow::handleLocalCommand(const QString& rawText, QString& feedback)
     const QString lower = text.toLower();
     auto symbolFrom = [](const QString& s) { return s.trimmed().toUpper().remove(QRegularExpression("[^A-Z.]")); };
 
+    // Strategy books: "load the income portfolio", "show all strategies", "switch to the core hedged strategy".
+    QRegularExpression bookRe("^(?:please\\s+)?(?:load|open|show(?:\\s+me)?|switch\\s+to)\\s+(?:the\\s+)?(?:(all\\s+strategies|global\\s+portfolio|whole\\s+book|all\\s+portfolios)|(.+?)\\s+(?:portfolio|strategy\\s+book|book|strategy))$",
+                              QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = bookRe.match(text); m.hasMatch()) {
+        const QString target = m.captured(1).isEmpty() ? m.captured(2).trimmed() : QStringLiteral("all");
+        if (m_portfolio->loadPortfolio(target)) {
+            m_tabs->setCurrentWidget(m_portfolio);
+            feedback = QStringLiteral("Showing %1 on the Portfolio tab; marks are refreshing.").arg(m_portfolio->activePortfolio());
+            return true;
+        }
+    }
+    // Alerts: "alert me if NVDA goes above 240", "notify me when AAPL drops 3%", "alert me when the RSI on TSLA is above 70".
+    if (m_alerts->addRuleFromText(text, &feedback)) {
+        m_tabs->setCurrentWidget(m_alerts);
+        return true;
+    }
     // Indicators by name through the TA-Lib catalogue: "add a 200 day SMA", "add rsi", "show the
     // MACD (8, 17, 9)", "add bollinger bands", "plot the engulfing pattern", "remove the 50 day sma",
     // "remove rsi", "remove all indicators". Unknown names are left to the model.

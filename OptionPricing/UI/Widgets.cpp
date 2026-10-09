@@ -5,6 +5,10 @@
 
 #include "Widgets.h"
 
+#include <QtGui/QMouseEvent>
+#include <QtGui/QPaintEvent>
+#include <algorithm>
+
 #include <cmath>
 
 namespace ui {
@@ -117,6 +121,80 @@ void restyle(QWidget* widget)
 QChartView* makeChartView(QWidget* parent, QChart* chart, int minimumHeight)
 {
     auto* view = new QChartView(chart, parent);
+    view->setRenderHint(QPainter::Antialiasing, true);
+    view->setMinimumHeight(minimumHeight);
+    view->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    view->setBackgroundBrush(Qt::NoBrush);
+    view->setFrameShape(QFrame::NoFrame);
+    return view;
+}
+
+HoverChartView::HoverChartView(QChart* chart, QWidget* parent)
+    : QChartView(chart, parent)
+{
+    setMouseTracking(true);
+    viewport()->setMouseTracking(true);
+}
+
+void HoverChartView::mouseMoveEvent(QMouseEvent* event)
+{
+    m_cursor = event->position();
+    m_hovering = true;
+    viewport()->update();
+    QChartView::mouseMoveEvent(event);
+}
+
+void HoverChartView::leaveEvent(QEvent* event)
+{
+    m_hovering = false;
+    viewport()->update();
+    QChartView::leaveEvent(event);
+}
+
+void HoverChartView::paintEvent(QPaintEvent* event)
+{
+    QChartView::paintEvent(event);
+    if (!m_hovering || !probe || !readout || !chart()) return;
+    const QRectF plot = chart()->plotArea();
+    const QPointF chartPos = chart()->mapFromScene(mapToScene(m_cursor.toPoint()));
+    if (!plot.contains(chartPos)) return;
+    const QStringList lines = readout(chart()->mapToValue(chartPos, probe).x());
+    if (lines.isEmpty()) return;
+
+    QPainter painter(viewport());
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    // Crosshair across the plot area at the cursor's x (viewport coordinates).
+    const QPointF top = mapFromScene(chart()->mapToScene(QPointF(chartPos.x(), plot.top())));
+    const QPointF bottom = mapFromScene(chart()->mapToScene(QPointF(chartPos.x(), plot.bottom())));
+    painter.setPen(QPen(lineColour, 1, Qt::DashLine));
+    painter.drawLine(top, bottom);
+
+    QFont f = font();
+    f.setPointSizeF(std::max(9.0, f.pointSizeF() - 1.0));
+    painter.setFont(f);
+    const QFontMetricsF fm(f);
+    qreal width = 0;
+    for (const QString& line : lines) width = std::max(width, fm.horizontalAdvance(line));
+    const qreal lineHeight = fm.height();
+    QRectF box(0, 0, width + 20, lines.size() * lineHeight + 12);
+    // To the right of the cursor, flipped to the left near the edge, clamped vertically.
+    qreal x = m_cursor.x() + 14;
+    if (x + box.width() > viewport()->width() - 4) x = m_cursor.x() - 14 - box.width();
+    const qreal y = std::clamp(m_cursor.y() - box.height() / 2, 4.0, std::max(4.0, viewport()->height() - box.height() - 4));
+    box.moveTo(x, y);
+    painter.setPen(QPen(boxBorder, 1));
+    painter.setBrush(boxBackground);
+    painter.drawRoundedRect(box, 6, 6);
+    painter.setPen(textColour);
+    for (int i = 0; i < lines.size(); ++i) {
+        if (i == 0) { QFont bold = f; bold.setBold(true); painter.setFont(bold); } else painter.setFont(f);
+        painter.drawText(QPointF(box.left() + 10, box.top() + 6 + fm.ascent() + i * lineHeight), lines[i]);
+    }
+}
+
+HoverChartView* makeHoverChartView(QWidget* parent, QChart* chart, int minimumHeight)
+{
+    auto* view = new HoverChartView(chart, parent);
     view->setRenderHint(QPainter::Antialiasing, true);
     view->setMinimumHeight(minimumHeight);
     view->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);

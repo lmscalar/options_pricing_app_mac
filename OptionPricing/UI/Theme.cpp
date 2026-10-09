@@ -429,6 +429,20 @@ QString styleSheetFor(const Theme& t)
             color: @text;
             font-weight: 400;
         }
+        QFrame#alertBanner {
+            background: @surface;
+            border: 1px solid @accent2;
+            border-left: 4px solid @accent2;
+            border-radius: 8px;
+        }
+        QLabel#alertBannerIcon { color: @accent2; font-size: 18px; }
+        QLabel#alertBannerText { color: @textStrong; font-size: 12px; }
+        QLabel#sectionTitle {
+            color: @accent2;
+            font-weight: 600;
+            font-size: 12px;
+            letter-spacing: 0.3px;
+        }
         QLabel#value {
             font-family: "Menlo", "SF Mono", monospace;
             color: @textStrong;
@@ -489,6 +503,10 @@ QString styleSheetFor(const Theme& t)
         }
         QToolButton {
             padding: 4px 10px;
+        }
+        QToolButton::menu-indicator {
+            image: none;
+            width: 0px;
         }
         QPushButton#primary {
             background: @accent;

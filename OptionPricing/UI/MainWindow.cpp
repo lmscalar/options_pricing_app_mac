@@ -9,12 +9,15 @@
 #include "ChainTab.h"
 #include "HeatmapTab.h"
 #include "SectorHeatmapTab.h"
+#include "PortfolioTab.h"
+#include "AlertsTab.h"
 #include "PricerTab.h"
 #include "QuotesTab.h"
 #include "VolatilityTab.h"
 #include "AssistantPanel.h"
 
 #include <QtWidgets/QDockWidget>
+#include <QtGui/QMouseEvent>
 
 #include <QtCore/QElapsedTimer>
 #include "RateCurveDialog.h"
@@ -64,6 +67,18 @@ void MainWindow::buildUi()
     m_sectorHeatmap->onTickerSelected = [this](const QString& ticker) { showTicker(ticker, false); };
     m_sectorHeatmap->onOpenChain = [this](const QString& ticker) { showTicker(ticker, true); };
     m_sectorHeatmap->watchlistProvider = [this] { return m_quotes->watchlist(); };
+    m_portfolio = new PortfolioTab(m_state, this);
+    m_portfolio->setStore(&m_store);
+    m_portfolio->strategyProvider = [this] { return m_strategy->position(); };
+    m_portfolio->onTickerSelected = [this](const QString& ticker) { showTicker(ticker, false); };
+    m_alerts = new AlertsTab(m_state, this);
+    m_alerts->setStore(&m_store);
+    m_alerts->onTickerSelected = [this](const QString& ticker) { showTicker(ticker, false); };
+    m_alerts->onTriggered = [this](const AlertsTab::Trigger& trigger) {
+        statusBar()->showMessage(QStringLiteral("Alert: %1").arg(trigger.message), 30000);
+        showAlertBanner(trigger.symbol, trigger.message);
+    };
+    m_quotes->onQuotesRefreshed = [this](const std::vector<MarketDataClient::Quote>& quotes) { m_alerts->evaluateQuotes(quotes); };
     m_chain->setStore(&m_store);
     // Every ticker entry point funnels through showTicker(): stored chains apply instantly,
     // missing or stale ones are downloaded, and all tabs follow the shared market state.
@@ -138,6 +153,7 @@ void MainWindow::buildUi()
     m_tabs = new QTabWidget(this);
     m_tabs->setDocumentMode(true);
     m_tabs->addTab(m_quotes, "Quotes");
+    m_tabs->addTab(m_portfolio, "Portfolio");
     m_tabs->addTab(m_pricer, "Pricer");
     m_tabs->addTab(m_strategy, "Strategy");
     m_tabs->addTab(m_scenario, "Scenarios");
@@ -145,6 +161,7 @@ void MainWindow::buildUi()
     m_tabs->addTab(m_heatmap, "Heatmap");
     m_tabs->addTab(m_sectorHeatmap, "Sector Heatmap");
     m_tabs->addTab(m_volatility, "Volatility");
+    m_tabs->addTab(m_alerts, "Alerts");
 
     auto* title = new QLabel("Option Pricer", this);
     title->setObjectName("title");
@@ -368,6 +385,8 @@ void MainWindow::applyTheme(bool dark)
     m_quotes->applyTheme(theme);
     m_volatility->applyTheme(theme);
     m_sectorHeatmap->applyTheme(theme);
+    m_portfolio->applyTheme(theme);
+    m_alerts->applyTheme(theme);
     m_assistant->applyTheme(theme);
     m_assistantBusy->setColor(QColor(theme.accent3.isEmpty() ? "#22d3ee" : theme.accent3));
 
@@ -770,7 +789,8 @@ QStringList MainWindow::captureTabs(const QString& directory)
     qInfo("[screenshot] window %dx%d minimumSizeHint %dx%d", width(), height(), minimumSizeHint().width(), minimumSizeHint().height());
     QStringList paths;
     m_sectorHeatmap->loadSampleData();   // offline treemap with synthetic moves
-    const char* names[] = { "quotes", "pricer", "strategy", "scenarios", "chain", "heatmap", "sector-heatmap", "volatility" };
+    m_portfolio->loadSampleData(true);    // offline book with synthetic marks and history (not saved)
+    const char* names[] = { "quotes", "portfolio", "pricer", "strategy", "scenarios", "chain", "heatmap", "sector-heatmap", "volatility", "alerts" };
     for (int i = 0; i < m_tabs->count() && i < 7; ++i) {
         m_tabs->setCurrentIndex(i);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
@@ -933,10 +953,73 @@ void MainWindow::runLiveSmoke(const QString& ticker)
             const QString shotDir = QDir::tempPath() + "/optshots-live";
             QDir().mkpath(shotDir);
             m_quotes->showTicker(m_chain->ticker());
-            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_volatility, m_sectorHeatmap, m_quotes }) {
+            // Portfolio: live marks and risk on a sample book, without touching the user's saved positions.
+            const QVariant userPositions = QSettings().value("portfolio/positions");
+            const QVariant userBooks = QSettings().value("portfolio/books");
+            const QVariant userActiveBook = QSettings().value("portfolio/activeBook");
+            const QVariant userAlerts = QSettings().value("alerts/rules");
+            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_volatility, m_sectorHeatmap, m_portfolio, m_alerts, m_quotes }) {
                 m_tabs->setCurrentWidget(tab);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
+                if (tab == m_alerts) {
+                    // Parse a few spoken forms, then arm one that fires at once (price above 1) to exercise the banner.
+                    auto waitFor = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
+                    QString feedback;
+                    for (const char* phrase : { "alert me when NVDA drops 3%", "alert me when the RSI on TSLA is above 70", "notify me if SPY implied vol goes above 25%", "alert me if AAPL goes above 1" }) {
+                        const bool handled = m_alerts->addRuleFromText(phrase, &feedback);
+                        qInfo("[live-smoke] alert parse \"%s\": %s -> %s", phrase, handled ? "handled" : "NOT handled", qPrintable(feedback));
+                    }
+                    const bool notAlert = m_alerts->addRuleFromText("what is the implied volatility skew here", &feedback);
+                    qInfo("[live-smoke] alert parse (free text, expected not handled): %s", notAlert ? "handled" : "not handled");
+                    waitFor(5000);
+                    qInfo("[live-smoke] alerts: %s", qPrintable(m_alerts->summaryText().left(700)));
+                    qInfo("[live-smoke] alert banner visible: %s", m_alertBanner && m_alertBanner->isVisible() ? "yes" : "no");
+                    if (grab().save(shotDir + "/alerts.png")) qInfo("[live-smoke] wrote alerts.png");
+                    m_alerts->removeRules("all");
+                    if (userAlerts.isValid()) QSettings().setValue("alerts/rules", userAlerts);
+                    else QSettings().remove("alerts/rules");
+                    if (m_alertBanner) m_alertBanner->hide();
+                    continue;
+                }
+                if (tab == m_portfolio) {
+                    auto waitFor = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
+                    m_portfolio->loadSampleData(false);
+                    waitFor(7000);
+                    m_portfolio->runRisk();
+                    waitFor(400);
+                    qInfo("[live-smoke] portfolio: %s", qPrintable(m_portfolio->summaryText().left(900)));
+                    if (grab().save(shotDir + "/portfolio.png")) qInfo("[live-smoke] wrote portfolio.png");
+                    // Hover readout on the P&L distribution: synthesize a mouse move over the plot.
+                    if (auto* view = m_portfolio->findChild<QChartView*>()) {
+                        const QPoint at(static_cast<int>(view->viewport()->width() * 0.42), static_cast<int>(view->viewport()->height() * 0.6));
+                        QMouseEvent move(QEvent::MouseMove, QPointF(at), QPointF(view->viewport()->mapToGlobal(at)), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                        QApplication::sendEvent(view->viewport(), &move);
+                        waitFor(300);
+                        if (grab().save(shotDir + "/portfolio-hover.png")) qInfo("[live-smoke] wrote portfolio-hover.png");
+                    }
+                    // Add-position dialog: capture it, then dismiss it.
+                    QTimer::singleShot(800, this, [shotDir] {
+                        if (QWidget* modal = QApplication::activeModalWidget()) {
+                            if (modal->grab().save(shotDir + "/portfolio-dialog.png")) qInfo("[live-smoke] wrote portfolio-dialog.png");
+                            if (auto* dialog = qobject_cast<QDialog*>(modal)) dialog->reject();
+                        }
+                    });
+                    m_portfolio->openAddDialog();
+                    waitFor(300);
+                    // Strategy books: switch to one strategy and back to the global view.
+                    const bool loadedOne = m_portfolio->loadPortfolio("Index income");
+                    waitFor(2500);
+                    qInfo("[live-smoke] portfolio strategy view: %s -> %s", loadedOne ? "ok" : "FAILED", qPrintable(m_portfolio->summaryText().section('\n', 0, 0).left(300)));
+                    m_portfolio->loadPortfolio("all");
+                    waitFor(500);
+                    // Put the user's books back.
+                    for (const auto& [key, value] : std::initializer_list<std::pair<const char*, QVariant>>{ { "portfolio/positions", userPositions }, { "portfolio/books", userBooks }, { "portfolio/activeBook", userActiveBook } }) {
+                        if (value.isValid()) QSettings().setValue(key, value);
+                        else QSettings().remove(key);
+                    }
+                    continue;
+                }
                 if (tab == m_quotes) {
                     // Give the web view time to fetch bars and paint.
                     for (int i = 0; i < 12; ++i) QCoreApplication::processEvents(QEventLoop::AllEvents, 250);

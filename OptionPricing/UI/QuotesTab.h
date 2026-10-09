@@ -49,6 +49,8 @@ public:
     std::function<void(const QString& ticker)> onTickerSelected;
     /// Fired after a ticker is added to or removed from the watchlist, or another list is loaded.
     std::function<void(const QStringList& watchlist)> onWatchlistChanged;
+    /// Fired with every refreshed watchlist snapshot (alerts evaluate on it).
+    std::function<void(const std::vector<MarketDataClient::Quote>& quotes)> onQuotesRefreshed;
     QStringList watchlist() const { return m_watchlist; }
 
     // ---- Named watchlists (saved in the preferences) ----
