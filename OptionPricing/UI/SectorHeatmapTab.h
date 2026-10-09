@@ -50,6 +50,11 @@ public:
     QString periodLabel() const;
     bool setPeriod(const QString& label);
     bool setView(const QString& view);   ///< "stocks" or "sectors"
+    /// Expands one sector to fill the map (as clicking its tile does); false if no such sector.
+    bool focusSector(const QString& sector);
+    /// Back to the full sector map.
+    void clearFocus();
+    QString focusedSector() const { return m_focusSector; }
     /// One paragraph for the assistant: period, breadth, best and worst sectors and stocks.
     QString summaryText() const;
     /// CSV: sector, ticker, name, market cap (USD bn), last, performance %.
@@ -94,6 +99,7 @@ private:
     std::vector<Stock> m_stocks;
     int m_periodIndex = 0;
     bool m_sectorsView = false;
+    QString m_focusSector;           ///< non-empty while one sector is expanded
     bool m_watchlistUniverse = false;
     bool m_loaded = false;
     bool m_loadingQuotes = false;
@@ -113,5 +119,6 @@ private:
     QLabel* m_summary = nullptr;
     QLabel* m_status = nullptr;
     QPushButton* m_refresh = nullptr;
+    QPushButton* m_reset = nullptr;
     TreemapView* m_view = nullptr;
 };

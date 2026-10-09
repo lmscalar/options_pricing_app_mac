@@ -265,7 +265,8 @@ std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
     tools.push_back({ "get_sector_heatmap",
                       "Returns sector and stock performance from the Sector Heatmap (large caps grouped by sector, cap-weighted sector moves, top movers and laggards, CSV of every stock) for a period: Daily, 1W, 30D, 90D or YTD. Optionally switches the view to stocks or sectors.",
                       schema({ { "period", prop("string", "Performance period (default: current)", QJsonArray{ "Daily", "1W", "30D", "90D", "YTD" }) },
-                               { "view", prop("string", "Treemap view", QJsonArray{ "stocks", "sectors" }) } }) });
+                               { "view", prop("string", "Treemap view", QJsonArray{ "stocks", "sectors" }) },
+                               { "sector", prop("string", "Expand this sector to fill the map (e.g. Energy); 'all' resets to every sector") } }) });
     tools.push_back({ "get_volatility",
                       "Loads daily history for a symbol on the Volatility tab (if needed) and returns realized vol (several estimators), EWMA, GARCH fit and forecast, the vol cone and implied ATM vol.",
                       schema({ { "symbol", prop("string", "Ticker (default: current)") } }) });
@@ -397,6 +398,11 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
         const QString period = input.value("period").toString();
         if (!period.isEmpty() && !m_sectorHeatmap->setPeriod(period)) return fail(QStringLiteral("Unknown period '%1'. Use Daily, 1W, 30D, 90D or YTD.").arg(period));
         if (input.contains("view")) m_sectorHeatmap->setView(input.value("view").toString());
+        if (input.contains("sector")) {
+            const QString sector = input.value("sector").toString().trimmed();
+            if (sector.isEmpty() || sector.compare("all", Qt::CaseInsensitive) == 0) m_sectorHeatmap->clearFocus();
+            else if (!m_sectorHeatmap->focusSector(sector)) return fail(QStringLiteral("No sector named '%1'.").arg(sector));
+        }
         m_tabs->setCurrentWidget(m_sectorHeatmap);
         // Prices may still be downloading after a period change; give the request a moment.
         QTimer::singleShot(period.isEmpty() ? 0 : 2500, this, [this, done] {

@@ -156,8 +156,10 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   Healthcare, Finance, Energy, Industrials, Utilities, Materials, Real Estate); every tile
   is sized by market capitalisation and coloured on a red–green ramp by performance over
   the selected period (Daily, 1W, 30D, 90D, YTD), with a legend giving the ramp's range.
-  A **Sectors** view collapses each sector to one cap-weighted tile; the **Watchlist**
-  universe shows the active watchlist grouped by industry instead. Prices come from the
+  A **Sectors** view collapses each sector to one cap-weighted tile; clicking a sector
+  tile (or a sector's title band in the Stocks view) expands that sector's stocks across
+  the whole map, and **Reset** returns to the full map. The **Watchlist** universe shows
+  the active watchlist grouped by industry instead. Prices come from the
   Massive.com bulk snapshot, period reference closes from grouped daily aggregates (with a
   per-ticker fallback), and market caps from ticker details, cached for two weeks in
   `sector-heatmap-caps.json`. Hover a tile for name, cap, last and change; click to load

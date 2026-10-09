@@ -954,6 +954,13 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     if (grab().save(shotDir + "/sector-heatmap-1w.png")) qInfo("[live-smoke] wrote sector-heatmap-1w.png");
                     m_sectorHeatmap->setPeriod(userPeriod);
                     waitFor(300);
+                    // Drill into one sector and back.
+                    const bool focused = m_sectorHeatmap->focusSector("Energy");
+                    waitFor(300);
+                    qInfo("[live-smoke] sector heatmap focus Energy: %s (%s)", focused ? "ok" : "FAILED", qPrintable(m_sectorHeatmap->focusedSector()));
+                    if (grab().save(shotDir + "/sector-heatmap-energy.png")) qInfo("[live-smoke] wrote sector-heatmap-energy.png");
+                    m_sectorHeatmap->clearFocus();
+                    waitFor(200);
                 }
                 const QString path = shotDir + (tab == m_heatmap ? "/heatmap.png" : (tab == m_chain ? "/chain.png" : (tab == m_strategy ? "/strategy.png" : (tab == m_volatility ? "/volatility.png" : (tab == m_sectorHeatmap ? "/sector-heatmap.png" : "/quotes.png")))));
                 if (grab().save(path)) qInfo("[live-smoke] wrote %s", qPrintable(path));

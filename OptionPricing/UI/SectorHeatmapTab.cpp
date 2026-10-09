@@ -182,6 +182,8 @@ public:
 
     std::function<void(const QString& ticker)> onTickerClicked;
     std::function<void(const QString& ticker)> onTickerDoubleClicked;
+    /// A sector tile (Sectors view) or a sector's title band (Stocks view) was clicked.
+    std::function<void(const QString& sector)> onGroupClicked;
 
 protected:
     void resizeEvent(QResizeEvent*) override { m_dirty = true; }
@@ -204,9 +206,9 @@ protected:
                 paintTile(p, g.tiles.empty() ? Tile{} : g.tiles.front(), g.rect, g.color, true);
                 continue;
             }
-            // Title band
+            // Title band (brighter while hovered: it is clickable and expands the sector)
             const QRectF band(g.rect.x, g.rect.y, g.rect.w, kBand);
-            p.fillRect(band, g.color);
+            p.fillRect(band, &g == m_hoverBand ? g.color.lighter(125) : g.color);
             p.setPen(QColor("#0b1020"));
             QFont f = font();
             f.setBold(true);
@@ -224,18 +226,26 @@ protected:
     void mouseMoveEvent(QMouseEvent* e) override
     {
         const Tile* tile = tileAt(e->position());
-        if (tile != m_hover) {
+        const Group* band = bandAt(e->position());
+        if (tile != m_hover || band != m_hoverBand) {
             m_hover = tile;
+            m_hoverBand = band;
             update();
         }
+        setCursor(tile || band ? Qt::PointingHandCursor : Qt::ArrowCursor);
         if (tile) QToolTip::showText(e->globalPosition().toPoint(), tile->tooltip, this);
+        else if (band) QToolTip::showText(e->globalPosition().toPoint(), QStringLiteral("Click to expand %1").arg(band->name), this);
         else QToolTip::hideText();
     }
-    void leaveEvent(QEvent*) override { m_hover = nullptr; update(); }
+    void leaveEvent(QEvent*) override { m_hover = nullptr; m_hoverBand = nullptr; update(); }
     void mousePressEvent(QMouseEvent* e) override
     {
         if (e->button() != Qt::LeftButton) return;
-        if (const Tile* tile = tileAt(e->position()); tile && !tile->ticker.isEmpty() && onTickerClicked) onTickerClicked(tile->ticker);
+        if (const Group* band = bandAt(e->position()); band && onGroupClicked) { onGroupClicked(band->name); return; }
+        const Tile* tile = tileAt(e->position());
+        if (!tile) return;
+        if (tile->ticker.isEmpty()) { if (onGroupClicked) onGroupClicked(tile->title); }   // sector tile
+        else if (onTickerClicked) onTickerClicked(tile->ticker);
     }
     void mouseDoubleClickEvent(QMouseEvent* e) override
     {
@@ -253,6 +263,15 @@ private:
             if (!g.rect.contains(pos.x(), pos.y())) continue;
             if (m_sectorsOnly) return g.tiles.empty() ? nullptr : &g.tiles.front();
             for (const Tile& t : g.tiles) if (t.rect.contains(pos.x(), pos.y())) return &t;
+        }
+        return nullptr;
+    }
+    /// The sector whose title band is under `pos` (Stocks view only).
+    const Group* bandAt(const QPointF& pos) const
+    {
+        if (m_sectorsOnly) return nullptr;
+        for (const Group& g : m_groups) {
+            if (g.rect.contains(pos.x(), pos.y()) && pos.y() < g.rect.y + kBand) return &g;
         }
         return nullptr;
     }
@@ -368,6 +387,7 @@ private:
     bool m_dirty = true;
     double m_scale = 3.0;
     const Tile* m_hover = nullptr;
+    const Group* m_hoverBand = nullptr;
     QString m_emptyText;
 };
 
@@ -427,6 +447,8 @@ void SectorHeatmapTab::buildUi()
     m_summary->setObjectName("muted");
     m_summary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_refresh = ui::makeButton(this, "Refresh", "secondary", "Download the latest prices");
+    m_reset = ui::makeButton(this, "Reset", "secondary", "Back to the full sector map");
+    m_reset->setVisible(false);
 
     auto* controls = new QHBoxLayout;
     controls->setSpacing(10);
@@ -437,6 +459,7 @@ void SectorHeatmapTab::buildUi()
     controls->addSpacing(8);
     controls->addWidget(m_universe);
     controls->addWidget(m_summary, 1);
+    controls->addWidget(m_reset);
     controls->addWidget(m_refresh);
 
     m_view = new TreemapView(this);
@@ -489,8 +512,33 @@ void SectorHeatmapTab::wire()
         refresh();
     });
     connect(m_refresh, &QPushButton::clicked, this, [this] { refresh(); });
+    connect(m_reset, &QPushButton::clicked, this, [this] { clearFocus(); });
     m_view->onTickerClicked = [this](const QString& ticker) { if (onTickerSelected) onTickerSelected(ticker); };
     m_view->onTickerDoubleClicked = [this](const QString& ticker) { if (onOpenChain) onOpenChain(ticker); };
+    m_view->onGroupClicked = [this](const QString& sector) { focusSector(sector); };
+}
+
+bool SectorHeatmapTab::focusSector(const QString& sector)
+{
+    const QString wanted = sector.trimmed();
+    QString match;
+    for (const Stock& s : m_stocks) {
+        if (s.sector.compare(wanted, Qt::CaseInsensitive) == 0) { match = s.sector; break; }
+    }
+    if (match.isEmpty()) return false;
+    m_focusSector = match;
+    m_reset->setVisible(true);
+    m_reset->setText(QStringLiteral("Reset ‹ %1").arg(match));
+    relayout();
+    return true;
+}
+
+void SectorHeatmapTab::clearFocus()
+{
+    if (m_focusSector.isEmpty()) return;
+    m_focusSector.clear();
+    m_reset->setVisible(false);
+    relayout();
 }
 
 void SectorHeatmapTab::showEvent(QShowEvent* event)
@@ -708,9 +756,14 @@ void SectorHeatmapTab::recomputePerformance()
 
 void SectorHeatmapTab::relayout()
 {
+    // A focused sector fills the whole map with its stocks (band and tiles); otherwise the
+    // Stocks view shows every sector with its members and the Sectors view one tile each.
+    const bool focused = !m_focusSector.isEmpty();
+    const bool sectorsOnly = m_sectorsView && !focused;
     std::map<QString, TreemapView::Group> groups;
     std::vector<QString> order;
     for (const Stock& s : m_stocks) {
+        if (focused && s.sector != m_focusSector) continue;
         if (!groups.count(s.sector)) { order.push_back(s.sector); groups[s.sector].name = s.sector; groups[s.sector].color = sectorColor(s.sector, m_theme); }
         TreemapView::Group& g = groups[s.sector];
         TreemapView::Tile t;
@@ -732,7 +785,7 @@ void SectorHeatmapTab::relayout()
         double wsum = 0.0, psum = 0.0;
         for (const TreemapView::Tile& t : g.tiles) { if (!std::isnan(t.performance)) { wsum += t.weight; psum += t.weight * t.performance; } }
         g.performance = wsum > 0.0 ? psum / wsum : std::numeric_limits<double>::quiet_NaN();
-        if (m_sectorsView) {
+        if (sectorsOnly) {
             TreemapView::Tile sectorTile;
             sectorTile.title = g.name;
             sectorTile.subtitle = QStringLiteral("%1 stocks · %2").arg(g.tiles.size()).arg(formatCap(g.weight));
@@ -747,9 +800,16 @@ void SectorHeatmapTab::relayout()
         list.push_back(g);
     }
     std::sort(list.begin(), list.end(), [](const TreemapView::Group& a, const TreemapView::Group& b) { return a.weight > b.weight; });
-    m_view->setGroups(std::move(list), m_sectorsView);
-    m_summary->setText(QStringLiteral("%1 stocks · %2 sectors · size: market cap · colour: %3 change")
-                           .arg(m_stocks.size()).arg(order.size()).arg(periods()[static_cast<size_t>(m_periodIndex)].label));
+    const size_t shown = list.empty() ? 0 : (focused ? list.front().tiles.size() : m_stocks.size());
+    m_view->setGroups(std::move(list), sectorsOnly);
+    if (focused) {
+        m_summary->setText(QStringLiteral("%1 · %2 stocks · size: market cap · colour: %3 change · click a tile to load it, Reset for all sectors")
+                               .arg(m_focusSector).arg(shown).arg(periods()[static_cast<size_t>(m_periodIndex)].label));
+    } else {
+        m_summary->setText(QStringLiteral("%1 stocks · %2 sectors · size: market cap · colour: %3 change%4")
+                               .arg(m_stocks.size()).arg(order.size()).arg(periods()[static_cast<size_t>(m_periodIndex)].label)
+                               .arg(m_sectorsView ? " · click a sector to expand it" : ""));
+    }
 }
 
 // MARK: - Market caps
@@ -887,6 +947,7 @@ QString SectorHeatmapTab::summaryText() const
     QString out;
     QTextStream s(&out);
     s << "Sector Heatmap, " << periodLabel() << " performance, " << priced.size() << " stocks priced (" << up << " up, " << down << " down)";
+    if (!m_focusSector.isEmpty()) s << ", currently expanded to the " << m_focusSector << " sector";
     if (m_referenceSessionDate.isValid() && periods()[static_cast<size_t>(m_periodIndex)].lookbackDays != 0) s << " versus the " << m_referenceSessionDate.toString(Qt::ISODate) << " close";
     s << ".\nSectors (cap-weighted): ";
     QStringList parts;
