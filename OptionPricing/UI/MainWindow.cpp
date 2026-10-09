@@ -66,8 +66,10 @@ void MainWindow::buildUi()
     };
     m_store.onIdle = [this] {
         if (m_store.tickerCount() > 0) {
-            statusBar()->showMessage(QStringLiteral("Option chains for %1 tickers in memory: %2 contracts, %3 MB.")
-                                         .arg(m_store.tickerCount()).arg(m_store.contractCount()).arg(m_store.approximateBytes() / 1048576.0, 0, 'f', 1), 10000);
+            const bool saved = m_store.saveTo(ChainStore::defaultCachePath());
+            statusBar()->showMessage(QStringLiteral("Option chains for %1 tickers in memory: %2 contracts, %3 MB%4.")
+                                         .arg(m_store.tickerCount()).arg(m_store.contractCount()).arg(m_store.approximateBytes() / 1048576.0, 0, 'f', 1)
+                                         .arg(saved ? QStringLiteral(", saved for the next session") : QString()), 10000);
         }
     };
     m_store.onChainStored = [this](const QString& ticker, bool ok, const QString& message) {
@@ -75,8 +77,20 @@ void MainWindow::buildUi()
         // If this is the ticker the user is looking at and nothing is loaded yet, apply it.
         if (ok && m_chain->ticker() == ticker && m_state.underlyingTicker != ticker) m_chain->applyStoredChain(ticker);
     };
-    // Warm the store with the whole watchlist shortly after start-up.
-    QTimer::singleShot(800, this, [this] { m_store.preload(m_quotes->watchlist()); });
+    m_quotes->setStore(&m_store);
+    // Restore the previous session's chains and prices from disk so the app is populated at
+    // once, then refresh everything older than ten minutes in the background. Each completed
+    // preload pass is written back to disk, as is the store on exit.
+    const int restored = m_store.loadFrom(ChainStore::defaultCachePath());
+    qInfo("[store] restored %d chains (%d contracts, %zu quotes) from %s%s", restored, m_store.contractCount(), m_store.quotes().size(),
+          qPrintable(ChainStore::defaultCachePath()), m_store.lastError().isEmpty() ? "" : qPrintable(" · " + m_store.lastError()));
+    if (restored > 0) {
+        m_quotes->loadStoredQuotes();
+        statusBar()->showMessage(QStringLiteral("Restored %1 option chains (%2 contracts) saved %3; refreshing in the background…")
+                                     .arg(restored).arg(m_store.contractCount())
+                                     .arg(m_store.savedAt().isValid() ? m_store.savedAt().toString("yyyy-MM-dd HH:mm") : QStringLiteral("earlier")), 10000);
+    }
+    QTimer::singleShot(800, this, [this] { m_store.preload(m_quotes->watchlist(), 10 * 60); });
 
     m_pricer->onAddLeg = [this](const pricing::Leg& leg) {
         m_strategy->addLeg(leg);
@@ -383,6 +397,10 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     QSettings settings;
     settings.setValue("window/geometry", saveGeometry());
+    // Persist the in-memory chains and prices so the next launch starts populated.
+    if (m_store.tickerCount() > 0 && !m_store.saveTo(ChainStore::defaultCachePath())) {
+        qWarning("Could not save the option chain store: %s", qPrintable(m_store.lastError()));
+    }
     QMainWindow::closeEvent(event);
 }
 
@@ -616,6 +634,16 @@ QStringList MainWindow::captureTabs(const QString& directory)
     m_chain->generateSample();
     m_strategy->loadPreset();
     m_volatility->loadSample();
+    {
+        // Store persistence smoke: save whatever is in memory to the screenshot folder and read it back.
+        const QString scratch = directory + "/chains-roundtrip.sqlite";
+        const bool saved = m_store.saveTo(scratch);
+        ChainStore copy;
+        const int restored = copy.loadFrom(scratch);
+        qInfo("[screenshot] store save %s%s, %lld KB; reloaded %d chains, %d contracts, %zu quotes%s", saved ? "ok" : "FAILED",
+              saved ? "" : qPrintable(" (" + m_store.lastError() + ")"), static_cast<long long>(QFileInfo(scratch).size() / 1024), restored, copy.contractCount(),
+              copy.quotes().size(), copy.lastError().isEmpty() ? "" : qPrintable(" (" + copy.lastError() + ")"));
+    }
     for (int i = 0; i < m_tabs->count(); ++i) {
         const QSize hint = m_tabs->widget(i)->minimumSizeHint();
         qInfo("[screenshot] tab %-12s minimumSizeHint %dx%d", qPrintable(m_tabs->tabText(i)), hint.width(), hint.height());
@@ -684,6 +712,7 @@ void MainWindow::runLiveSmoke(const QString& ticker)
             return;
         }
         ++*step;
+        if (*step > 6) return;   // the final stage below runs once; later completions are ignored
         if (*step == 1) {
             m_chain->loadTreasuryCurve();
         } else if (*step == 2) {
@@ -717,6 +746,23 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     qInfo("[live-smoke]   stored %-6s %5d contracts %3d expiries spot %8.2f at %s", qPrintable(row.ticker), row.contracts, row.expiries, row.spot,
                           qPrintable(row.fetchedAt.toString("HH:mm:ss")));
                 }
+                // Persistence round trip into a scratch file and a fresh store (the user's cache is untouched).
+                QDir().mkpath(QDir::tempPath() + "/optshots-live");
+                const QString scratch = QDir::tempPath() + "/optshots-live/chains-roundtrip.sqlite";
+                QElapsedTimer saveClock;
+                saveClock.start();
+                const bool saved = m_store.saveTo(scratch);
+                const qint64 saveMs = saveClock.elapsed();
+                ChainStore copy;
+                QElapsedTimer loadClock;
+                loadClock.start();
+                const int restored = copy.loadFrom(scratch);
+                qInfo("[live-smoke] persistence: saved %s%s in %lld ms (%lld KB); fresh store restored %d chains, %d contracts, %zu quotes in %lld ms; %s",
+                      saved ? "ok" : "FAILED", saved ? "" : qPrintable(" (" + m_store.lastError() + ")"), static_cast<long long>(saveMs), static_cast<long long>(QFileInfo(scratch).size() / 1024), restored, copy.contractCount(),
+                      copy.quotes().size(), static_cast<long long>(loadClock.elapsed()),
+                      (restored == m_store.tickerCount() && copy.contractCount() == m_store.contractCount()) ? "counts match" : "COUNTS DIFFER");
+                // Also write the real cache so the next launch can be checked for a restore.
+                qInfo("[live-smoke] persistence: cache %s written to %s", m_store.saveTo(ChainStore::defaultCachePath()) ? "ok" : "FAILED", qPrintable(ChainStore::defaultCachePath()));
             }
             const auto& slices = m_state.surface.slices();
             const pricing::ExpirySlice* first = slices.empty() ? nullptr : &slices.front();
@@ -799,15 +845,24 @@ void MainWindow::showTicker(const QString& rawSymbol, bool switchToChainTab)
 {
     const QString symbol = rawSymbol.trimmed().toUpper();
     if (symbol.isEmpty()) return;
+    qInfo("[ticker] showTicker %s (stored: %s, chain tab busy: %s)", qPrintable(symbol), m_store.contains(symbol) ? "yes" : "no", m_chain->isBusy() ? "yes" : "no");
     constexpr qint64 kStaleSeconds = 10 * 60;
     if (switchToChainTab) m_tabs->setCurrentWidget(m_chain);
     m_chain->setTicker(symbol);
-    if (m_chain->applyStoredChain(symbol)) {
+    // Store-served switches report through the same completion callback as live downloads
+    // (status bar message; the live smoke counts on it).
+    auto report = [this, symbol, kStaleSeconds](bool refreshing) {
         const qint64 age = m_store.ageSeconds(symbol);
-        statusBar()->showMessage(QStringLiteral("%1: %2 contracts applied from memory (downloaded %3 min ago)%4.")
-                                     .arg(symbol).arg(m_state.chainQuotes.size()).arg(age / 60)
-                                     .arg(age > kStaleSeconds ? QStringLiteral(", refreshing in the background") : QString()), 8000);
-        if (age > kStaleSeconds) {
+        const QString message = QStringLiteral("%1: %2 contracts applied from memory (downloaded %3 min ago)%4.")
+                                    .arg(symbol).arg(m_state.chainQuotes.size()).arg(age / 60)
+                                    .arg(refreshing ? QStringLiteral(", refreshing in the background") : QString());
+        if (m_chain->onLiveOperationFinished) m_chain->onLiveOperationFinished(true, message);
+        else statusBar()->showMessage(message, 8000);
+    };
+    if (m_chain->applyStoredChain(symbol)) {
+        const bool stale = m_store.ageSeconds(symbol) > kStaleSeconds;
+        report(stale);
+        if (stale) {
             m_store.refresh(symbol, [this, symbol](bool ok, const QString&) {
                 if (ok && m_chain->ticker() == symbol) m_chain->applyStoredChain(symbol);
             });
@@ -819,11 +874,12 @@ void MainWindow::showTicker(const QString& rawSymbol, bool switchToChainTab)
         return;
     }
     statusBar()->showMessage(QStringLiteral("Downloading %1 option chain from Massive.com…").arg(symbol), 8000);
-    m_store.refresh(symbol, [this, symbol](bool ok, const QString& message) {
+    m_store.refresh(symbol, [this, symbol, report](bool ok, const QString& message) {
         if (ok && m_chain->ticker() == symbol) {
-            m_chain->applyStoredChain(symbol);
+            if (m_chain->applyStoredChain(symbol)) report(false);
         } else if (!ok) {
-            statusBar()->showMessage(message, 15000);
+            if (m_chain->onLiveOperationFinished) m_chain->onLiveOperationFinished(false, message);
+            else statusBar()->showMessage(message, 15000);
         }
     });
 }

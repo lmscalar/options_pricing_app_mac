@@ -175,14 +175,14 @@ QString styleSheetFor(const Theme& t)
             color: @text;
             background: @surface;
             border: 1px solid @border;
-            border-radius: 10px;
-            margin-top: 16px;
-            padding: 18px 14px 12px 14px;
+            border-radius: 8px;
+            margin-top: 12px;
+            padding: 12px 10px 8px 10px;
         }
         QGroupBox::title {
             subcontrol-origin: margin;
             subcontrol-position: top left;
-            left: 14px;
+            left: 10px;
             padding: 0 6px;
             background: @surface;
             border-radius: 4px;
@@ -405,6 +405,14 @@ QString styleSheetFor(const Theme& t)
             font-weight: 700;
             color: @accent;
         }
+        QLabel#spotUp, QLabel#spotDown, QLabel#spotFlat {
+            font-family: "Menlo", "SF Mono", monospace;
+            font-size: 14px;
+            font-weight: 700;
+        }
+        QLabel#spotUp { color: @up; }
+        QLabel#spotDown { color: @down; }
+        QLabel#spotFlat { color: @accent; }
         QLabel#columnHeader {
             font-weight: 700;
             color: @textMuted;

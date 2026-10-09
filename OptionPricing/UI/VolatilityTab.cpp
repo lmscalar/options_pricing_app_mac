@@ -333,7 +333,7 @@ void VolatilityTab::buildUi()
     m_rootSplitter->setSizes({ 384, 1000 });
 
     auto* root = new QHBoxLayout(this);
-    root->setContentsMargins(20, 16, 20, 16);
+    root->setContentsMargins(12, 8, 12, 10);
     root->addWidget(m_rootSplitter);
 
     // Remember the pane sizes and table columns between sessions.

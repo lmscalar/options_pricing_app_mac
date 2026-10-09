@@ -55,6 +55,7 @@ public:
     /// Asks for an API key. Returns true if a key is now available.
     bool promptForApiKey();
     MarketDataClient& client() { return m_client; }
+    bool isBusy() const { return m_busy; }
 
     QString resultsCsv() const;
 

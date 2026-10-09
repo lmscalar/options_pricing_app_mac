@@ -299,7 +299,7 @@ void QuotesTab::buildUi()
     splitter->setSizes({ 430, 900 });
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 16, 20, 16);
+    root->setContentsMargins(12, 8, 12, 10);
     root->addWidget(splitter, 1);
 }
 
@@ -316,7 +316,13 @@ void QuotesTab::wire()
         const QString symbol = tickerAtRow(row);
         if (symbol.isEmpty() || symbol == m_chartTicker) return;
         loadChart(symbol);
-        if (onTickerSelected && !m_autoSelecting) onTickerSelected(symbol);   // cascade: chain, volatility, heatmap, strategy, banner
+        // Cascade to the other tabs only for user-driven changes (the table has focus) or an
+        // explicit showTicker(); re-sorts, refreshes and the start-up selection never cascade.
+        const bool userDriven = (m_table->hasFocus() && !m_autoSelecting) || m_cascadeSelection;
+        if (onTickerSelected && userDriven) {
+            qInfo("[ticker] watchlist selection %s (row %d)", qPrintable(symbol), row);
+            onTickerSelected(symbol);
+        }
     });
     connect(m_table, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
         const QString symbol = tickerAtRow(row);
@@ -521,6 +527,7 @@ void QuotesTab::refreshQuotes()
         return;
     }
     m_client.fetchQuotes(m_watchlist, [this](const std::vector<MarketDataClient::Quote>& quotes) {
+        if (m_store) m_store->putQuotes(quotes);
         QDateTime newest;
         for (const MarketDataClient::Quote& q : quotes) {
             m_quotes[q.ticker] = q;
@@ -553,13 +560,29 @@ void QuotesTab::refreshQuotes()
     }, [this](const QString& message) { setStatus(message, ui::StatusKind::Error); });
 }
 
+void QuotesTab::loadStoredQuotes()
+{
+    if (!m_store) return;
+    const std::vector<MarketDataClient::Quote> stored = m_store->quotes();
+    if (stored.empty()) return;
+    for (const MarketDataClient::Quote& q : stored) {
+        if (m_watchlist.contains(q.ticker)) m_quotes[q.ticker] = q;
+    }
+    rebuildTable();
+    const QDateTime at = m_store->quotesFetchedAt();
+    setStatus(QStringLiteral("Prices from the last session (saved %1) · refreshing…").arg(at.isValid() ? at.toString("yyyy-MM-dd HH:mm") : QStringLiteral("earlier")),
+              ui::StatusKind::Info);
+}
+
 void QuotesTab::showTicker(const QString& ticker)
 {
     const QString symbol = ticker.trimmed().toUpper();
     if (symbol.isEmpty()) return;
     addTicker(symbol);
     const int row = rowForTicker(symbol);
-    if (row >= 0) m_table->selectRow(row);   // selection change loads the chart
+    m_cascadeSelection = true;
+    if (row >= 0) m_table->selectRow(row);   // selection change loads the chart and cascades
+    m_cascadeSelection = false;
     if (symbol != m_chartTicker) loadChart(symbol);   // e.g. the row was already current
 }
 

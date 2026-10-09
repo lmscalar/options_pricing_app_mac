@@ -46,6 +46,23 @@ public:
     bool isOpen() const { return m_open; }
     QString lastError() const { return m_lastError; }
 
+    // ---- Persistence between sessions ----
+    /// Default on-disk location (Application Support); created on demand.
+    static QString defaultCachePath();
+    /// Writes the whole in-memory database to `path` (SQLite VACUUM INTO). Called on exit
+    /// and after each preload pass.
+    bool saveTo(const QString& path);
+    /// Copies chains, contracts and quotes from a database saved by saveTo() into memory.
+    /// Returns the number of chains loaded (0 when the file is absent or unreadable).
+    int loadFrom(const QString& path);
+    /// When the database was last saved to disk (from the loaded file), if known.
+    QDateTime savedAt() const { return m_savedAt; }
+
+    // ---- Underlying quotes (watchlist snapshot) ----
+    bool putQuotes(const std::vector<MarketDataClient::Quote>& quotes);
+    std::vector<MarketDataClient::Quote> quotes() const;
+    QDateTime quotesFetchedAt() const;
+
     // ---- Storage ----
     bool put(const StoredChain& chain);
     std::optional<StoredChain> get(const QString& ticker) const;
@@ -86,6 +103,7 @@ private:
     QSqlDatabase m_db;
     bool m_open = false;
     QString m_lastError;
+    QDateTime m_savedAt;
 
     MarketDataClient m_client;
     QStringList m_queue;

@@ -93,8 +93,8 @@ void ScenarioTab::buildUi()
     m_summary->setWordWrap(true);
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 16, 20, 16);
-    root->setSpacing(12);
+    root->setContentsMargins(12, 8, 12, 10);
+    root->setSpacing(8);
     root->addWidget(controls);
     root->addWidget(m_table, 1);
     root->addWidget(m_summary);

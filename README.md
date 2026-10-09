@@ -101,7 +101,9 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   charts, hand-off to the pricer and to strategy legs. A strike filter (all, a band
   around the forward, or a custom min/max) limits the table and smile chart; the SVI fit
   always uses every quote. The expiry title and underlying price sit above the table and
-  stay fixed; the column header is part of the table and stays fixed while rows scroll.
+  stay fixed on one compact line (slice, logo, price and change, provenance, Hide Charts;
+  full details in tooltips); the column header is part of the table and stays fixed while
+  rows scroll.
   Columns are resizable (double-click a divider to fit). Drag the grip under the table or
   use Hide Charts to see more strikes; the chart pane scrolls when squeezed. Hovering a
   point on the smile or term-structure chart shows its strike, implied vol, quote
@@ -168,6 +170,15 @@ shared market state; chains older than ten minutes are refreshed in the backgrou
 re-applied when they arrive. Tickers added to the watchlist are preloaded as well, and
 chain downloads made on the Option Chain tab (all expiries) are stored too. The status
 bar reports preload progress and the store's size.
+
+The store is persisted between sessions: on exit (and after each preload pass) the
+in-memory database is written to `~/Library/Application Support/Luis Molina/Option
+Pricing/chains.sqlite` with SQLite's `VACUUM INTO`, including the watchlist's last
+underlying prices. On launch it is read back so the Quotes watchlist shows the previous
+prices and every stored chain is available immediately; times to expiry are re-measured
+from today and expired contracts dropped. Everything older than ten minutes is then
+refreshed in the background, and tickers without a saved chain are downloaded from
+Massive.com. Deleting the file simply forces a full reload.
 
 ### Refresh and delay
 

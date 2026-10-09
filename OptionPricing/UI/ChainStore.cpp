@@ -5,6 +5,7 @@
 
 #include "ChainStore.h"
 
+#include <QtCore/QStandardPaths>
 #include <QtSql/QSqlError>
 #include <QtSql/QSqlQuery>
 
@@ -46,6 +47,10 @@ bool ChainStore::createSchema()
         "  ticker TEXT NOT NULL, type INTEGER NOT NULL, strike REAL NOT NULL, maturity REAL NOT NULL, expiry TEXT, dte INTEGER,"
         "  bid REAL, ask REAL, mid REAL, volume REAL, open_interest REAL, vendor_iv REAL)",
         "CREATE INDEX IF NOT EXISTS idx_contracts_ticker ON contracts(ticker, maturity, strike)",
+        "CREATE TABLE IF NOT EXISTS quotes ("
+        "  ticker TEXT PRIMARY KEY, last REAL, previous_close REAL, change REAL, change_pct REAL,"
+        "  day_open REAL, day_high REAL, day_low REAL, day_volume REAL, as_of TEXT, fetched_at TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)",
     };
     for (const char* sql : statements) {
         if (!q.exec(QString::fromLatin1(sql))) {
@@ -144,6 +149,7 @@ std::optional<ChainStore::StoredChain> ChainStore::get(const QString& ticker) co
     rows.addBindValue(ticker);
     if (!rows.exec()) return std::nullopt;
     chain.download.quotes.reserve(static_cast<size_t>(std::max(0, chain.download.contracts)));
+    const QDate today = QDate::currentDate();
     while (rows.next()) {
         ChainQuote c;
         c.type = rows.value(0).toInt() == 0 ? OptionType::Call : OptionType::Put;
@@ -151,6 +157,15 @@ std::optional<ChainStore::StoredChain> ChainStore::get(const QString& ticker) co
         c.maturity = rows.value(2).toDouble();
         c.expiryDate = rows.value(3).toString().toStdString();
         c.daysToExpiry = rows.value(4).toInt();
+        // A chain restored from an earlier session: re-measure time to expiry from today
+        // (ACT/365, as the chain parser does) and drop contracts that have since expired.
+        const QDate expiryDate = QDate::fromString(rows.value(3).toString(), Qt::ISODate);
+        if (expiryDate.isValid()) {
+            const qint64 dte = today.daysTo(expiryDate);
+            if (dte <= 0) continue;
+            c.daysToExpiry = static_cast<int>(dte);
+            c.maturity = static_cast<double>(dte) / 365.0;
+        }
         c.bid = rows.value(5).toDouble();
         c.ask = rows.value(6).toDouble();
         c.mid = rows.value(7).toDouble();
@@ -239,6 +254,154 @@ qint64 ChainStore::approximateBytes() const
     if (q.exec("PRAGMA page_count") && q.next()) pages = q.value(0).toLongLong();
     if (q.exec("PRAGMA page_size") && q.next()) pageSize = q.value(0).toLongLong();
     return pages * pageSize;
+}
+
+// MARK: - Persistence
+
+QString ChainStore::defaultCachePath()
+{
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    QDir().mkpath(dir);
+    return dir + "/chains.sqlite";
+}
+
+bool ChainStore::saveTo(const QString& path)
+{
+    if (!m_open || path.isEmpty()) return false;
+    {
+        QSqlQuery meta(m_db);
+        meta.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('saved_at', ?)");
+        meta.addBindValue(QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+        meta.exec();
+    }
+    // VACUUM INTO refuses to overwrite: write a temporary file, then swap it in.
+    const QString temp = path + ".tmp";
+    QFile::remove(temp);
+    QSqlQuery q(m_db);
+    QString escaped = temp;
+    escaped.replace('\'', "''");
+    if (!q.exec(QStringLiteral("VACUUM INTO '%1'").arg(escaped))) {
+        m_lastError = q.lastError().text();
+        QFile::remove(temp);
+        return false;
+    }
+    QFile::remove(path);
+    if (!QFile::rename(temp, path)) {
+        m_lastError = QStringLiteral("could not replace %1").arg(path);
+        QFile::remove(temp);
+        return false;
+    }
+    m_savedAt = QDateTime::currentDateTime();
+    return true;
+}
+
+int ChainStore::loadFrom(const QString& path)
+{
+    if (!m_open || path.isEmpty() || !QFile::exists(path)) return 0;
+    QString escaped = path;
+    escaped.replace('\'', "''");
+    QSqlQuery q(m_db);
+    if (!q.exec(QStringLiteral("ATTACH DATABASE '%1' AS disk").arg(escaped))) {
+        m_lastError = q.lastError().text();
+        return 0;
+    }
+    int loaded = 0;
+    bool ok = m_db.transaction();
+    const char* copies[] = {
+        "INSERT OR REPLACE INTO chains SELECT * FROM disk.chains",
+        "DELETE FROM contracts WHERE ticker IN (SELECT ticker FROM disk.chains)",
+        "INSERT INTO contracts SELECT * FROM disk.contracts",
+        "INSERT OR REPLACE INTO quotes SELECT * FROM disk.quotes",
+        "INSERT OR REPLACE INTO meta SELECT * FROM disk.meta",
+    };
+    for (const char* sql : copies) {
+        if (ok && !q.exec(QString::fromLatin1(sql))) {
+            // Older or damaged files: give up on this file rather than half-load it.
+            m_lastError = q.lastError().text();
+            ok = false;
+        }
+    }
+    if (ok) {
+        ok = m_db.commit();
+        if (q.exec("SELECT COUNT(*) FROM disk.chains") && q.next()) loaded = q.value(0).toInt();
+        if (q.exec("SELECT value FROM meta WHERE key = 'saved_at'") && q.next()) m_savedAt = QDateTime::fromString(q.value(0).toString(), Qt::ISODateWithMs);
+    } else {
+        m_db.rollback();
+        loaded = 0;
+    }
+    q.finish();
+    QSqlQuery detach(m_db);
+    detach.exec("DETACH DATABASE disk");
+    if (!ok) {
+        // Start clean next time.
+        QFile::remove(path);
+        for (const char* sql : { "DELETE FROM contracts", "DELETE FROM chains", "DELETE FROM quotes" }) { QSqlQuery d(m_db); d.exec(QString::fromLatin1(sql)); }
+    }
+    return ok ? loaded : 0;
+}
+
+// MARK: - Underlying quotes
+
+bool ChainStore::putQuotes(const std::vector<MarketDataClient::Quote>& quotes)
+{
+    if (!m_open || quotes.empty()) return false;
+    if (!m_db.transaction()) return false;
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    bool ok = true;
+    for (const MarketDataClient::Quote& quote : quotes) {
+        QSqlQuery q(m_db);
+        q.prepare("INSERT OR REPLACE INTO quotes (ticker, last, previous_close, change, change_pct, day_open, day_high, day_low, day_volume, as_of, fetched_at)"
+                  " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        q.addBindValue(quote.ticker);
+        q.addBindValue(quote.last);
+        q.addBindValue(quote.previousClose);
+        q.addBindValue(quote.change);
+        q.addBindValue(quote.changePercent);
+        q.addBindValue(quote.dayOpen);
+        q.addBindValue(quote.dayHigh);
+        q.addBindValue(quote.dayLow);
+        q.addBindValue(quote.dayVolume);
+        q.addBindValue(quote.asOf.isValid() ? quote.asOf.toString(Qt::ISODateWithMs) : QString());
+        q.addBindValue(now);
+        ok = q.exec() && ok;
+    }
+    if (!ok) {
+        m_db.rollback();
+        return false;
+    }
+    return m_db.commit();
+}
+
+std::vector<MarketDataClient::Quote> ChainStore::quotes() const
+{
+    std::vector<MarketDataClient::Quote> out;
+    if (!m_open) return out;
+    QSqlQuery q(m_db);
+    if (!q.exec("SELECT ticker, last, previous_close, change, change_pct, day_open, day_high, day_low, day_volume, as_of FROM quotes ORDER BY ticker")) return out;
+    while (q.next()) {
+        MarketDataClient::Quote quote;
+        quote.ticker = q.value(0).toString();
+        quote.last = q.value(1).toDouble();
+        quote.previousClose = q.value(2).toDouble();
+        quote.change = q.value(3).toDouble();
+        quote.changePercent = q.value(4).toDouble();
+        quote.dayOpen = q.value(5).toDouble();
+        quote.dayHigh = q.value(6).toDouble();
+        quote.dayLow = q.value(7).toDouble();
+        quote.dayVolume = q.value(8).toDouble();
+        const QString asOf = q.value(9).toString();
+        if (!asOf.isEmpty()) quote.asOf = QDateTime::fromString(asOf, Qt::ISODateWithMs);
+        out.push_back(quote);
+    }
+    return out;
+}
+
+QDateTime ChainStore::quotesFetchedAt() const
+{
+    if (!m_open) return {};
+    QSqlQuery q(m_db);
+    if (!q.exec("SELECT MAX(fetched_at) FROM quotes") || !q.next()) return {};
+    return QDateTime::fromString(q.value(0).toString(), Qt::ISODateWithMs);
 }
 
 // MARK: - Preloading

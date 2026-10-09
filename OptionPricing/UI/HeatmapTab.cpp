@@ -195,8 +195,8 @@ void HeatmapTab::buildUi()
     m_splitter->setSizes({ 420, 320 });
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 16, 20, 16);
-    root->setSpacing(12);
+    root->setContentsMargins(12, 8, 12, 10);
+    root->setSpacing(8);
     root->addWidget(controlsBox);
     root->addLayout(cards);
     root->addWidget(m_splitter, 1);

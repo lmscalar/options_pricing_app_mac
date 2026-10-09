@@ -51,7 +51,8 @@ void ChainTab::buildUi()
     m_keyStatus->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_liveStatus = new QLabel(this);
     m_liveStatus->setObjectName("muted");
-    m_liveStatus->setWordWrap(true);
+    // One line: long messages are elided, the full text is the tooltip (see setLiveBusy / finishLive).
+    m_liveStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 
     auto* liveBox = new QGroupBox("Live Data (Massive.com)", this);
     auto* live = new QGridLayout(liveBox);
@@ -110,10 +111,10 @@ void ChainTab::buildUi()
 
     m_marketInfo = new QLabel(this);
     m_marketInfo->setObjectName("muted");
-    m_marketInfo->setWordWrap(true);
+    m_marketInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_summary = new QLabel(this);
     m_summary->setObjectName("muted");
-    m_summary->setWordWrap(true);
+    m_summary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 
     auto* controlsBox = new QGroupBox("Chain", this);
     auto* controls = new QGridLayout(controlsBox);
@@ -152,40 +153,34 @@ void ChainTab::buildUi()
     controls->addWidget(m_summary, 2, 4, 1, 4);
     controls->setColumnStretch(6, 1);
 
+    // One compact line above the table: slice title · logo · price and change · provenance · Hide Charts.
+    // Every text label is single-line and elides; the full provenance is in the tooltips.
     m_tableTitle = new QLabel(this);
     m_tableTitle->setObjectName("columnHeader");
+    m_tableTitle->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_tableTitle->setMinimumWidth(160);
     m_toggleCharts = ui::makeButton(this, "Hide Charts", "secondary", "Give the strike table the whole tab, or bring the charts back");
     m_spotLabel = new QLabel(this);
-    m_spotLabel->setObjectName("ivValue");
+    m_spotLabel->setObjectName("spotFlat");
     m_spotLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_spotLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_spotLabel->setToolTip("Current underlying price used to imply volatilities. Highlighted rows bracket this price.");
     m_spotDetail = new QLabel(this);
     m_spotDetail->setObjectName("muted");
-    m_spotDetail->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    // The provenance line is long; wrap it rather than letting it widen the window.
-    m_spotDetail->setWordWrap(true);
+    m_spotDetail->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);   // clips its tail, not its start, when squeezed
     m_spotDetail->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_spotDetail->setMinimumWidth(260);
-    auto* spotColumn = new QVBoxLayout;
-    spotColumn->setContentsMargins(0, 0, 0, 0);
-    spotColumn->setSpacing(0);
-    spotColumn->addWidget(m_spotLabel);
-    spotColumn->addWidget(m_spotDetail);
+    m_spotDetail->setMinimumWidth(120);
     m_logoLabel = new QLabel(this);
-    m_logoLabel->setFixedSize(40, 40);
+    m_logoLabel->setFixedSize(22, 22);
     m_logoLabel->setAlignment(Qt::AlignCenter);
     m_logoLabel->setVisible(false);
-    m_tableTitle->setWordWrap(true);
-    m_tableTitle->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_tableTitle->setMinimumWidth(200);
     auto* tableHeader = new QHBoxLayout;
     tableHeader->setContentsMargins(0, 0, 0, 0);
-    tableHeader->addWidget(m_tableTitle, 2);
+    tableHeader->setSpacing(8);
+    tableHeader->addWidget(m_tableTitle, 3);
     tableHeader->addWidget(m_logoLabel);
-    tableHeader->addSpacing(8);
-    tableHeader->addLayout(spotColumn, 3);
-    tableHeader->addSpacing(12);
+    tableHeader->addWidget(m_spotLabel);
+    tableHeader->addWidget(m_spotDetail, 2);
     tableHeader->addWidget(m_toggleCharts);
 
     m_table = new QTableWidget(0, ColumnCount, this);
@@ -313,8 +308,8 @@ void ChainTab::buildUi()
     m_splitter->setSizes({ 380, 480 });
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(20, 16, 20, 16);
-    root->setSpacing(12);
+    root->setContentsMargins(12, 8, 12, 10);
+    root->setSpacing(8);
     root->addWidget(liveBox);
     root->addWidget(controlsBox);
     root->addLayout(tableHeader);
@@ -415,6 +410,7 @@ void ChainTab::importCsvFile(const QString& path)
         box.exec();
     }
     m_summary->setText(message);
+    m_summary->setToolTip(m_summary->text());
 }
 
 void ChainTab::generateSample()
@@ -424,6 +420,7 @@ void ChainTab::generateSample()
     m_state.chainQuotes = syntheticChain(cm, { 1.0 / 12.0, 0.25, 0.5, 1.0 }, m_state.market.volatility, -0.08, 0.35, step, 10);
     m_state.notify();
     m_summary->setText("Synthetic chain: four expiries, 21 strikes each, with negative skew and a smile. Bid/ask spreads are 4% of mid.");
+    m_summary->setToolTip(m_summary->text());
 }
 
 void ChainTab::clearChain()
@@ -945,12 +942,14 @@ void ChainTab::setLiveBusy(bool busy, const QString& status)
     }
     if (!busy) m_automatic = false;
     ui::setStatus(m_liveStatus, status, ui::StatusKind::Info);
+    m_liveStatus->setToolTip(status);
 }
 
 void ChainTab::finishLive(bool ok, const QString& message)
 {
     setLiveBusy(false, message);
     ui::setStatus(m_liveStatus, message, ok ? ui::StatusKind::Info : ui::StatusKind::Error);
+    m_liveStatus->setToolTip(message);
     if (onLiveOperationFinished) onLiveOperationFinished(ok, message);
 }
 
@@ -1005,6 +1004,7 @@ void ChainTab::fetchLiveChain(bool automatic)
                     return;
                 }
                 m_summary->setText(QStringLiteral("Live chain for %1 from Massive.com as of %2.").arg(symbol, now.toString("yyyy-MM-dd HH:mm")));
+                m_summary->setToolTip(m_summary->text());
                 finishLive(true, downloadSummary(symbol, download, today));
             },
             fail);
@@ -1143,8 +1143,8 @@ void ChainTab::updateSpotLabels()
     } else {
         const qreal dpr = devicePixelRatioF();
         m_logoLabel->setPixmap(m_state.logo.isNull()
-                                   ? ui::monogramBadge(m_state.underlyingTicker, QColor(m_theme.accent2), QColor(m_theme.window), 40, dpr)
-                                   : ui::roundedLogo(m_state.logo, 40, dpr));
+                                   ? ui::monogramBadge(m_state.underlyingTicker, QColor(m_theme.accent2), QColor(m_theme.window), 22, dpr)
+                                   : ui::roundedLogo(m_state.logo, 22, dpr));
         m_logoLabel->setToolTip(m_state.companyName.isEmpty() ? m_state.underlyingTicker
                                                               : QStringLiteral("%1 · %2%3").arg(m_state.companyName, m_state.underlyingTicker,
                                                                                                  m_state.exchange.isEmpty() ? QString() : " · " + m_state.exchange));
@@ -1156,10 +1156,10 @@ void ChainTab::updateSpotLabels()
         m_spotLabel->setText(QStringLiteral("%1  %2  %3%4 (%5%6%)")
                                  .arg(symbol, ui::number(m.spot, 2), change >= 0 ? "+" : "−", ui::number(std::fabs(change), 2),
                                       change >= 0 ? "+" : "−", ui::number(std::fabs(m_state.dayChangePercent()), 2)));
-        m_spotLabel->setObjectName(change >= 0 ? "priceUp" : "priceDown");
+        m_spotLabel->setObjectName(change >= 0 ? "spotUp" : "spotDown");
     } else {
         m_spotLabel->setText(QStringLiteral("%1  %2").arg(symbol, ui::number(m.spot, 2)));
-        m_spotLabel->setObjectName("ivValue");
+        m_spotLabel->setObjectName("spotFlat");
     }
     ui::restyle(m_spotLabel);
 

@@ -205,8 +205,8 @@ void StrategyTab::buildUi()
     auto* content = new QWidget;
     content->setObjectName("root");
     auto* root = new QVBoxLayout(content);
-    root->setContentsMargins(20, 16, 20, 16);
-    root->setSpacing(12);
+    root->setContentsMargins(12, 8, 12, 10);
+    root->setSpacing(8);
     root->addWidget(presetBox);
     root->addWidget(legsBox);
     root->addLayout(lower, 1);

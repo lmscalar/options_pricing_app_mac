@@ -11,6 +11,7 @@
 #pragma once
 
 #include "QtHeaders.h"
+#include "ChainStore.h"
 #include "ChartPage.h"
 #include "MarketDataClient.h"
 #include "MarketState.h"
@@ -30,6 +31,10 @@ public:
     void showTicker(const QString& ticker);
     void refreshQuotes();
     bool hasTicker(const QString& ticker) const { return m_watchlist.contains(ticker.trimmed().toUpper()); }
+    /// Shared store: refreshed quotes are written to it, and loadStoredQuotes() shows the
+    /// previous session's prices before the first refresh arrives.
+    void setStore(ChainStore* store) { m_store = store; }
+    void loadStoredQuotes();
     void applyTheme(const Theme& theme);
     QString resultsCsv() const;
 
@@ -86,6 +91,7 @@ private:
 
     MarketState& m_state;
     MarketDataClient m_client;
+    ChainStore* m_store = nullptr;
     Theme m_theme;
     QStringList m_watchlist;
     std::map<QString, MarketDataClient::Quote> m_quotes;
@@ -99,6 +105,7 @@ private:
     bool m_loadingChart = false;
     bool m_updating = false;
     bool m_autoSelecting = false;   ///< true while the first row is selected programmatically at start-up
+    bool m_cascadeSelection = false; ///< true while showTicker() selects a row that should cascade
 
     // Watchlist
     QLineEdit* m_tickerEdit = nullptr;
