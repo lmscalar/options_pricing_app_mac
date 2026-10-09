@@ -618,6 +618,7 @@ void QuotesTab::loadChart(const QString& ticker)
             m_bars = series;
             pushBars();
             pushDrawings();
+            if (m_chartLoaded) { auto cb = std::move(m_chartLoaded); m_chartLoaded = nullptr; cb(true); }
             const MarketDataClient::Bar& last = series.bars.back();
             ui::setStatus(m_chartStatus, QStringLiteral("%1 · %2 bars (%3) from %4 to %5 · last %6 at %7")
                                              .arg(symbol).arg(series.bars.size()).arg(tf.label)
@@ -638,7 +639,133 @@ void QuotesTab::loadChart(const QString& ticker)
         [this, symbol](const QString& message) {
             m_loadingChart = false;
             if (symbol == m_chartTicker) ui::setStatus(m_chartStatus, message, ui::StatusKind::Error);
+            if (m_chartLoaded) { auto cb = std::move(m_chartLoaded); m_chartLoaded = nullptr; cb(false); }
         });
+}
+
+// MARK: - Assistant hooks
+
+QString QuotesTab::timeframeLabel() const
+{
+    return QString::fromLatin1(timeframes()[static_cast<size_t>(m_timeframeIndex)].label);
+}
+
+QStringList QuotesTab::timeframeLabels() const
+{
+    QStringList out;
+    for (const Timeframe& tf : timeframes()) out << QString::fromLatin1(tf.label);
+    return out;
+}
+
+bool QuotesTab::setTimeframe(const QString& label)
+{
+    const int index = static_cast<int>(timeframeLabels().indexOf(label.trimmed(), 0, Qt::CaseInsensitive));
+    if (index < 0) return false;
+    if (index == m_timeframeIndex) return true;
+    m_timeframeIndex = index;
+    if (QAbstractButton* button = m_timeframeGroup->button(index)) button->setChecked(true);
+    QSettings().setValue(kTimeframeKey, index);
+    if (!m_chartTicker.isEmpty()) loadChart(m_chartTicker);
+    return true;
+}
+
+bool QuotesTab::setChartType(const QString& type)
+{
+    const QString wanted = type.trimmed().toLower();
+    const QString key = wanted.startsWith("candle") ? "candles" : (wanted.startsWith("bar") ? "bars" : (wanted.startsWith("heik") ? "heikin" : (wanted == "line" ? "line" : QString())));
+    const int index = m_chartType->findData(key);
+    if (index < 0) return false;
+    m_chartType->setCurrentIndex(index);
+    return true;
+}
+
+void QuotesTab::loadChartThen(const QString& rawSymbol, const QString& timeframe, std::function<void(bool)> done)
+{
+    const QString symbol = rawSymbol.trimmed().toUpper().isEmpty() ? m_chartTicker : rawSymbol.trimmed().toUpper();
+    if (symbol.isEmpty()) { done(false); return; }
+    bool reload = false;
+    if (!timeframe.isEmpty() && timeframe.compare(timeframeLabel(), Qt::CaseInsensitive) != 0) {
+        const int index = static_cast<int>(timeframeLabels().indexOf(timeframe.trimmed(), 0, Qt::CaseInsensitive));
+        if (index < 0) { done(false); return; }
+        m_timeframeIndex = index;
+        if (QAbstractButton* button = m_timeframeGroup->button(index)) button->setChecked(true);
+        QSettings().setValue(kTimeframeKey, index);
+        reload = true;
+    }
+    if (!reload && symbol == m_chartTicker && !m_bars.bars.empty() && !m_loadingChart) { done(true); return; }
+    m_chartLoaded = std::move(done);
+    showTicker(symbol);                       // adds to the watchlist and selects the row
+    if (symbol == m_chartTicker && (reload || m_bars.bars.empty()) && !m_loadingChart) loadChart(symbol);
+}
+
+void QuotesTab::addDrawing(const QJsonObject& spec)
+{
+    runJs(QStringLiteral("chartApi.addDrawing(%1);").arg(QString::fromUtf8(QJsonDocument(spec).toJson(QJsonDocument::Compact))));
+}
+
+void QuotesTab::clearDrawings()
+{
+    runJs(QStringLiteral("chartApi.clearDrawings();"));
+}
+
+QString QuotesTab::drawingsJson() const
+{
+    const auto it = m_drawings.find(m_chartTicker);
+    if (it != m_drawings.end()) return it->second;
+    return QSettings().value(kDrawingsPrefix + m_chartTicker, "[]").toString();
+}
+
+void QuotesTab::chartImage(std::function<void(const QImage&)> done)
+{
+    if (!m_pageReady) { done(QImage()); return; }
+    m_view->page()->runJavaScript(QStringLiteral("chartApi.screenshot()"), [done](const QVariant& result) {
+        const QString dataUrl = result.toString();
+        const qsizetype comma = dataUrl.indexOf(',');
+        if (!dataUrl.startsWith("data:image/png;base64,") || comma < 0) { done(QImage()); return; }
+        QImage image;
+        image.loadFromData(QByteArray::fromBase64(dataUrl.mid(comma + 1).toLatin1()), "PNG");
+        done(image);
+    });
+}
+
+QString QuotesTab::contextSummary(int maxBars) const
+{
+    QString out;
+    QTextStream s(&out);
+    if (m_chartTicker.isEmpty()) {
+        s << "Quotes tab: no chart loaded. Watchlist: " << m_watchlist.join(", ") << "\n";
+        return out;
+    }
+    const Timeframe& tf = timeframes()[static_cast<size_t>(m_timeframeIndex)];
+    s << "Quotes tab. Chart: " << m_chartTicker;
+    if (m_names.count(m_chartTicker)) s << " (" << m_names.at(m_chartTicker) << ")";
+    s << ", timeframe " << tf.label << " (" << tf.multiplier << " " << tf.timespan << " bars), style " << m_chartType->currentData().toString()
+      << ", SMA " << (m_smaCheck->isChecked() ? QString::number(m_smaPeriod->value()) : QStringLiteral("off"))
+      << ", EMA " << (m_emaCheck->isChecked() ? QString::number(m_emaPeriod->value()) : QStringLiteral("off")) << ".\n";
+    const auto quote = m_quotes.find(m_chartTicker);
+    if (quote != m_quotes.end()) {
+        s << "Latest quote: last " << ui::number(quote->second.last, 2) << ", change " << ui::number(quote->second.change, 2) << " ("
+          << ui::number(quote->second.changePercent, 2) << "%), previous close " << ui::number(quote->second.previousClose, 2) << ".\n";
+    }
+    s << "Drawings on this chart (JSON; times are epoch seconds of the anchoring bar): " << drawingsJson() << "\n";
+    const auto& bars = m_bars.bars;
+    if (bars.empty()) {
+        s << "No bars loaded yet.\n";
+        return out;
+    }
+    double hi = 0.0, lo = 1e300;
+    for (const MarketDataClient::Bar& b : bars) { hi = std::max(hi, b.high); lo = std::min(lo, b.low); }
+    s << bars.size() << " bars from " << QDateTime::fromMSecsSinceEpoch(bars.front().timeMs).toString("yyyy-MM-dd HH:mm") << " to "
+      << QDateTime::fromMSecsSinceEpoch(bars.back().timeMs).toString("yyyy-MM-dd HH:mm") << "; range low " << ui::number(lo, 2) << " high " << ui::number(hi, 2)
+      << "; last close " << ui::number(bars.back().close, 2) << ".\n";
+    const size_t count = std::min(bars.size(), static_cast<size_t>(std::max(10, maxBars)));
+    s << "Most recent " << count << " bars (time,open,high,low,close,volume):\n";
+    for (size_t i = bars.size() - count; i < bars.size(); ++i) {
+        const MarketDataClient::Bar& b = bars[i];
+        s << QDateTime::fromMSecsSinceEpoch(b.timeMs).toString(tf.intraday ? "yyyy-MM-dd HH:mm" : "yyyy-MM-dd") << "," << ui::number(b.open, 2) << "," << ui::number(b.high, 2)
+          << "," << ui::number(b.low, 2) << "," << ui::number(b.close, 2) << "," << QString::number(b.volume, 'f', 0) << "\n";
+    }
+    return out;
 }
 
 void QuotesTab::pushBars()
@@ -741,6 +868,12 @@ void QuotesTab::onPageMessage(const QString& kind, const QString& payload)
         const int id = static_cast<int>(drawToolNames().indexOf(payload));
         if (QAbstractButton* button = id >= 0 ? m_drawTools->button(id) : nullptr) button->setChecked(true);
     }
+}
+
+void QuotesTab::debugStashDrawings(std::function<void(int)> done)
+{
+    if (!m_pageReady) { done(-1); return; }
+    m_view->page()->runJavaScript(QStringLiteral("chartApi.stashDrawings()"), [done](const QVariant& result) { done(result.toInt()); });
 }
 
 void QuotesTab::debugRestoreDrawings(std::function<void(int)> done)

@@ -9,9 +9,11 @@
 #pragma once
 
 #include "QtHeaders.h"
+#include "AssistantClient.h"
 #include "ChainStore.h"
 #include "MarketState.h"
 #include "Theme.h"
+#include "Widgets.h"
 
 class PricerTab;
 class StrategyTab;
@@ -20,6 +22,8 @@ class ChainTab;
 class HeatmapTab;
 class QuotesTab;
 class VolatilityTab;
+class AssistantPanel;
+class QDockWidget;
 
 class MainWindow : public QMainWindow
 {
@@ -43,6 +47,16 @@ private:
     void buildUi();
     void buildMenus();
     void applyTheme(bool dark);
+
+    // Assistant (MainWindowAssistant.cpp)
+    void buildAssistant();
+    std::vector<AssistantClient::Tool> assistantTools() const;
+    void executeAssistantTool(const QString& name, const QJsonObject& input, AssistantClient::ToolDone done);
+    void assistantContext(std::function<void(const QString& text, const QImage& image)> done);
+    bool handleLocalCommand(const QString& text, QString& feedback);
+    QString chainSummary(int maxExpiries) const;
+    QString tabNameOf(QWidget* tab) const;
+    QWidget* tabByName(const QString& name) const;
 
     // Workspace
     void newWorkspace();
@@ -82,7 +96,11 @@ private:
     HeatmapTab* m_heatmap = nullptr;
     QuotesTab* m_quotes = nullptr;
     VolatilityTab* m_volatility = nullptr;
+    AssistantPanel* m_assistant = nullptr;
+    QDockWidget* m_assistantDock = nullptr;
     QPushButton* m_themeToggle = nullptr;
+    QToolButton* m_assistantToggle = nullptr;
+    ui::SpinningDiamond* m_assistantBusy = nullptr;   ///< spins in the header while the assistant works
     QLabel* m_subtitle = nullptr;
 
     // Quote banner in the header: ticker, price, daily change, provenance

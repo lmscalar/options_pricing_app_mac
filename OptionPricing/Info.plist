@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.luis-molina.OptionPricing</string>
+	<key>CFBundleName</key>
+	<string>Option Pricer</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Option Pricer listens to the microphone so you can dictate requests to the assistant, such as “pull up option chains for AAPL”.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Option Pricer transcribes your voice requests to the assistant using Apple speech recognition.</string>
+</dict>
+</plist>

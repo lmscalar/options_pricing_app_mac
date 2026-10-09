@@ -34,6 +34,9 @@ public:
 
     /// Replaces the legs with the preset currently selected in the preset combo box.
     void loadPreset();
+    /// Selects the preset whose name contains `name` (case-insensitive) and loads it.
+    bool selectPreset(const QString& name);
+    QStringList presetNames() const;
 
     QJsonObject toJson() const;
     void fromJson(const QJsonObject& json);

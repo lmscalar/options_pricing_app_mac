@@ -10,6 +10,9 @@
 #include "PricerTab.h"
 #include "QuotesTab.h"
 #include "VolatilityTab.h"
+#include "AssistantPanel.h"
+
+#include <QtWidgets/QDockWidget>
 
 #include <QtCore/QElapsedTimer>
 #include "RateCurveDialog.h"
@@ -33,6 +36,7 @@ MainWindow::MainWindow()
     // A --window WxH argument (developer aid) wins over the remembered geometry.
     if (!QCoreApplication::arguments().contains("--window")) {
         restoreGeometry(settings.value("window/geometry").toByteArray());
+        restoreState(settings.value("window/state").toByteArray());
     }
     if (size().width() < 900) {
         resize(1360, 900);
@@ -201,6 +205,17 @@ void MainWindow::buildUi()
     header->addStretch(0);
     header->addSpacing(12);
     header->addWidget(m_themeToggle, 0, Qt::AlignRight);
+    // Assistant toggle: a checkable icon button bound to the dock's view action, so the
+    // dock's own close button and the menu item keep it in sync.
+    m_assistantToggle = new QToolButton(this);
+    m_assistantToggle->setObjectName("assistantToggle");
+    m_assistantToggle->setText("✦ Assistant");
+    m_assistantToggle->setCursor(Qt::PointingHandCursor);
+    m_assistantToggle->setToolTip("Show or hide the AI assistant panel (⌘⇧A). Hiding it gives the tabs the full width.");
+    m_assistantBusy = new ui::SpinningDiamond(this, 20);
+    m_assistantBusy->setToolTip("The assistant is thinking…");
+    header->addWidget(m_assistantBusy, 0, Qt::AlignRight);
+    header->addWidget(m_assistantToggle, 0, Qt::AlignRight);
 
     auto* central = new QWidget(this);
     central->setObjectName("root");
@@ -213,6 +228,17 @@ void MainWindow::buildUi()
     root->addSpacing(4);
     root->addWidget(m_tabs, 1);
     setCentralWidget(central);
+    buildAssistant();
+    // Keep the button's own label; mirror the dock's view action both ways.
+    QAction* dockAction = m_assistantDock->toggleViewAction();
+    m_assistantToggle->setCheckable(true);
+    m_assistantToggle->setChecked(dockAction->isChecked());
+    connect(m_assistantToggle, &QToolButton::clicked, dockAction, &QAction::trigger);
+    connect(dockAction, &QAction::toggled, m_assistantToggle, &QToolButton::setChecked);
+    m_assistant->onBusyChanged = [this](bool busy) {
+        if (busy) m_assistantBusy->start();
+        else m_assistantBusy->stop();
+    };
 }
 
 void MainWindow::buildMenus()
@@ -271,6 +297,26 @@ void MainWindow::buildMenus()
         m_chain->generateSample();
     });
 
+    QMenu* assistant = menuBar()->addMenu("&Assistant");
+    QAction* toggleDock = m_assistantDock->toggleViewAction();
+    toggleDock->setText("Show &Assistant Panel");
+    toggleDock->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_A));
+    assistant->addAction(toggleDock);
+    assistant->addAction("Analyze This &Screen", QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_L), this, [this] {
+        m_assistantDock->show();
+        m_assistant->analyzeScreen();
+    });
+    assistant->addAction("&Listen (Dictate)", QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_V), this, [this] {
+        m_assistantDock->show();
+        m_assistant->toggleListening();
+    });
+    assistant->addAction("Ask the Assistant…", QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K), this, [this] {
+        m_assistantDock->show();
+        m_assistant->focusInput();
+    });
+    assistant->addSeparator();
+    assistant->addAction("Set AI &Key…", this, [this] { m_assistant->promptForApiKey(); });
+
     QMenu* view = menuBar()->addMenu("&View");
     m_darkAction = view->addAction("&Dark Mode", QKeySequence(Qt::CTRL | Qt::Key_D), this, [this] { applyTheme(!m_darkMode); });
     m_darkAction->setCheckable(true);
@@ -308,6 +354,8 @@ void MainWindow::applyTheme(bool dark)
     m_heatmap->applyTheme(theme);
     m_quotes->applyTheme(theme);
     m_volatility->applyTheme(theme);
+    m_assistant->applyTheme(theme);
+    m_assistantBusy->setColor(QColor(theme.accent3.isEmpty() ? "#22d3ee" : theme.accent3));
 
     QSettings settings;
     settings.setValue("appearance/darkMode", dark);
@@ -397,6 +445,8 @@ void MainWindow::closeEvent(QCloseEvent* event)
 {
     QSettings settings;
     settings.setValue("window/geometry", saveGeometry());
+    settings.setValue("window/state", saveState());
+    settings.setValue("ai.panelVisible", m_assistantDock && m_assistantDock->isVisible());
     // Persist the in-memory chains and prices so the next launch starts populated.
     if (m_store.tickerCount() > 0 && !m_store.saveTo(ChainStore::defaultCachePath())) {
         qWarning("Could not save the option chain store: %s", qPrintable(m_store.lastError()));
@@ -635,6 +685,27 @@ QStringList MainWindow::captureTabs(const QString& directory)
     m_strategy->loadPreset();
     m_volatility->loadSample();
     {
+        // Typed requests through the real input widgets (local commands, so no AI key is needed):
+        // Enter key, then the Send button.
+        m_assistantDock->show();
+        m_assistant->debugTypeAndSend("switch to the volatility tab", false);
+        qInfo("[screenshot] typed + Enter -> current tab %s; transcript: %s", qPrintable(tabNameOf(m_tabs->currentWidget())), qPrintable(m_assistant->debugLastTranscriptLine()));
+        m_assistant->debugTypeAndSend("switch to the quotes tab", true);
+        qInfo("[screenshot] typed + Send  -> current tab %s; transcript: %s", qPrintable(tabNameOf(m_tabs->currentWidget())), qPrintable(m_assistant->debugLastTranscriptLine()));
+        // Rendering of an analyst-style note (tables, headings, lists, callout).
+        m_assistant->debugRenderSample();
+        for (int i = 0; i < 2; ++i) QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+        if (grab().save(directory + "/assistant-sample.png")) qInfo("[screenshot] wrote assistant-sample.png");
+        m_assistant->debugScrollTranscriptToTop();
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+        if (grab().save(directory + "/assistant-sample-top.png")) qInfo("[screenshot] wrote assistant-sample-top.png");
+        // Thinking indicators: capture a frame with them spinning.
+        m_assistant->debugSetBusy(true);
+        for (int i = 0; i < 4; ++i) QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+        if (grab().save(directory + "/assistant-busy.png")) qInfo("[screenshot] wrote assistant-busy.png (header diamond visible: %s)", m_assistantBusy->isVisible() ? "yes" : "no");
+        m_assistant->debugSetBusy(false);
+    }
+    {
         // Store persistence smoke: save whatever is in memory to the screenshot folder and read it back.
         const QString scratch = directory + "/chains-roundtrip.sqlite";
         const bool saved = m_store.saveTo(scratch);
@@ -826,6 +897,7 @@ void MainWindow::runLiveSmoke(const QString& ticker)
             // Exercise the drawing tools through the page's mouse handlers, then export the
             // chart (the web view cannot be captured by QWidget::grab; the library renders it,
             // with the drawing overlay composited on top).
+            auto runDrawingTests = [this, shotDir] {
             m_quotes->debugSimulateDrawings([this, shotDir](int count) {
                 qInfo("[live-smoke] drawings placed through the page: %d", count);
                 m_quotes->debugSimulateContextDelete([](int remaining) {
@@ -843,6 +915,67 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     });
                 });
             });
+            };   // runDrawingTests
+
+            // Assistant: a real turn against the API when a key is available. Local commands
+            // are checked first (no key needed), then the model is asked to annotate the chart.
+            {
+                QString feedback;
+                const bool handledChain = handleLocalCommand(QStringLiteral("pull up option chains for %1").arg(m_chain->ticker()), feedback);
+                qInfo("[live-smoke] local command (chain): %s -> %s", handledChain ? "handled" : "NOT handled", qPrintable(feedback));
+                const bool handledTab = handleLocalCommand("switch to the volatility tab", feedback);
+                qInfo("[live-smoke] local command (tab): %s -> %s (current tab %s)", handledTab ? "handled" : "NOT handled", qPrintable(feedback), qPrintable(tabNameOf(m_tabs->currentWidget())));
+                const bool handledOther = handleLocalCommand("what is the implied volatility skew here", feedback);
+                qInfo("[live-smoke] local command (free text): %s (expected not handled)", handledOther ? "handled" : "not handled");
+            }
+            // OPTION_PRICER_AI="OpenAI/gpt-4.1-mini" or "Ollama/llama3.2:latest" selects the provider under test.
+            const QString aiOverride = qEnvironmentVariable("OPTION_PRICER_AI");
+            if (!aiOverride.isEmpty()) {
+                m_assistant->client().setPersistSelection(false);   // a test selection must not change the user's preference
+                const QString providerName = aiOverride.section('/', 0, 0).trimmed().toLower();
+                const QString model = aiOverride.section('/', 1).trimmed();
+                m_assistant->client().setProvider(providerName == "openai" ? AssistantClient::Provider::OpenAI
+                                                  : (providerName.startsWith("ollama") ? AssistantClient::Provider::Ollama : AssistantClient::Provider::Anthropic));
+                if (!model.isEmpty()) m_assistant->client().setModel(model);
+                qInfo("[live-smoke] assistant provider override: %s / %s", qPrintable(AssistantClient::providerName(m_assistant->client().provider())), qPrintable(m_assistant->client().model()));
+            }
+            if (m_assistant->client().hasApiKey()) {
+                m_tabs->setCurrentWidget(m_quotes);
+                auto finished = std::make_shared<bool>(false);
+                auto aiClock = std::make_shared<QElapsedTimer>();
+                aiClock->start();
+                m_assistant->onReply = [this, shotDir, runDrawingTests, finished, aiClock](const QString& reply, bool ok) {
+                    if (*finished) return;
+                    *finished = true;
+                    QString oneLine = reply;
+                    oneLine.replace('\n', ' ');
+                    qInfo("[live-smoke] assistant %s in %lld ms (%s, %d in / %d out tokens): %s", ok ? "replied" : "FAILED", static_cast<long long>(aiClock->elapsed()),
+                          qPrintable(m_assistant->client().model()), m_assistant->client().lastInputTokens(), m_assistant->client().lastOutputTokens(), qPrintable(oneLine.left(700)));
+                    QTimer::singleShot(500, this, [this, shotDir, runDrawingTests] {
+                        qInfo("[live-smoke] assistant drawings now: %s", qPrintable(m_quotes->drawingsJson().left(500)));
+                        m_assistantDock->show();
+                        QCoreApplication::processEvents(QEventLoop::AllEvents, 200);
+                        if (grab().save(shotDir + "/assistant-reply.png")) qInfo("[live-smoke] wrote assistant-reply.png");
+                        m_quotes->saveChartImage(shotDir + "/chart-ai.png", [this, runDrawingTests](const QString& written) {
+                            qInfo("[live-smoke] assistant chart image %s", written.isEmpty() ? "FAILED" : qPrintable(written));
+                            m_quotes->clearDrawings();   // the model's test drawings are not kept
+                            runDrawingTests();
+                        });
+                    });
+                };
+                QTimer::singleShot(150000, this, [finished, runDrawingTests] {
+                    if (!*finished) { *finished = true; qInfo("[live-smoke] assistant FAILED: timed out"); runDrawingTests(); }
+                });
+                // Set the user's drawings aside so the model starts from a clean chart; the
+                // drawing tests restore them at the very end.
+                m_quotes->debugStashDrawings([this](int stashed) {
+                    qInfo("[live-smoke] stashed %d user drawings before the assistant turn", stashed);
+                    m_assistant->submit("Mark the two or three most important support and resistance zones on this chart and draw the dominant trend line. Reply in under 80 words.");
+                });
+            } else {
+                qInfo("[live-smoke] assistant: no ANTHROPIC_API_KEY, skipping the model turn");
+                runDrawingTests();
+            }
         }
     };
     m_chain->fetchLiveChain();

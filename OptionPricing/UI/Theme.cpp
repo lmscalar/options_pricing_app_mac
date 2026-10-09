@@ -455,6 +455,16 @@ QString styleSheetFor(const Theme& t)
         QPushButton#secondary:pressed, QPushButton#themeToggle:pressed, QToolButton:pressed {
             background: @buttonPressed;
         }
+        QToolButton#assistantToggle {
+            font-weight: 600;
+            padding: 6px 12px;
+            border-radius: 8px;
+            color: @accent3;
+        }
+        QToolButton#assistantToggle:checked {
+            background: @accent;
+            color: @accentText;
+        }
         QPushButton#themeToggle {
             padding: 5px 14px;
             font-weight: 500;

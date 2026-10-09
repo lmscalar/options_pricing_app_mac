@@ -384,12 +384,12 @@ void VolatilityTab::fetchHistory()
 {
     if (m_ticker.isEmpty()) {
         setStatus("Enter a ticker first.", ui::StatusKind::Warning);
-        if (onFetchFinished) onFetchFinished(false, "No ticker");
+        reportFetch(false, "No ticker");
         return;
     }
     if (!m_client.hasApiKey()) {
         setStatus("No Massive API key. Set MASSIVE_API_KEY or POLYGON_API_KEY, or use Market > Set Massive API Key.", ui::StatusKind::Error);
-        if (onFetchFinished) onFetchFinished(false, "No API key");
+        reportFetch(false, "No API key");
         return;
     }
     if (m_loading) return;
@@ -418,17 +418,17 @@ void VolatilityTab::fetchHistory()
         }
         if (bars.size() < 70) {
             setStatus(QStringLiteral("Only %1 daily bars returned for %2; at least 70 are needed.").arg(bars.size()).arg(ticker), ui::StatusKind::Error);
-            if (onFetchFinished) onFetchFinished(false, "Too few bars");
+            reportFetch(false, "Too few bars");
             return;
         }
         m_ticker = ticker;
         setBars(std::move(bars), QStringLiteral("Massive.com, %1 year%2").arg(years).arg(years == 1 ? "" : "s"));
-        if (onFetchFinished) onFetchFinished(true, QStringLiteral("%1 daily bars loaded for %2").arg(m_bars.size()).arg(ticker));
+        reportFetch(true, QStringLiteral("%1 daily bars loaded for %2").arg(m_bars.size()).arg(ticker));
     }, [this, ticker](const QString& message) {
         m_loading = false;
         m_fetch->setEnabled(true);
         setStatus(QStringLiteral("%1: %2").arg(ticker, message), ui::StatusKind::Error);
-        if (onFetchFinished) onFetchFinished(false, message);
+        reportFetch(false, message);
     });
 }
 
@@ -444,6 +444,21 @@ void VolatilityTab::fetchAll()
         m_lastChainTicker = m_ticker;   // avoid re-fetching our own history when the chain arrives
         onRequestChain(m_ticker);
     }
+    fetchHistory();
+}
+
+void VolatilityTab::reportFetch(bool ok, const QString& message)
+{
+    if (onFetchFinished) onFetchFinished(ok, message);
+    if (m_fetchOnce) { auto cb = std::move(m_fetchOnce); m_fetchOnce = nullptr; cb(ok, message); }
+}
+
+void VolatilityTab::fetchHistoryThen(const QString& rawSymbol, std::function<void(bool, const QString&)> done)
+{
+    const QString symbol = rawSymbol.trimmed().toUpper();
+    if (!symbol.isEmpty() && symbol == m_ticker && !m_bars.empty() && !m_loading) { done(true, summaryText()); return; }
+    if (!symbol.isEmpty()) setTicker(symbol);
+    m_fetchOnce = std::move(done);
     fetchHistory();
 }
 

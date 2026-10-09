@@ -44,6 +44,8 @@ public:
     QString summaryText() const;
 
     std::function<void(bool ok, const QString& message)> onFetchFinished;
+    /// Fetches history for `symbol` (or recomputes if already loaded) and reports once.
+    void fetchHistoryThen(const QString& symbol, std::function<void(bool ok, const QString& message)> done);
     /// Asks the Option Chain tab to download a chain for the ticker (wired by MainWindow).
     std::function<void(const QString& ticker)> onRequestChain;
 
@@ -63,6 +65,8 @@ private:
     void showHover(QLabel* readout, const QString& text, bool state);
     void setStatus(const QString& text, ui::StatusKind kind);
     void saveLayoutState() const;
+    void reportFetch(bool ok, const QString& message);
+    std::function<void(bool, const QString&)> m_fetchOnce;
 
     pricing::RealizedEstimator estimator() const;
     pricing::GarchModel model() const;

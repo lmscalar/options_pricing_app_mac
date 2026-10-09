@@ -49,6 +49,27 @@ public:
     std::function<void(const QStringList& watchlist)> onWatchlistChanged;
     QStringList watchlist() const { return m_watchlist; }
 
+    // ---- Assistant hooks ----
+    const MarketDataClient::BarSeries& bars() const { return m_bars; }
+    QString chartTicker() const { return m_chartTicker; }
+    QString timeframeLabel() const;
+    QStringList timeframeLabels() const;
+    /// Switches the timeframe button (and reloads the chart); false if the label is unknown.
+    bool setTimeframe(const QString& label);
+    bool setChartType(const QString& type);
+    /// Loads `symbol` on `timeframe` (empty = current) and reports when the bars are in.
+    void loadChartThen(const QString& symbol, const QString& timeframe, std::function<void(bool ok)> done);
+    /// Adds a drawing from a JSON spec (see chartApi.addDrawing) and persists it.
+    void addDrawing(const QJsonObject& spec);
+    void clearDrawings();
+    /// JSON array of the charted symbol's drawings (from the persisted copy).
+    QString drawingsJson() const;
+    /// Renders the chart (with drawings) to an image asynchronously; null image on failure.
+    void chartImage(std::function<void(const QImage&)> done);
+    /// Plain-text description of the chart for the assistant: symbol, timeframe, indicator
+    /// settings, drawings, and the most recent bars as CSV.
+    QString contextSummary(int maxBars = 80) const;
+
     /// Test hooks for the live smoke: draws sample annotations through the page's mouse
     /// handlers and reports how many drawings exist; checks the per-symbol persistence.
     void debugSimulateDrawings(std::function<void(int count)> done);
@@ -57,6 +78,8 @@ public:
     void debugSimulateContextDelete(std::function<void(int remaining)> done);
     /// Puts back the drawings stashed by debugSimulateDrawings(); reports how many were restored.
     void debugRestoreDrawings(std::function<void(int count)> done);
+    /// Sets the user's drawings aside (without persisting the empty set) so tests start clean.
+    void debugStashDrawings(std::function<void(int stashed)> done);
     bool hasStoredDrawings(const QString& symbol) const;
 
 private:
@@ -111,6 +134,7 @@ private:
     bool m_updating = false;
     bool m_autoSelecting = false;   ///< true while the first row is selected programmatically at start-up
     bool m_cascadeSelection = false; ///< true while showTicker() selects a row that should cascade
+    std::function<void(bool)> m_chartLoaded;   ///< one-shot callback for loadChartThen()
 
     // Watchlist
     QLineEdit* m_tickerEdit = nullptr;

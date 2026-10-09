@@ -542,6 +542,26 @@ void StrategyTab::setPosition(const Position& position)
     recompute();
 }
 
+bool StrategyTab::selectPreset(const QString& name)
+{
+    const QString wanted = name.trimmed();
+    for (int i = 0; i < m_presets->count(); ++i) {
+        if (m_presets->itemText(i).compare(wanted, Qt::CaseInsensitive) == 0 || m_presets->itemText(i).contains(wanted, Qt::CaseInsensitive)) {
+            m_presets->setCurrentIndex(i);
+            loadPreset();
+            return true;
+        }
+    }
+    return false;
+}
+
+QStringList StrategyTab::presetNames() const
+{
+    QStringList out;
+    for (int i = 0; i < m_presets->count(); ++i) out << m_presets->itemText(i);
+    return out;
+}
+
 void StrategyTab::loadPreset()
 {
     const auto preset = static_cast<StrategyPreset>(m_presets->currentData().toInt());

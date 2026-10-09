@@ -5,6 +5,8 @@
 
 #include "Widgets.h"
 
+#include <cmath>
+
 namespace ui {
 
 QDoubleSpinBox* makeSpinBox(QWidget* parent, double minimum, double maximum, double step, int decimals,
@@ -157,6 +159,59 @@ QPixmap monogramBadge(const QString& text, const QColor& background, const QColo
     painter.end();
     out.setDevicePixelRatio(devicePixelRatio);
     return out;
+}
+
+SpinningDiamond::SpinningDiamond(QWidget* parent, int size)
+    : QWidget(parent)
+    , m_color("#22d3ee")
+    , m_size(size)
+{
+    setFixedSize(size, size);
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_timer = new QTimer(this);
+    m_timer->setInterval(16);   // ~60 fps; one turn every 1.4 s
+    QObject::connect(m_timer, &QTimer::timeout, this, [this] {
+        m_angle += 360.0 * 16.0 / 1400.0;
+        if (m_angle >= 360.0) m_angle -= 360.0;
+        update();
+    });
+    hide();
+}
+
+void SpinningDiamond::start()
+{
+    if (!m_timer->isActive()) m_timer->start();
+    show();
+}
+
+void SpinningDiamond::stop()
+{
+    m_timer->stop();
+    m_angle = 0.0;
+    hide();
+}
+
+void SpinningDiamond::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.translate(width() / 2.0, height() / 2.0);
+    p.rotate(m_angle);
+    const qreal r = m_size / 2.0 - 1.0;
+    const qreal inner = r * 0.42;
+    // Four-point star: long points on the axes, short points on the diagonals.
+    QPolygonF star;
+    for (int i = 0; i < 8; ++i) {
+        const qreal angle = i * M_PI / 4.0;
+        const qreal radius = (i % 2 == 0) ? r : inner;
+        star << QPointF(radius * std::cos(angle), radius * std::sin(angle));
+    }
+    QColor fill = m_color;
+    QColor rim = m_color;
+    rim.setAlphaF(0.55);
+    p.setPen(QPen(rim, 1.0));
+    p.setBrush(fill);
+    p.drawPolygon(star);
 }
 
 QTableWidgetItem* makeCell(const QString& text, Qt::Alignment alignment)

@@ -136,6 +136,54 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   table, cone and forecast charts) and the table columns are resizable, and the layout is
   remembered between sessions.
 
+## Assistant (AI and voice)
+
+An **Assistant** dock sits beside every tab; the **✦ Assistant** button in the header (or
+⌘⇧A) collapses and expands it, and the tabs take the freed width. Three providers are
+supported from one client (`UI/AssistantClient`, QtNetwork, no SDKs), with the
+conversation kept in a provider-neutral form so switching keeps the history:
+
+| Provider | Endpoint | Credentials | Models |
+|----------|----------|-------------|--------|
+| Anthropic | Messages API | `ANTHROPIC_API_KEY` or AI Key… | `claude-sonnet-5` (default), Opus 5.5, Fable 5.1, Haiku 4.5 |
+| OpenAI | Chat Completions | `OPENAI_API_KEY` or AI Key… | `gpt-5`, `gpt-5-mini`, `gpt-4.1`, `gpt-4o`, … (↻ lists your account's chat models) |
+| Ollama (local) | `http://localhost:11434/v1` (OpenAI-compatible) | none; Server… sets the address | ↻ lists the models installed on this Mac |
+
+A key entered in the panel (for the session, or remembered) takes precedence over the
+environment variable, so a stale shell key never shadows one you typed in.
+Tool calling works with all three; chart images are attached only to models that accept
+them (Anthropic, OpenAI; Ollama vision models such as `llama3.2-vision`). Every request
+carries a *screen context* block describing
+the active tab (figures as CSV, the chain's per-expiry ATM vols, the Quotes chart's recent
+bars, indicator settings and drawings) and, on the Quotes tab, an image of the chart, so
+the analysis is grounded in what is displayed. **Analyze this screen** (⌘⇧L) asks for a
+summary of the current tab.
+
+The model can act through tools: `show_ticker` (loads a symbol everywhere), `switch_tab`,
+`get_bars`, `draw_trend_line`, `draw_zone` (shaded support/resistance), `clear_drawings`,
+`list_drawings`, `set_timeframe`, `set_chart_type`, `get_option_chain`, `get_volatility`,
+`set_market_volatility`, `load_strategy_preset`, `get_strategy`, `get_pricer`,
+`set_pricer_contract`, `get_heatmap`. "Mark support and resistance on this chart" therefore
+produces real zones and trend lines on the chart, persisted like hand-drawn ones.
+
+Replies are rendered as analyst notes: a headline, a **Key levels** table (numeric cells
+right-aligned, signed changes coloured), Technicals / Options and volatility / Risks /
+Next steps sections, and a highlighted **Bottom line**. The panel's renderer handles
+Markdown headings, pipe tables, nested lists, rules, bold, italic and code, and re-colours
+the whole transcript when the theme changes.
+
+**Text or voice.** Type in the box at the bottom of the panel and press Enter (Shift+Enter
+inserts a line break) or click Send; ⌘⇧K opens the panel and focuses the box from any tab.
+Typed text is kept if the assistant is still busy. While a request is in flight a diamond
+spins next to the status line and in the header beside the ✦ Assistant button (so it is
+visible with the panel collapsed), and Send is disabled until the reply arrives. The microphone button (⌘⇧V) dictates through Apple's Speech framework (the
+system asks for microphone and speech-recognition permission once; the usage strings are
+in `OptionPricing/Info.plist`, embedded in the binary). Dictation ends after a short pause
+and is sent. Replies can be read aloud (**Speak replies**, AVSpeechSynthesizer). Simple
+navigation commands are parsed locally and need no AI key: "pull up option chains for
+AAPL", "chart NVDA", "switch to the volatility tab", "show volatility for TSLA", "clear
+drawings". Anything else goes to the model.
+
 The **File** menu saves and opens workspace files (`.optws`, JSON), imports chains,
 batch-prices a CSV and exports or copies the current tab as CSV. The **Market** menu
 fetches live data and edits the zero-rate curve.

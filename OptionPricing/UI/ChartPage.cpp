@@ -472,14 +472,30 @@ const char* const kControllerJs = R"js(
       redraw();
     },
     drawings: function () { return JSON.stringify(D.items); },
+    // Programmatic drawing (assistant tools): {type:'trend', t1, p1, t2, p2, extend} with
+    // epoch-second times, or {type:'zone', kind:'support'|'resistance', lo, hi}.
+    addDrawing: function (spec) {
+      if (!state.bars.length || !spec) return -1;
+      const nearest = t => { const l = logicalFromAnchor({ t: t, extra: 0 }); return anchorFromLogical(l); };
+      let d = null;
+      if (spec.type === 'trend') {
+        d = { id: D.nextId++, type: 'trend', a: nearest(spec.t1), pa: spec.p1, b: nearest(spec.t2), pb: spec.p2, extend: spec.extend !== false };
+      } else if (spec.type === 'zone') {
+        d = { id: D.nextId++, type: 'zone', kind: spec.kind === 'resistance' ? 'resistance' : 'support', lo: Math.min(spec.lo, spec.hi), hi: Math.max(spec.lo, spec.hi) };
+      }
+      if (!d) return -1;
+      D.items.push(d); emitDrawings(); redraw();
+      return D.items.length;
+    },
     undoDrawing: function () { if (D.items.length) { D.items.pop(); D.selected = null; emitDrawings(); redraw(); } },
     clearDrawings: function () { if (D.items.length) { D.items = []; D.selected = null; emitDrawings(); redraw(); } },
     deleteSelected: deleteSelected,
     // Test hook: draws a trend line and two zones through the real mouse handlers.
     simulateDrawings: function () {
       if (!state.bars.length || !state.main) return 0;
-      // Stash whatever the user has drawn; restoreDrawings() puts it back after the test.
-      D.stash = D.items.slice(); D.items = []; D.selected = null;
+      // Stash whatever the user has drawn (unless a test already did); restoreDrawings() puts it back.
+      if (!D.stash) D.stash = D.items.slice();
+      D.items = []; D.selected = null;
       const pane = paneRect(), n = state.bars.length;
       const ev = (type, x, y) => {
         const r = draw.getBoundingClientRect();
@@ -511,6 +527,11 @@ const char* const kControllerJs = R"js(
       const item = menu.querySelector('[data-act="delete"]');
       if (item) item.click();
       return shown && D.items.length === before - 1 ? D.items.length : -1;
+    },
+    stashDrawings: function () {
+      if (!D.stash) D.stash = D.items.slice();
+      D.items = []; D.selected = null; redraw();
+      return D.stash.length;
     },
     restoreDrawings: function () {
       if (!D.stash) return D.items.length;

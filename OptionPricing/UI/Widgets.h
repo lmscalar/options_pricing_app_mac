@@ -51,4 +51,25 @@ QPixmap monogramBadge(const QString& text, const QColor& background, const QColo
 /// Non-editable table cell with right alignment.
 QTableWidgetItem* makeCell(const QString& text, Qt::Alignment alignment = Qt::AlignRight | Qt::AlignVCenter);
 
+/// A four-point diamond that spins while something is in progress (the assistant
+/// thinking). Hidden when idle so layouts do not reserve space for it.
+class SpinningDiamond : public QWidget
+{
+public:
+    explicit SpinningDiamond(QWidget* parent = nullptr, int size = 18);
+    void start();
+    void stop();
+    bool active() const { return m_timer->isActive(); }
+    void setColor(const QColor& color) { m_color = color; update(); }
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    QTimer* m_timer = nullptr;
+    qreal m_angle = 0.0;
+    QColor m_color;
+    int m_size;
+};
+
 } // namespace ui
