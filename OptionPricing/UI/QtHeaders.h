@@ -111,5 +111,8 @@
 #include <QtCharts/QScatterSeries>
 #include <QtCharts/QValueAxis>
 #include <QtCharts/QLegendMarker>
+#include <QtSql/QSqlDatabase>
+#include <QtSql/QSqlQuery>
+#include <QtSql/QSqlError>
 
 #pragma clang diagnostic pop

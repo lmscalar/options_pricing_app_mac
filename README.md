@@ -156,6 +156,19 @@ from Xcode or Finder those variables are usually absent, so **Market > Set Massi
 Key** accepts a key for the session, optionally remembered (unencrypted) in the
 application preferences. The key is only ever sent to `api.massive.com`.
 
+### In-memory chain store
+
+Every ticker on the Quotes watchlist has its full option chain and underlying snapshot
+downloaded shortly after start-up (two downloads in flight at a time) into an in-memory
+SQLite database (`UI/ChainStore`, QtSql with the bundled SQLite driver; tables `chains`
+and `contracts`, about 0.5 MB per large-cap chain). Highlighting a ticker on the Quotes
+watchlist, opening it from the Heatmap or Volatility tab, or fetching it on the Option
+Chain tab applies the stored chain instantly and cascades it to every tab through the
+shared market state; chains older than ten minutes are refreshed in the background and
+re-applied when they arrive. Tickers added to the watchlist are preloaded as well, and
+chain downloads made on the Option Chain tab (all expiries) are stored too. The status
+bar reports preload progress and the store's size.
+
 ### Refresh and delay
 
 - **Auto-refresh** on the Option Chain tab re-downloads the chain and re-checks the

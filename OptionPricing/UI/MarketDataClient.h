@@ -121,6 +121,9 @@ public:
 
 private:
     void get(const QUrl& url, std::function<void(const QJsonObject&)> ok, ErrorHandler err);
+    /// GET with up to two retries (back-off 0.8 s, 3.2 s) on transient failures: network
+    /// errors including HTTP/2 GOAWAY cancellations and timeouts, 429 and 5xx responses.
+    void getWithRetry(const QUrl& url, int attempt, std::function<void(const QJsonObject&)> ok, ErrorHandler err);
     /// Follows `next_url` pagination, delivering each page's `results` array.
     void getPaged(const QUrl& url, int maxPages, std::function<void(const QJsonArray&)> onPage,
                   std::function<void()> done, ErrorHandler err);

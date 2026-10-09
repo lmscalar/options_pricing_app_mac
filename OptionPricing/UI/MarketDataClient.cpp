@@ -106,17 +106,34 @@ void MarketDataClient::get(const QUrl& url, std::function<void(const QJsonObject
         err("No Massive API key. Set MASSIVE_API_KEY or POLYGON_API_KEY, or enter a key via Market > Set Massive API Key.");
         return;
     }
+    getWithRetry(url, 0, std::move(ok), std::move(err));
+}
+
+void MarketDataClient::getWithRetry(const QUrl& url, int attempt, std::function<void(const QJsonObject&)> ok, ErrorHandler err)
+{
     QNetworkRequest request(url);
     request.setRawHeader("Authorization", "Bearer " + m_apiKey.toUtf8());
     request.setRawHeader("Accept", "application/json");
     request.setTransferTimeout(25000);
     QNetworkReply* reply = m_manager.get(request);
-    QObject::connect(reply, &QNetworkReply::finished, reply, [reply, ok = std::move(ok), err = std::move(err)] {
+    QObject::connect(reply, &QNetworkReply::finished, reply, [this, reply, url, attempt, ok = std::move(ok), err = std::move(err)] {
         reply->deleteLater();
         const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
         const QJsonObject body = doc.object();
         if (reply->error() != QNetworkReply::NoError || status >= 400) {
+            // Many parallel requests (chain preloading) can draw an HTTP/2 GOAWAY, which Qt
+            // reports as a cancelled operation, or a 429; both are worth a short back-off.
+            const bool networkLevel = reply->error() != QNetworkReply::NoError && status == 0
+                                      && reply->error() != QNetworkReply::AuthenticationRequiredError
+                                      && reply->error() != QNetworkReply::SslHandshakeFailedError;
+            const bool transient = networkLevel || status == 429 || status >= 500;
+            if (transient && attempt < 2) {
+                const int delayMs = attempt == 0 ? 800 : 3200;
+                // The manager is the context: if the client is destroyed first, the retry is dropped.
+                QTimer::singleShot(delayMs, &m_manager, [this, url, attempt, ok, err] { getWithRetry(url, attempt + 1, ok, err); });
+                return;
+            }
             err(describeFailure(status, body, reply->errorString()));
             return;
         }

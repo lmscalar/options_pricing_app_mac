@@ -9,6 +9,7 @@
 #pragma once
 
 #include "QtHeaders.h"
+#include "ChainStore.h"
 #include "MarketState.h"
 #include "Theme.h"
 
@@ -56,6 +57,10 @@ private:
     void rebuildRecentMenu();
 
     // Data
+    /// Makes `symbol` the app-wide ticker: applies its chain from the in-memory store when
+    /// present (refreshing stale ones in the background) or downloads it, then every tab
+    /// follows through the shared market state.
+    void showTicker(const QString& symbol, bool switchToChainTab);
     void importChain();
     void batchPrice();
     void exportResults();
@@ -65,6 +70,7 @@ private:
     QString currentResultsCsv() const;
 
     MarketState m_state;
+    ChainStore m_store;                ///< in-memory SQLite database of watchlist option chains
     bool m_darkMode = false;
     QString m_currentPath;
 

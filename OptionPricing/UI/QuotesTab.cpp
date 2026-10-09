@@ -314,7 +314,9 @@ void QuotesTab::wire()
     connect(m_table, &QTableWidget::currentCellChanged, this, [this](int row, int, int, int) {
         if (m_updating) return;
         const QString symbol = tickerAtRow(row);
-        if (!symbol.isEmpty() && symbol != m_chartTicker) loadChart(symbol);
+        if (symbol.isEmpty() || symbol == m_chartTicker) return;
+        loadChart(symbol);
+        if (onTickerSelected && !m_autoSelecting) onTickerSelected(symbol);   // cascade: chain, volatility, heatmap, strategy, banner
     });
     connect(m_table, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
         const QString symbol = tickerAtRow(row);
@@ -430,6 +432,7 @@ void QuotesTab::addTicker(const QString& ticker)
         saveWatchlist();
         rebuildTable();
         refreshQuotes();
+        if (onWatchlistChanged) onWatchlistChanged(m_watchlist);
     }
 }
 
@@ -442,6 +445,7 @@ void QuotesTab::removeSelectedTicker()
     m_quotes.erase(removed);
     saveWatchlist();
     rebuildTable();
+    if (onWatchlistChanged) onWatchlistChanged(m_watchlist);
     if (m_chartTicker == removed && m_table->rowCount() > 0) {
         m_table->selectRow(std::min(row, m_table->rowCount() - 1));
     }
@@ -540,7 +544,11 @@ void QuotesTab::refreshQuotes()
         }
         setStatus(status, ui::StatusKind::Info);
         if (m_chartTicker.isEmpty() && m_table->rowCount() > 0 && m_table->currentRow() < 0) {
+            // Initial selection: chart the first row but do not cascade it to the other tabs,
+            // which may hold a workspace the user opened; only user clicks cascade.
+            m_autoSelecting = true;
             m_table->selectRow(0);
+            m_autoSelecting = false;
         }
     }, [this](const QString& message) { setStatus(message, ui::StatusKind::Error); });
 }

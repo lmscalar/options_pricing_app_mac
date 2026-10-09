@@ -10,6 +10,8 @@
 #include "PricerTab.h"
 #include "QuotesTab.h"
 #include "VolatilityTab.h"
+
+#include <QtCore/QElapsedTimer>
 #include "RateCurveDialog.h"
 #include "ScenarioTab.h"
 #include "StrategyTab.h"
@@ -52,18 +54,29 @@ void MainWindow::buildUi()
     m_heatmap = new HeatmapTab(m_state, this);
     m_quotes = new QuotesTab(m_state, this);
     m_volatility = new VolatilityTab(m_state, this);
-    m_volatility->onRequestChain = [this](const QString& ticker) {
-        // Same path as the Heatmap's ticker box: the Option Chain tab owns the download and
-        // every other tab follows the shared market state.
-        m_chain->setTicker(ticker);
-        m_chain->fetchLiveChain();
-        statusBar()->showMessage(QStringLiteral("Downloading %1 option chain from Massive.com…").arg(ticker), 8000);
+    m_chain->setStore(&m_store);
+    // Every ticker entry point funnels through showTicker(): stored chains apply instantly,
+    // missing or stale ones are downloaded, and all tabs follow the shared market state.
+    m_volatility->onRequestChain = [this](const QString& ticker) { showTicker(ticker, false); };
+    m_quotes->onOpenInChain = [this](const QString& ticker) { showTicker(ticker, true); };
+    m_quotes->onTickerSelected = [this](const QString& ticker) { showTicker(ticker, false); };
+    m_quotes->onWatchlistChanged = [this](const QStringList& watchlist) { m_store.preload(watchlist); };
+    m_store.onProgress = [this](const QString& ticker, int done, int total) {
+        statusBar()->showMessage(QStringLiteral("Preloading option chains into memory: %1 of %2 (%3)").arg(done).arg(total).arg(ticker), 6000);
     };
-    m_quotes->onOpenInChain = [this](const QString& ticker) {
-        m_chain->setTicker(ticker);
-        m_tabs->setCurrentWidget(m_chain);
-        m_chain->fetchLiveChain();
+    m_store.onIdle = [this] {
+        if (m_store.tickerCount() > 0) {
+            statusBar()->showMessage(QStringLiteral("Option chains for %1 tickers in memory: %2 contracts, %3 MB.")
+                                         .arg(m_store.tickerCount()).arg(m_store.contractCount()).arg(m_store.approximateBytes() / 1048576.0, 0, 'f', 1), 10000);
+        }
     };
+    m_store.onChainStored = [this](const QString& ticker, bool ok, const QString& message) {
+        if (!ok) qWarning("Chain preload failed: %s", qPrintable(message));
+        // If this is the ticker the user is looking at and nothing is loaded yet, apply it.
+        if (ok && m_chain->ticker() == ticker && m_state.underlyingTicker != ticker) m_chain->applyStoredChain(ticker);
+    };
+    // Warm the store with the whole watchlist shortly after start-up.
+    QTimer::singleShot(800, this, [this] { m_store.preload(m_quotes->watchlist()); });
 
     m_pricer->onAddLeg = [this](const pricing::Leg& leg) {
         m_strategy->addLeg(leg);
@@ -88,12 +101,7 @@ void MainWindow::buildUi()
     };
     m_chain->onSendToPricer = sendToPricer;
     m_heatmap->onSendToPricer = sendToPricer;
-    m_heatmap->onRequestFetch = [this](const QString& ticker) {
-        // The Option Chain tab owns the download; the heatmap refreshes when the state changes.
-        m_chain->setTicker(ticker);
-        m_chain->fetchLiveChain();
-        statusBar()->showMessage(QStringLiteral("Downloading %1 option chain from Massive.com…").arg(ticker), 8000);
-    };
+    m_heatmap->onRequestFetch = [this](const QString& ticker) { showTicker(ticker, false); };
     m_chain->onLiveOperationFinished = [this](bool ok, const QString& message) {
         statusBar()->showMessage(message, ok ? 10000 : 20000);
     };
@@ -698,6 +706,18 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                   qPrintable(m_chain->ticker()), m_state.chainQuotes.size(), qPrintable(m_state.underlyingTicker), qPrintable(m_volatility->ticker()),
                   m_quotes->hasTicker(m_state.underlyingTicker) ? "yes" : "no");
             qInfo("[live-smoke] volatility: %s", qPrintable(m_volatility->summaryText()));
+            {
+                QElapsedTimer clock;
+                clock.start();
+                const bool served = m_chain->applyStoredChain(m_chain->ticker());
+                qInfo("[live-smoke] chain store: %d tickers, %d contracts, %.1f MB, %d downloads pending; re-applied %s from memory in %lld ms (%s)",
+                      m_store.tickerCount(), m_store.contractCount(), m_store.approximateBytes() / 1048576.0, m_store.pending(),
+                      qPrintable(m_chain->ticker()), static_cast<long long>(clock.elapsed()), served ? "ok" : "not stored");
+                for (const ChainStore::Summary& row : m_store.summaries()) {
+                    qInfo("[live-smoke]   stored %-6s %5d contracts %3d expiries spot %8.2f at %s", qPrintable(row.ticker), row.contracts, row.expiries, row.spot,
+                          qPrintable(row.fetchedAt.toString("HH:mm:ss")));
+                }
+            }
             const auto& slices = m_state.surface.slices();
             const pricing::ExpirySlice* first = slices.empty() ? nullptr : &slices.front();
             const pricing::ExpirySlice* last = slices.empty() ? nullptr : &slices.back();
@@ -773,6 +793,39 @@ void MainWindow::runLiveSmoke(const QString& ticker)
         }
     };
     m_chain->fetchLiveChain();
+}
+
+void MainWindow::showTicker(const QString& rawSymbol, bool switchToChainTab)
+{
+    const QString symbol = rawSymbol.trimmed().toUpper();
+    if (symbol.isEmpty()) return;
+    constexpr qint64 kStaleSeconds = 10 * 60;
+    if (switchToChainTab) m_tabs->setCurrentWidget(m_chain);
+    m_chain->setTicker(symbol);
+    if (m_chain->applyStoredChain(symbol)) {
+        const qint64 age = m_store.ageSeconds(symbol);
+        statusBar()->showMessage(QStringLiteral("%1: %2 contracts applied from memory (downloaded %3 min ago)%4.")
+                                     .arg(symbol).arg(m_state.chainQuotes.size()).arg(age / 60)
+                                     .arg(age > kStaleSeconds ? QStringLiteral(", refreshing in the background") : QString()), 8000);
+        if (age > kStaleSeconds) {
+            m_store.refresh(symbol, [this, symbol](bool ok, const QString&) {
+                if (ok && m_chain->ticker() == symbol) m_chain->applyStoredChain(symbol);
+            });
+        }
+        return;
+    }
+    if (!m_store.hasApiKey()) {
+        m_chain->fetchLiveChain();   // prompts for a key, then downloads directly
+        return;
+    }
+    statusBar()->showMessage(QStringLiteral("Downloading %1 option chain from Massive.com…").arg(symbol), 8000);
+    m_store.refresh(symbol, [this, symbol](bool ok, const QString& message) {
+        if (ok && m_chain->ticker() == symbol) {
+            m_chain->applyStoredChain(symbol);
+        } else if (!ok) {
+            statusBar()->showMessage(message, 15000);
+        }
+    });
 }
 
 void MainWindow::showAbout()

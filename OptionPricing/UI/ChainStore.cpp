@@ -1,0 +1,344 @@
+//
+//  ChainStore.cpp
+//  OptionPricing
+//
+
+#include "ChainStore.h"
+
+#include <QtSql/QSqlError>
+#include <QtSql/QSqlQuery>
+
+using namespace pricing;
+
+namespace {
+int gConnectionCounter = 0;
+} // namespace
+
+ChainStore::ChainStore()
+    : m_connectionName(QStringLiteral("chainstore-%1").arg(++gConnectionCounter))
+{
+    m_db = QSqlDatabase::addDatabase("QSQLITE", m_connectionName);
+    m_db.setDatabaseName(":memory:");
+    if (!m_db.open()) {
+        m_lastError = m_db.lastError().text();
+        return;
+    }
+    m_open = createSchema();
+}
+
+ChainStore::~ChainStore()
+{
+    m_db.close();
+    m_db = QSqlDatabase();
+    QSqlDatabase::removeDatabase(m_connectionName);
+}
+
+bool ChainStore::createSchema()
+{
+    QSqlQuery q(m_db);
+    const char* statements[] = {
+        "PRAGMA journal_mode = MEMORY",
+        "PRAGMA synchronous = OFF",
+        "CREATE TABLE IF NOT EXISTS chains ("
+        "  ticker TEXT PRIMARY KEY, fetched_at TEXT NOT NULL, spot REAL, previous_close REAL, price_source TEXT, spot_as_of TEXT,"
+        "  contracts INTEGER, skipped INTEGER, with_quotes INTEGER)",
+        "CREATE TABLE IF NOT EXISTS contracts ("
+        "  ticker TEXT NOT NULL, type INTEGER NOT NULL, strike REAL NOT NULL, maturity REAL NOT NULL, expiry TEXT, dte INTEGER,"
+        "  bid REAL, ask REAL, mid REAL, volume REAL, open_interest REAL, vendor_iv REAL)",
+        "CREATE INDEX IF NOT EXISTS idx_contracts_ticker ON contracts(ticker, maturity, strike)",
+    };
+    for (const char* sql : statements) {
+        if (!q.exec(QString::fromLatin1(sql))) {
+            m_lastError = q.lastError().text();
+            return false;
+        }
+    }
+    return true;
+}
+
+// MARK: - Storage
+
+bool ChainStore::put(const StoredChain& chain)
+{
+    if (!m_open || chain.ticker.isEmpty()) return false;
+    if (!m_db.transaction()) {
+        m_lastError = m_db.lastError().text();
+        return false;
+    }
+    QSqlQuery del(m_db);
+    del.prepare("DELETE FROM contracts WHERE ticker = ?");
+    del.addBindValue(chain.ticker);
+    bool ok = del.exec();
+
+    QSqlQuery head(m_db);
+    head.prepare("INSERT OR REPLACE INTO chains (ticker, fetched_at, spot, previous_close, price_source, spot_as_of, contracts, skipped, with_quotes)"
+                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    head.addBindValue(chain.ticker);
+    head.addBindValue(chain.fetchedAt.toString(Qt::ISODateWithMs));
+    head.addBindValue(chain.snapshot.price);
+    head.addBindValue(chain.snapshot.previousClose);
+    head.addBindValue(chain.snapshot.priceSource);
+    head.addBindValue(chain.snapshot.asOf.isValid() ? chain.snapshot.asOf.toString(Qt::ISODateWithMs) : QString());
+    head.addBindValue(chain.download.contracts);
+    head.addBindValue(chain.download.skipped);
+    head.addBindValue(chain.download.withQuotes);
+    ok = ok && head.exec();
+
+    if (ok && !chain.download.quotes.empty()) {
+        // One batched insert: QtSql binds each column as a list and executes once per row inside the transaction.
+        QVariantList tickers, types, strikes, maturities, expiries, dtes, bids, asks, mids, volumes, ois, ivs;
+        const int n = static_cast<int>(chain.download.quotes.size());
+        for (QVariantList* list : { &tickers, &types, &strikes, &maturities, &expiries, &dtes, &bids, &asks, &mids, &volumes, &ois, &ivs }) list->reserve(n);
+        for (const ChainQuote& c : chain.download.quotes) {
+            tickers << chain.ticker;
+            types << (c.type == OptionType::Call ? 0 : 1);
+            strikes << c.strike;
+            maturities << c.maturity;
+            expiries << QString::fromStdString(c.expiryDate);
+            dtes << c.daysToExpiry;
+            bids << c.bid;
+            asks << c.ask;
+            mids << c.mid;
+            volumes << c.volume;
+            ois << c.openInterest;
+            ivs << c.vendorImpliedVol;
+        }
+        QSqlQuery ins(m_db);
+        ins.prepare("INSERT INTO contracts (ticker, type, strike, maturity, expiry, dte, bid, ask, mid, volume, open_interest, vendor_iv)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        for (QVariantList* list : { &tickers, &types, &strikes, &maturities, &expiries, &dtes, &bids, &asks, &mids, &volumes, &ois, &ivs }) ins.addBindValue(*list);
+        ok = ins.execBatch();
+        if (!ok) m_lastError = ins.lastError().text();
+    }
+    if (!ok) {
+        if (m_lastError.isEmpty()) m_lastError = head.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    return m_db.commit();
+}
+
+std::optional<ChainStore::StoredChain> ChainStore::get(const QString& ticker) const
+{
+    if (!m_open) return std::nullopt;
+    QSqlQuery head(m_db);
+    head.prepare("SELECT fetched_at, spot, previous_close, price_source, spot_as_of, contracts, skipped, with_quotes FROM chains WHERE ticker = ?");
+    head.addBindValue(ticker);
+    if (!head.exec() || !head.next()) return std::nullopt;
+
+    StoredChain chain;
+    chain.ticker = ticker;
+    chain.fetchedAt = QDateTime::fromString(head.value(0).toString(), Qt::ISODateWithMs);
+    chain.snapshot.ticker = ticker;
+    chain.snapshot.price = head.value(1).toDouble();
+    chain.snapshot.previousClose = head.value(2).toDouble();
+    chain.snapshot.priceSource = head.value(3).toString();
+    const QString asOf = head.value(4).toString();
+    if (!asOf.isEmpty()) chain.snapshot.asOf = QDateTime::fromString(asOf, Qt::ISODateWithMs);
+    chain.download.contracts = head.value(5).toInt();
+    chain.download.skipped = head.value(6).toInt();
+    chain.download.withQuotes = head.value(7).toInt();
+
+    QSqlQuery rows(m_db);
+    rows.prepare("SELECT type, strike, maturity, expiry, dte, bid, ask, mid, volume, open_interest, vendor_iv FROM contracts WHERE ticker = ? ORDER BY maturity, strike, type");
+    rows.addBindValue(ticker);
+    if (!rows.exec()) return std::nullopt;
+    chain.download.quotes.reserve(static_cast<size_t>(std::max(0, chain.download.contracts)));
+    while (rows.next()) {
+        ChainQuote c;
+        c.type = rows.value(0).toInt() == 0 ? OptionType::Call : OptionType::Put;
+        c.strike = rows.value(1).toDouble();
+        c.maturity = rows.value(2).toDouble();
+        c.expiryDate = rows.value(3).toString().toStdString();
+        c.daysToExpiry = rows.value(4).toInt();
+        c.bid = rows.value(5).toDouble();
+        c.ask = rows.value(6).toDouble();
+        c.mid = rows.value(7).toDouble();
+        c.volume = rows.value(8).toDouble();
+        c.openInterest = rows.value(9).toDouble();
+        c.vendorImpliedVol = rows.value(10).toDouble();
+        chain.download.quotes.push_back(c);
+        const QDate expiry = QDate::fromString(rows.value(3).toString(), Qt::ISODate);
+        if (expiry.isValid()) chain.download.expiries.insert(expiry);
+    }
+    return chain;
+}
+
+bool ChainStore::contains(const QString& ticker) const
+{
+    return fetchedAt(ticker).isValid();
+}
+
+QDateTime ChainStore::fetchedAt(const QString& ticker) const
+{
+    if (!m_open) return {};
+    QSqlQuery q(m_db);
+    q.prepare("SELECT fetched_at FROM chains WHERE ticker = ?");
+    q.addBindValue(ticker);
+    if (!q.exec() || !q.next()) return {};
+    return QDateTime::fromString(q.value(0).toString(), Qt::ISODateWithMs);
+}
+
+qint64 ChainStore::ageSeconds(const QString& ticker) const
+{
+    const QDateTime at = fetchedAt(ticker);
+    return at.isValid() ? at.secsTo(QDateTime::currentDateTime()) : -1;
+}
+
+std::vector<ChainStore::Summary> ChainStore::summaries() const
+{
+    std::vector<Summary> out;
+    if (!m_open) return out;
+    QSqlQuery q(m_db);
+    if (!q.exec("SELECT c.ticker, c.fetched_at, c.spot, COUNT(k.strike), COUNT(DISTINCT k.expiry)"
+                " FROM chains c LEFT JOIN contracts k ON k.ticker = c.ticker GROUP BY c.ticker ORDER BY c.ticker")) {
+        return out;
+    }
+    while (q.next()) {
+        Summary s;
+        s.ticker = q.value(0).toString();
+        s.fetchedAt = QDateTime::fromString(q.value(1).toString(), Qt::ISODateWithMs);
+        s.spot = q.value(2).toDouble();
+        s.contracts = q.value(3).toInt();
+        s.expiries = q.value(4).toInt();
+        out.push_back(s);
+    }
+    return out;
+}
+
+void ChainStore::remove(const QString& ticker)
+{
+    if (!m_open) return;
+    for (const char* sql : { "DELETE FROM contracts WHERE ticker = ?", "DELETE FROM chains WHERE ticker = ?" }) {
+        QSqlQuery q(m_db);
+        q.prepare(QString::fromLatin1(sql));
+        q.addBindValue(ticker);
+        q.exec();
+    }
+}
+
+int ChainStore::tickerCount() const
+{
+    if (!m_open) return 0;
+    QSqlQuery q(m_db);
+    return (q.exec("SELECT COUNT(*) FROM chains") && q.next()) ? q.value(0).toInt() : 0;
+}
+
+int ChainStore::contractCount() const
+{
+    if (!m_open) return 0;
+    QSqlQuery q(m_db);
+    return (q.exec("SELECT COUNT(*) FROM contracts") && q.next()) ? q.value(0).toInt() : 0;
+}
+
+qint64 ChainStore::approximateBytes() const
+{
+    if (!m_open) return 0;
+    qint64 pages = 0, pageSize = 0;
+    QSqlQuery q(m_db);
+    if (q.exec("PRAGMA page_count") && q.next()) pages = q.value(0).toLongLong();
+    if (q.exec("PRAGMA page_size") && q.next()) pageSize = q.value(0).toLongLong();
+    return pages * pageSize;
+}
+
+// MARK: - Preloading
+
+void ChainStore::refreshApiKey()
+{
+    if (!m_client.hasApiKey()) {
+        const QString key = MarketDataClient::discoverApiKey();
+        if (!key.isEmpty()) m_client.setApiKey(key, false);
+    }
+}
+
+void ChainStore::preload(const QStringList& tickers, qint64 maxAgeSeconds)
+{
+    refreshApiKey();
+    if (!m_client.hasApiKey()) return;
+    for (const QString& raw : tickers) {
+        const QString ticker = raw.trimmed().toUpper();
+        if (ticker.isEmpty() || isQueued(ticker) || isFetching(ticker)) continue;
+        const qint64 age = ageSeconds(ticker);
+        if (age >= 0 && (maxAgeSeconds <= 0 || age < maxAgeSeconds)) continue;   // fresh enough
+        m_queue << ticker;
+        ++m_total;
+    }
+    pump();
+}
+
+void ChainStore::refresh(const QString& raw, std::function<void(bool, const QString&)> done)
+{
+    refreshApiKey();
+    const QString ticker = raw.trimmed().toUpper();
+    if (ticker.isEmpty() || !m_client.hasApiKey()) {
+        if (done) done(false, ticker.isEmpty() ? QStringLiteral("No ticker") : QStringLiteral("No Massive API key"));
+        return;
+    }
+    if (done) m_waiters[ticker].push_back(std::move(done));
+    if (isFetching(ticker)) return;
+    if (m_queue.contains(ticker)) {
+        m_queue.removeAll(ticker);     // already counted; just move it to the front
+    } else {
+        ++m_total;
+    }
+    m_queue.prepend(ticker);
+    pump();
+}
+
+bool ChainStore::isFetching(const QString& ticker) const
+{
+    return m_active.contains(ticker.trimmed().toUpper());
+}
+
+bool ChainStore::isQueued(const QString& ticker) const
+{
+    return m_queue.contains(ticker.trimmed().toUpper());
+}
+
+void ChainStore::pump()
+{
+    while (static_cast<int>(m_active.size()) < m_concurrency && !m_queue.isEmpty()) {
+        const QString ticker = m_queue.takeFirst();
+        m_active.insert(ticker);
+        fetchOne(ticker);
+    }
+    if (m_active.isEmpty() && m_queue.isEmpty()) {
+        m_total = 0;
+        m_done = 0;
+        if (onIdle) onIdle();
+    }
+}
+
+void ChainStore::fetchOne(const QString& ticker)
+{
+    const QDate today = QDate::currentDate();
+    m_client.fetchUnderlying(ticker, [this, ticker, today](const MarketDataClient::UnderlyingSnapshot& snap) {
+        m_client.fetchChains(ticker, today, 0, [](int, int) {},
+            [this, ticker, snap](const MarketDataClient::ChainDownload& download) {
+                StoredChain chain;
+                chain.ticker = ticker;
+                chain.snapshot = snap;
+                chain.download = download;
+                chain.fetchedAt = QDateTime::currentDateTime();
+                const bool stored = put(chain);
+                finishOne(ticker, stored, stored ? QStringLiteral("%1: %2 contracts across %3 expiries stored").arg(ticker).arg(download.quotes.size()).arg(download.expiries.size())
+                                                 : QStringLiteral("%1: could not store the chain (%2)").arg(ticker, m_lastError));
+            },
+            [this, ticker](const QString& message) { finishOne(ticker, false, QStringLiteral("%1: %2").arg(ticker, message)); });
+    }, [this, ticker](const QString& message) { finishOne(ticker, false, QStringLiteral("%1: %2").arg(ticker, message)); });
+}
+
+void ChainStore::finishOne(const QString& ticker, bool ok, const QString& message)
+{
+    m_active.remove(ticker);
+    ++m_done;
+    if (onProgress) onProgress(ticker, m_done, std::max(m_total, m_done));
+    if (onChainStored) onChainStored(ticker, ok, message);
+    const auto waiters = m_waiters.find(ticker);
+    if (waiters != m_waiters.end()) {
+        const auto callbacks = std::move(waiters->second);
+        m_waiters.erase(waiters);
+        for (const auto& cb : callbacks) cb(ok, message);
+    }
+    pump();
+}

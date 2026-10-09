@@ -38,6 +38,11 @@ public:
     void saveChartImage(const QString& path, std::function<void(const QString& written)> done);
 
     std::function<void(const QString& ticker)> onOpenInChain;
+    /// Fired when the user highlights a watchlist row; the app cascades the ticker to every tab.
+    std::function<void(const QString& ticker)> onTickerSelected;
+    /// Fired after a ticker is added to or removed from the watchlist.
+    std::function<void(const QStringList& watchlist)> onWatchlistChanged;
+    QStringList watchlist() const { return m_watchlist; }
 
     /// Test hooks for the live smoke: draws sample annotations through the page's mouse
     /// handlers and reports how many drawings exist; checks the per-symbol persistence.
@@ -93,6 +98,7 @@ private:
     QStringList m_pendingJs;
     bool m_loadingChart = false;
     bool m_updating = false;
+    bool m_autoSelecting = false;   ///< true while the first row is selected programmatically at start-up
 
     // Watchlist
     QLineEdit* m_tickerEdit = nullptr;

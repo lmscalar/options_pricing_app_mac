@@ -11,6 +11,7 @@
 #pragma once
 
 #include "QtHeaders.h"
+#include "ChainStore.h"
 #include "MarketDataClient.h"
 #include "MarketState.h"
 #include "Theme.h"
@@ -41,6 +42,12 @@ public:
     /// Downloads the underlying price and chain. `automatic` marks a timer-driven refresh,
     /// which keeps the controls enabled and the status line brief.
     void fetchLiveChain(bool automatic = false);
+    /// In-memory chain database shared by the app; downloads are stored there and
+    /// applyStoredChain() serves from it without a network round trip.
+    void setStore(ChainStore* store) { m_store = store; }
+    /// Applies the stored chain for `symbol` (sets the ticker, market spot, chain and
+    /// notifies every tab). Returns false when the store has no chain for it.
+    bool applyStoredChain(const QString& symbol);
     /// Re-fetches only the underlying price and re-applies the spot policy.
     void refreshUnderlying(bool automatic = false);
     void loadTreasuryCurve();
@@ -80,11 +87,16 @@ private:
     /// Sizes columns to their content and shares spare width, unless the user has resized them.
     void fitColumns();
     void setLiveBusy(bool busy, const QString& status);
+    /// Puts a downloaded (or stored) chain and underlying snapshot into the market state.
+    void applyDownload(const QString& symbol, const MarketDataClient::UnderlyingSnapshot& snap, const MarketDataClient::ChainDownload& download,
+                       const QDateTime& fetchedAt);
+    QString downloadSummary(const QString& symbol, const MarketDataClient::ChainDownload& download, const QDate& today) const;
     void finishLive(bool ok, const QString& message);
     void refreshKeyStatus();
 
     MarketState& m_state;
     MarketDataClient m_client;
+    ChainStore* m_store = nullptr;
     Theme m_theme;
     std::vector<pricing::ExpirySlice> m_slices;
     bool m_updating = false;

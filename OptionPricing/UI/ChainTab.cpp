@@ -985,53 +985,105 @@ void ChainTab::fetchLiveChain(bool automatic)
                                                 .arg(symbol, scope).arg(contracts).arg(pages).arg(pages == 1 ? "" : "s"),
                               ui::StatusKind::Info);
             },
-            [this, symbol, snap, today, automatic](const MarketDataClient::ChainDownload& download) {
-                m_state.chainQuotes = download.quotes;
-                if (m_state.underlyingTicker != symbol) {
-                    m_state.companyName.clear();
-                    m_state.exchange.clear();
-                    m_state.logo = QImage();
-                    m_brandingRequested.clear();
+            [this, symbol, snap, today, automatic, maxExpiries](const MarketDataClient::ChainDownload& download) {
+                const QDateTime now = QDateTime::currentDateTime();
+                // Full downloads go into the in-memory database so other tabs can switch to
+                // this ticker instantly; partial (N-expiry) downloads are not representative.
+                if (m_store && maxExpiries <= 0) {
+                    ChainStore::StoredChain stored;
+                    stored.ticker = symbol;
+                    stored.snapshot = snap;
+                    stored.download = download;
+                    stored.fetchedAt = now;
+                    m_store->put(stored);
                 }
-                m_state.underlyingTicker = symbol;
-                m_state.vendorSpot = snap.price;
-                m_state.previousClose = snap.previousClose;
-                m_vendorSource = snap.priceSource;
-                m_state.spotAsOf = snap.asOf;
-                m_state.spotTime = QDateTime::currentDateTime();
-                m_state.chainTime = m_state.spotTime;
-                m_state.market.model = Model::BlackScholesMerton;
-                applySpotPolicy();
-                m_state.notify();
-                updateTimers();
+                applyDownload(symbol, snap, download, now);
                 if (automatic) {
                     finishLive(true, QStringLiteral("%1 refreshed at %2: %3 contracts, spot %4 (%5).")
                                          .arg(symbol, m_state.chainTime.toString("HH:mm:ss")).arg(download.quotes.size())
                                          .arg(ui::number(m_state.market.spot, 2), m_state.spotSource));
                     return;
                 }
-
-                QString range;
-                if (!download.expiries.empty()) {
-                    const QDate first = *download.expiries.begin();
-                    const QDate last = *download.expiries.rbegin();
-                    range = QStringLiteral(" from %1 (%2 DTE) to %3 (%4 DTE)")
-                                .arg(first.toString(Qt::ISODate)).arg(today.daysTo(first))
-                                .arg(last.toString(Qt::ISODate)).arg(today.daysTo(last));
-                }
-                QString message = QStringLiteral("%1: spot %2 (%3), %4 expir%5%6, %7 contracts loaded, %8 skipped (no price or expired).")
-                                      .arg(symbol, ui::number(m_state.market.spot, 2), m_state.spotSource)
-                                      .arg(download.expiries.size()).arg(download.expiries.size() == 1 ? "y" : "ies")
-                                      .arg(range).arg(download.quotes.size()).arg(download.skipped);
-                if (download.withQuotes == 0) {
-                    message += " No bid/ask quotes on this plan: mids are last trades or day closes, so implied vols can be stale for illiquid strikes.";
-                }
-                message += " Contracts are American-style; implied vols use the European model.";
-                m_summary->setText(QStringLiteral("Live chain for %1 from Massive.com as of %2.").arg(symbol, QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm")));
-                finishLive(true, message);
+                m_summary->setText(QStringLiteral("Live chain for %1 from Massive.com as of %2.").arg(symbol, now.toString("yyyy-MM-dd HH:mm")));
+                finishLive(true, downloadSummary(symbol, download, today));
             },
             fail);
     }, fail);
+}
+
+void ChainTab::applyDownload(const QString& symbol, const MarketDataClient::UnderlyingSnapshot& snap, const MarketDataClient::ChainDownload& download,
+                             const QDateTime& fetchedAt)
+{
+    m_state.chainQuotes = download.quotes;
+    if (m_state.underlyingTicker != symbol) {
+        m_state.companyName.clear();
+        m_state.exchange.clear();
+        m_state.logo = QImage();
+        m_brandingRequested.clear();
+    }
+    m_state.underlyingTicker = symbol;
+    m_state.vendorSpot = snap.price;
+    m_state.previousClose = snap.previousClose;
+    m_vendorSource = snap.priceSource;
+    m_state.spotAsOf = snap.asOf;
+    m_state.spotTime = fetchedAt;
+    m_state.chainTime = fetchedAt;
+    m_state.market.model = Model::BlackScholesMerton;
+    applySpotPolicy();
+    m_state.notify();
+    updateTimers();
+}
+
+QString ChainTab::downloadSummary(const QString& symbol, const MarketDataClient::ChainDownload& download, const QDate& today) const
+{
+    QString range;
+    if (!download.expiries.empty()) {
+        const QDate first = *download.expiries.begin();
+        const QDate last = *download.expiries.rbegin();
+        range = QStringLiteral(" from %1 (%2 DTE) to %3 (%4 DTE)")
+                    .arg(first.toString(Qt::ISODate)).arg(today.daysTo(first))
+                    .arg(last.toString(Qt::ISODate)).arg(today.daysTo(last));
+    }
+    QString message = QStringLiteral("%1: spot %2 (%3), %4 expir%5%6, %7 contracts loaded, %8 skipped (no price or expired).")
+                          .arg(symbol, ui::number(m_state.market.spot, 2), m_state.spotSource)
+                          .arg(download.expiries.size()).arg(download.expiries.size() == 1 ? "y" : "ies")
+                          .arg(range).arg(download.quotes.size()).arg(download.skipped);
+    if (download.withQuotes == 0) {
+        message += " No bid/ask quotes on this plan: mids are last trades or day closes, so implied vols can be stale for illiquid strikes.";
+    }
+    message += " Contracts are American-style; implied vols use the European model.";
+    return message;
+}
+
+bool ChainTab::applyStoredChain(const QString& rawSymbol)
+{
+    if (!m_store) return false;
+    const QString symbol = rawSymbol.trimmed().toUpper();
+    const std::optional<ChainStore::StoredChain> stored = m_store->get(symbol);
+    if (!stored) return false;
+    if (m_busy) return false;   // a download for the current ticker is mid-flight; let it finish
+    setTicker(symbol);
+    // Honour the expiry-count control: keep only the N nearest expiries of the full chain.
+    MarketDataClient::ChainDownload download = stored->download;
+    const int maxExpiries = m_expiryCount->value();
+    if (maxExpiries > 0 && static_cast<int>(download.expiries.size()) > maxExpiries) {
+        std::set<QDate> keep;
+        for (const QDate& d : download.expiries) {
+            if (static_cast<int>(keep.size()) >= maxExpiries) break;
+            keep.insert(d);
+        }
+        download.quotes.erase(std::remove_if(download.quotes.begin(), download.quotes.end(), [&keep](const ChainQuote& q) {
+                                  return !keep.count(QDate::fromString(QString::fromStdString(q.expiryDate), Qt::ISODate));
+                              }), download.quotes.end());
+        download.expiries = keep;
+    }
+    applyDownload(symbol, stored->snapshot, download, stored->fetchedAt);
+    const qint64 age = stored->fetchedAt.secsTo(QDateTime::currentDateTime());
+    m_summary->setText(QStringLiteral("Chain for %1 from the in-memory store, downloaded %2 (%3 min ago).")
+                           .arg(symbol, stored->fetchedAt.toString("HH:mm:ss")).arg(age / 60));
+    ui::setStatus(m_liveStatus, downloadSummary(symbol, download, QDate::currentDate()) + QStringLiteral(" Served from memory, fetched %1 min ago.").arg(age / 60),
+                  ui::StatusKind::Info);
+    return true;
 }
 
 void ChainTab::refreshUnderlying(bool automatic)
