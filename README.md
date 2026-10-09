@@ -82,7 +82,8 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   **Support** / **Resistance** zones (drag vertically between two prices; green and red
   fills with the price range labelled). **Edit** selects a drawing to drag its handles,
   edges or body; Delete removes it, Undo removes the last one, Clear removes all, and Esc
-  returns to the cursor. Drawings are anchored to bar time and price, so they survive
+  returns to the cursor. Right-clicking any drawing, in any tool mode, opens a menu to
+  delete that drawing or all of them. Drawings are anchored to bar time and price, so they survive
   scrolling, zooming and timeframe changes, are saved per symbol, and are included in
   Save Image…. The drawing layer is the app's own canvas over the chart; Lightweight
   Charts itself has no drawing tools.

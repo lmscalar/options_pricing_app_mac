@@ -401,9 +401,53 @@ const char* const kControllerJs = R"js(
   });
   setInterval(redraw, 400);   // catches price-scale drags, which fire no range event
 
+  // ---- Right-click menu on a drawing (works in every tool mode; the event bubbles from
+  // the chart or the overlay to the document) ----
+  const menu = document.getElementById('menu');
+  let menuTarget = null;
+  function drawingLabel(d) { return d.type === 'trend' ? 'trend line' : (d.kind === 'support' ? 'support zone' : 'resistance zone'); }
+  function hideMenu() { menu.style.display = 'none'; menuTarget = null; }
+  function styleMenu(theme) {
+    menu.style.background = theme.bg; menu.style.borderColor = theme.border; menu.style.color = theme.text;
+    menu.style.setProperty('--menu-hover', theme.accent);
+  }
+  function showMenu(clientX, clientY, d) {
+    menuTarget = d;
+    let html = '<div class="item" data-act="delete">Delete ' + drawingLabel(d) + '</div>';
+    if (D.items.length > 1) html += '<div class="item" data-act="clear">Delete all drawings (' + D.items.length + ')</div>';
+    html += '<div class="sep"></div><div class="item" data-act="cancel">Cancel</div>';
+    menu.innerHTML = html;
+    menu.style.display = 'block';
+    menu.style.left = Math.max(0, Math.min(clientX, window.innerWidth - menu.offsetWidth - 4)) + 'px';
+    menu.style.top = Math.max(0, Math.min(clientY, window.innerHeight - menu.offsetHeight - 4)) + 'px';
+  }
+  function removeDrawing(id) { D.items = D.items.filter(d => d.id !== id); if (D.selected === id) D.selected = null; emitDrawings(); redraw(); }
+  menu.addEventListener('mousedown', e => e.stopPropagation());
+  menu.addEventListener('contextmenu', e => e.preventDefault());
+  menu.addEventListener('click', e => {
+    const act = e.target && e.target.getAttribute ? e.target.getAttribute('data-act') : null;
+    if (act === 'delete' && menuTarget) removeDrawing(menuTarget.id);
+    else if (act === 'clear') { D.items = []; D.selected = null; emitDrawings(); redraw(); }
+    hideMenu();
+  });
+  document.addEventListener('contextmenu', e => {
+    hideMenu();
+    if (!state.bars.length || !state.main) return;
+    const p = pos(e), pane = paneRect();
+    if (p.x < 0 || p.y < 0 || p.x > pane.w || p.y > pane.h) return;
+    const hit = hitTest(p.x, p.y, pane);
+    if (!hit) return;
+    e.preventDefault(); e.stopPropagation();
+    D.selected = hit.d.id; redraw();
+    showMenu(e.clientX, e.clientY, hit.d);
+  }, true);
+  document.addEventListener('mousedown', e => { if (menu.style.display === 'block' && !menu.contains(e.target)) hideMenu(); }, true);
+  window.addEventListener('blur', hideMenu);
+  window.addEventListener('keydown', e => { if (e.key === 'Escape') hideMenu(); }, true);
+
   window.chartApi = {
-    init: function (theme) { state.theme = theme; document.body.style.background = theme.bg; ensureChart(); render(true); },
-    setTheme: function (theme) { state.theme = theme; document.body.style.background = theme.bg; if (state.chart) render(false); },
+    init: function (theme) { state.theme = theme; document.body.style.background = theme.bg; styleMenu(theme); ensureChart(); render(true); },
+    setTheme: function (theme) { state.theme = theme; document.body.style.background = theme.bg; styleMenu(theme); if (state.chart) render(false); },
     setBars: function (payload) {
       const meta = payload.meta || {};
       if ((meta.symbol || '') !== (state.meta.symbol || '')) { D.items = []; D.selected = null; D.pending = null; }
@@ -434,6 +478,8 @@ const char* const kControllerJs = R"js(
     // Test hook: draws a trend line and two zones through the real mouse handlers.
     simulateDrawings: function () {
       if (!state.bars.length || !state.main) return 0;
+      // Stash whatever the user has drawn; restoreDrawings() puts it back after the test.
+      D.stash = D.items.slice(); D.items = []; D.selected = null;
       const pane = paneRect(), n = state.bars.length;
       const ev = (type, x, y) => {
         const r = draw.getBoundingClientRect();
@@ -448,6 +494,28 @@ const char* const kControllerJs = R"js(
       ev('mousedown', pane.w / 2, yOfPrice(hi)); ev('mousemove', pane.w / 2, yOfPrice(hi * 0.985)); ev('mouseup', pane.w / 2, yOfPrice(hi * 0.985));
       setTool('support');
       ev('mousedown', pane.w / 2, yOfPrice(lo)); ev('mousemove', pane.w / 2, yOfPrice(lo * 1.015)); ev('mouseup', pane.w / 2, yOfPrice(lo * 1.015));
+      return D.items.length;
+    },
+    // Test hook: right-click the first drawing (through the real handlers) and pick Delete.
+    simulateContextDelete: function () {
+      const target = D.items.find(d => d.type === 'trend') || D.items[0];
+      if (!target || !state.main) return -1;
+      const pane = paneRect();
+      let x, y;
+      if (target.type === 'trend') { const p = trendPoints(target); if (!p) return -1; x = (p.x1 + p.x2) / 2; y = (p.y1 + p.y2) / 2; }
+      else { x = pane.w / 2; y = yOfPrice((target.lo + target.hi) / 2); }
+      const r = draw.getBoundingClientRect();
+      const before = D.items.length;
+      container.dispatchEvent(new MouseEvent('contextmenu', { clientX: r.left + x, clientY: r.top + y, bubbles: true, cancelable: true, button: 2 }));
+      const shown = menu.style.display === 'block';
+      const item = menu.querySelector('[data-act="delete"]');
+      if (item) item.click();
+      return shown && D.items.length === before - 1 ? D.items.length : -1;
+    },
+    restoreDrawings: function () {
+      if (!D.stash) return D.items.length;
+      D.items = D.stash; D.stash = null; D.selected = null;
+      emitDrawings(); redraw();
       return D.items.length;
     },
     ready: true,
@@ -483,6 +551,12 @@ QString chartPageHtml()
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0a0f1c; }
   #chart { position: absolute; inset: 0; }
   #draw { position: absolute; left: 0; top: 0; z-index: 4; pointer-events: none; }
+  #menu { position: absolute; z-index: 20; display: none; min-width: 190px; padding: 4px 0; border: 1px solid #273449; border-radius: 6px;
+          background: #121a2b; color: #c7d2e3; font: 12px -apple-system, "Helvetica Neue", sans-serif; box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+          --menu-hover: #3b82f6; user-select: none; }
+  #menu .item { padding: 6px 14px; cursor: pointer; white-space: nowrap; }
+  #menu .item:hover { background: var(--menu-hover); color: #ffffff; }
+  #menu .sep { height: 1px; margin: 4px 0; background: rgba(130,148,173,0.35); }
   #legend { position: absolute; left: 12px; top: 8px; z-index: 5; pointer-events: none;
             font: 12px Menlo, "SF Mono", monospace; color: #c7d2e3; display: flex; flex-wrap: wrap; gap: 0 14px; line-height: 20px; }
   #legend .sym { font-weight: 700; font-size: 14px; color: #f59e0b; }
@@ -494,6 +568,7 @@ QString chartPageHtml()
 <body>
 <div id="chart"></div>
 <canvas id="draw"></canvas>
+<div id="menu"></div>
 <div id="legend"></div>
 <div id="empty">Select a ticker in the watchlist to load its chart.</div>
 <script>%1</script>

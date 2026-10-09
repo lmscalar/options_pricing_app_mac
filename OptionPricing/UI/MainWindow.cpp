@@ -828,11 +828,18 @@ void MainWindow::runLiveSmoke(const QString& ticker)
             // with the drawing overlay composited on top).
             m_quotes->debugSimulateDrawings([this, shotDir](int count) {
                 qInfo("[live-smoke] drawings placed through the page: %d", count);
+                m_quotes->debugSimulateContextDelete([](int remaining) {
+                    qInfo("[live-smoke] right-click delete on a drawing: %s (%d remaining)", remaining >= 0 ? "ok" : "FAILED", remaining);
+                });
                 QTimer::singleShot(600, this, [this, shotDir] {
                     qInfo("[live-smoke] drawings persisted for %s: %s", qPrintable(m_chain->ticker()), m_quotes->hasStoredDrawings(m_chain->ticker()) ? "yes" : "no");
-                    m_quotes->saveChartImage(shotDir + "/chart.png", [](const QString& written) {
+                    m_quotes->saveChartImage(shotDir + "/chart.png", [this](const QString& written) {
                         qInfo("[live-smoke] chart image %s", written.isEmpty() ? "FAILED" : qPrintable(written));
-                        QCoreApplication::exit(written.isEmpty() ? 1 : 0);
+                        // Put the user's own drawings back (the test ones were only stashed over them).
+                        m_quotes->debugRestoreDrawings([written](int count) {
+                            qInfo("[live-smoke] restored %d user drawings", count);
+                            QTimer::singleShot(300, [written] { QCoreApplication::exit(written.isEmpty() ? 1 : 0); });
+                        });
                     });
                 });
             });

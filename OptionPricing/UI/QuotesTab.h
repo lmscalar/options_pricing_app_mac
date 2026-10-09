@@ -52,6 +52,11 @@ public:
     /// Test hooks for the live smoke: draws sample annotations through the page's mouse
     /// handlers and reports how many drawings exist; checks the per-symbol persistence.
     void debugSimulateDrawings(std::function<void(int count)> done);
+    /// Right-clicks the first drawing through the page's handlers and chooses Delete;
+    /// reports the remaining count, or -1 if the menu did not appear or nothing was removed.
+    void debugSimulateContextDelete(std::function<void(int remaining)> done);
+    /// Puts back the drawings stashed by debugSimulateDrawings(); reports how many were restored.
+    void debugRestoreDrawings(std::function<void(int count)> done);
     bool hasStoredDrawings(const QString& symbol) const;
 
 private:

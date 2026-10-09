@@ -245,7 +245,7 @@ void QuotesTab::buildUi()
     drawRow->addWidget(m_undoDraw);
     drawRow->addWidget(m_deleteDraw);
     drawRow->addWidget(m_clearDraw);
-    m_drawHint = new QLabel("Saved per symbol · Esc returns to the cursor", this);
+    m_drawHint = new QLabel("Right-click a drawing to delete it · saved per symbol · Esc returns to the cursor", this);
     m_drawHint->setObjectName("muted");
     m_drawHint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     drawRow->addSpacing(8);
@@ -741,6 +741,18 @@ void QuotesTab::onPageMessage(const QString& kind, const QString& payload)
         const int id = static_cast<int>(drawToolNames().indexOf(payload));
         if (QAbstractButton* button = id >= 0 ? m_drawTools->button(id) : nullptr) button->setChecked(true);
     }
+}
+
+void QuotesTab::debugRestoreDrawings(std::function<void(int)> done)
+{
+    if (!m_pageReady) { done(-1); return; }
+    m_view->page()->runJavaScript(QStringLiteral("chartApi.restoreDrawings()"), [done](const QVariant& result) { done(result.toInt()); });
+}
+
+void QuotesTab::debugSimulateContextDelete(std::function<void(int)> done)
+{
+    if (!m_pageReady) { done(-1); return; }
+    m_view->page()->runJavaScript(QStringLiteral("chartApi.simulateContextDelete()"), [done](const QVariant& result) { done(result.toInt()); });
 }
 
 void QuotesTab::debugSimulateDrawings(std::function<void(int)> done)
