@@ -1018,6 +1018,8 @@ void ChainTab::applyDownload(const QString& symbol, const MarketDataClient::Unde
     if (m_state.underlyingTicker != symbol) {
         m_state.companyName.clear();
         m_state.exchange.clear();
+        m_state.industry.clear();
+        m_state.companyDescription.clear();
         m_state.logo = QImage();
         m_brandingRequested.clear();
         m_state.resetPreviousCloseSource();
@@ -1223,10 +1225,23 @@ void ChainTab::ensureBranding()
     if (symbol.isEmpty() || symbol == m_brandingRequested) return;
     m_brandingRequested = symbol;
 
-    // Disk cache first: icons rarely change and the API is rate limited.
+    // Disk cache first: icons and company details rarely change and the API is rate limited.
     const QString cachePath = logoCachePath(symbol);
+    const QString detailsPath = cachePath + ".json";
     QImage cached(cachePath);
-    if (!cached.isNull() && !m_state.companyName.isEmpty()) {
+    {
+        QFile file(detailsPath);
+        if (file.open(QIODevice::ReadOnly)) {
+            const QJsonObject d = QJsonDocument::fromJson(file.readAll()).object();
+            if (!d["name"].toString().isEmpty()) {
+                m_state.companyName = d["name"].toString();
+                m_state.exchange = d["exchange"].toString();
+                m_state.industry = d["industry"].toString();
+                m_state.companyDescription = d["description"].toString();
+            }
+        }
+    }
+    if (!cached.isNull() && !m_state.companyName.isEmpty() && !m_state.companyDescription.isEmpty()) {
         m_state.logo = cached;
         updateSpotLabels();
         m_state.notify();
@@ -1234,10 +1249,19 @@ void ChainTab::ensureBranding()
     }
     if (!m_client.hasApiKey()) return;
 
-    m_client.fetchTickerDetails(symbol, [this, symbol, cachePath, cached](const MarketDataClient::TickerDetails& details) {
+    m_client.fetchTickerDetails(symbol, [this, symbol, cachePath, detailsPath, cached](const MarketDataClient::TickerDetails& details) {
         if (m_state.underlyingTicker != symbol) return;
         m_state.companyName = details.name;
         m_state.exchange = details.exchange;
+        m_state.industry = details.sicDescription;
+        m_state.companyDescription = details.description;
+        {
+            QFile file(detailsPath);
+            if (file.open(QIODevice::WriteOnly)) {
+                file.write(QJsonDocument(QJsonObject{ { "name", details.name }, { "exchange", details.exchange }, { "industry", details.sicDescription }, { "description", details.description } })
+                               .toJson(QJsonDocument::Compact));
+            }
+        }
         if (!cached.isNull()) {
             m_state.logo = cached;
             m_state.notify();

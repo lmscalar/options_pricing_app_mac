@@ -13,11 +13,20 @@ namespace {
 const char* const kControllerJs = R"js(
 (function () {
   const state = {
-    chart: null, main: null, volume: null, sma: null, ema: null,
-    bars: [], meta: {}, theme: null, live: null, liveLine: null, liveLineSeries: null,
-    options: { type: 'candles', sma: { on: true, period: 20 }, ema: { on: true, period: 50 }, volume: true, priceLine: true },
+    chart: null, main: null, volume: null,
+    overlays: [],            // [{spec, series, data}] moving averages drawn on the price scale
+    // Oscillators (MACD today) live in framed panes below the main chart, each a second
+    // chart whose time scale and crosshair are linked to the main one: [{id, spec, el,
+    // chart, legendEl, series:{...}, data, syncing}].
+    panes: [],
+    bars: [], meta: {}, theme: null, live: null, liveLine: null, liveLineSeries: null, syncingCrosshair: false,
+    // indicators: [{type:'sma'|'ema', period, color}, {type:'macd', fast, slow, signal}] (at
+    // most three SMAs, three EMAs and one MACD; the host enforces the limits).
+    options: { type: 'candles', indicators: [{ type: 'sma', period: 20 }, { type: 'ema', period: 50 }], volume: true, priceLine: true, paneHeight: 0.24 },
   };
+  const PALETTE = ['#f59e0b', '#22d3ee', '#a78bfa', '#f472b6', '#34d399', '#fb923c'];
   const container = document.getElementById('chart');
+  const panesEl = document.getElementById('panes');
   const legend = document.getElementById('legend');
   const empty = document.getElementById('empty');
 
@@ -65,40 +74,331 @@ const char* const kControllerJs = R"js(
     return out;
   }
 
+  // MACD: EMA(fast) − EMA(slow), its EMA(signal) and the histogram (line − signal). EMAs are
+  // seeded with the first close like ema() above; values start once the slow EMA has `slow` bars.
+  function macd(bars, fast, slow, signal) {
+    const emaSeries = (period) => { const out = []; const k = 2 / (period + 1); let v = null; for (const b of bars) { v = v === null ? b.c : b.c * k + v * (1 - k); out.push(v); } return out; };
+    const f = emaSeries(fast), s = emaSeries(slow);
+    const out = []; let sv = null; const ks = 2 / (signal + 1);
+    for (let i = 0; i < bars.length; i++) {
+      if (i < slow - 1) continue;
+      const m = f[i] - s[i];
+      sv = sv === null ? m : m * ks + sv * (1 - ks);
+      const ready = i >= slow - 1 + signal - 1;
+      out.push({ t: bars[i].t, macd: m, signal: ready ? sv : null, hist: ready ? m - sv : null });
+    }
+    return out;
+  }
+
+  function indicatorList() { return Array.isArray(state.options.indicators) ? state.options.indicators : []; }
+  function macdSpec() { return indicatorList().find(i => i && i.type === 'macd') || null; }
+  function indicatorLabel(spec) {
+    if (spec.type === 'macd') return 'MACD ' + spec.fast + '/' + spec.slow + '/' + spec.signal;
+    return spec.type.toUpperCase() + ' ' + spec.period;
+  }
+  function overlayColor(spec, index) { return spec.color || PALETTE[index % PALETTE.length]; }
+
+  // Main chart layout: the volume strip, when on, occupies the bottom of the price pane
+  // (as on professional platforms); oscillators get their own panes below (see panes).
+  function layout() {
+    const vol = !!state.options.volume;
+    return vol ? { priceBottom: 0.25, vol: { top: 0.82, bottom: 0 } } : { priceBottom: 0.08, vol: null };
+  }
+  function wantedPanes() { return macdSpec() ? ['macd'] : []; }
+  const PANE_GAP = 8;            // px between the main chart and the first pane (the drag handle), and between panes
+  const AXIS_WIDTH = 78;         // fixed right-axis width so the main chart and the panes line up
+  const PANE_DEFAULT = 0.24, PANE_EXPANDED = 0.5, PANE_MIN = 0.1, PANE_MAX = 0.7;
+  // Pane height as a fraction of the chart area; the user drags the handle or toggles expand,
+  // and the host remembers the value (options.paneHeight).
+  function paneFraction() {
+    const f = Number(state.options.paneHeight);
+    return isNaN(f) || f <= 0 ? PANE_DEFAULT : Math.max(PANE_MIN, Math.min(PANE_MAX, f));
+  }
+  function paneHeight() {
+    const total = document.body.clientHeight;
+    return Math.max(90, Math.round(total * paneFraction()));
+  }
+  // Sizes the main chart and the pane strip; the charts follow via their ResizeObservers.
+  function applyLayout() {
+    const n = wantedPanes().length;
+    const h = paneHeight();
+    const stripHeight = n ? n * (h + PANE_GAP) : 0;
+    container.style.bottom = stripHeight + 'px';
+    panesEl.style.height = stripHeight + 'px';
+    panesEl.style.display = n ? 'block' : 'none';
+    paneHandle.style.display = n ? 'block' : 'none';
+    paneHandle.style.bottom = (stripHeight - PANE_GAP) + 'px';
+    for (const pane of state.panes) pane.el.style.height = h + 'px';
+    // Size the charts right away rather than waiting for the ResizeObservers, which only
+    // run with the next frame (and lag when the view is off screen, e.g. during an export).
+    if (state.chart) state.chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+    for (const pane of state.panes) {
+      const chartEl = pane.el.firstChild;
+      if (chartEl) pane.chart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight });
+    }
+    updateExpandButtons();
+    // The library applies the new size with its next frame; redraw the overlay then too.
+    if (state.chart) { redraw(); requestAnimationFrame(redraw); setTimeout(redraw, 60); }
+  }
+  function setPaneFraction(f, persist) {
+    state.options.paneHeight = Math.max(PANE_MIN, Math.min(PANE_MAX, f));
+    applyLayout();
+    if (persist) notify('options', { paneHeight: state.options.paneHeight });
+  }
+  function paneExpanded() { return paneFraction() >= (PANE_DEFAULT + PANE_EXPANDED) / 2; }
+  function toggleExpanded() { setPaneFraction(paneExpanded() ? PANE_DEFAULT : PANE_EXPANDED, true); }
+  function updateExpandButtons() {
+    const expanded = paneExpanded();
+    for (const pane of state.panes) {
+      if (!pane.expandBtn) continue;
+      pane.expandBtn.textContent = expanded ? '⤓' : '⤢';
+      pane.expandBtn.title = expanded ? 'Restore the pane height' : 'Expand the pane';
+    }
+  }
+
+  // "Auto" button on the price axis: shown only while the axis has been dragged to a manual
+  // scale; clicking it restores autoscale (so does double-clicking the axis).
+  const autoBtn = document.getElementById('auto-scale');
+  autoBtn.addEventListener('click', () => {
+    if (!state.chart) return;
+    state.chart.priceScale('right').applyOptions({ autoScale: true });
+    updateAutoButton();
+    redraw();
+  });
+  function priceScaleIsManual() {
+    if (!state.chart || !state.main) return false;
+    try { return state.chart.priceScale('right').options().autoScale === false; } catch (e) { return false; }
+  }
+  function updateAutoButton() {
+    const manual = priceScaleIsManual();
+    autoBtn.style.display = manual ? 'block' : 'none';
+    if (!manual) return;
+    const tsHeight = wantedPanes().length ? 0 : state.chart.timeScale().height();
+    autoBtn.style.bottom = (parseFloat(container.style.bottom) || 0) + tsHeight + 6 + 'px';
+  }
+  // Dragging an axis fires no chart event the overlay could follow; redraw on mouse moves
+  // inside the chart instead (cheap: the overlay is only a few shapes).
+  container.addEventListener('mousemove', () => { if (state.chart) { redraw(); updateAutoButton(); } });
+  container.addEventListener('mouseup', () => { if (state.chart) { redraw(); updateAutoButton(); } });
+  container.addEventListener('dblclick', () => { if (state.chart) setTimeout(() => { redraw(); updateAutoButton(); }, 0); });
+
+  // Drag handle between the price chart and the indicator panes (double-click toggles expand).
+  const paneHandle = document.getElementById('pane-handle');
+  (function () {
+    let dragging = null;
+    paneHandle.addEventListener('mousedown', e => {
+      if (e.button !== 0) return;
+      dragging = { startY: e.clientY, startH: paneHeight() };
+      paneHandle.classList.add('active');
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', e => {
+      if (!dragging) return;
+      const n = Math.max(1, wantedPanes().length);
+      const h = dragging.startH + (dragging.startY - e.clientY) / n;
+      setPaneFraction(h / Math.max(1, document.body.clientHeight), false);
+    });
+    window.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = null;
+      paneHandle.classList.remove('active');
+      notify('options', { paneHeight: paneFraction() });
+    });
+    paneHandle.addEventListener('dblclick', toggleExpanded);
+  })();
+
   function chartOptions(theme, intraday) {
     return {
       layout: { background: { type: 'solid', color: theme.bg }, textColor: theme.text, fontFamily: 'Menlo, SF Mono, monospace', fontSize: 11 },
       grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
-      rightPriceScale: { borderColor: theme.border, scaleMargins: { top: 0.08, bottom: 0.25 } },
-      timeScale: { borderColor: theme.border, timeVisible: !!intraday, secondsVisible: false, rightOffset: 4 },
+      rightPriceScale: { borderColor: theme.border, minimumWidth: AXIS_WIDTH, scaleMargins: { top: 0.08, bottom: layout().priceBottom } },
+      // With panes below, only the bottom pane shows the time axis.
+      timeScale: { borderColor: theme.border, visible: wantedPanes().length === 0, timeVisible: !!intraday, secondsVisible: false, rightOffset: 4 },
       crosshair: { mode: 0, vertLine: { color: theme.crosshair, labelBackgroundColor: theme.accent }, horzLine: { color: theme.crosshair, labelBackgroundColor: theme.accent } },
       handleScroll: true,
-      // Zoom/pan the time axis freely, but keep the price axis on autoscale: dragging it
-      // used to leave the chart squashed with a negative price range. Double-click resets.
-      handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: true, price: false }, axisDoubleClickReset: { time: true, price: true } },
+      // Both axes can be dragged to stretch or compress the scale. A dragged price axis
+      // switches autoscale off; it comes back on every new load (render(fit)), on
+      // double-click of the axis, with the Auto button that appears on the axis, and with Reset.
+      handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: true, price: true }, axisDoubleClickReset: { time: true, price: true } },
     };
   }
 
   function ensureChart() {
     if (state.chart) return;
+    applyLayout();
     state.chart = LightweightCharts.createChart(container, chartOptions(state.theme, state.meta.intraday));
     new ResizeObserver(() => {
       state.chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
       redraw();
     }).observe(container);
-    state.chart.subscribeCrosshairMove(p => { updateLegend(p); redraw(); });
-    state.chart.timeScale().subscribeVisibleLogicalRangeChange(redraw);
+    new ResizeObserver(applyLayout).observe(document.body);
+    state.chart.subscribeCrosshairMove(p => {
+      updateLegend(p); redraw();
+      // setCrosshairPosition on a pane re-enters through its own subscriber; the flag stops the ping-pong.
+      if (state.syncingCrosshair) return;
+      state.syncingCrosshair = true;
+      try { syncPaneCrosshair(p); } finally { state.syncingCrosshair = false; }
+    });
+    state.chart.timeScale().subscribeVisibleLogicalRangeChange(r => { redraw(); syncPaneRange(r); });
+  }
+
+  // ---- Oscillator panes -----------------------------------------------------------------
+  function paneOptions(theme, intraday) {
+    const o = chartOptions(theme, intraday);
+    o.rightPriceScale = { borderColor: theme.border, minimumWidth: AXIS_WIDTH, scaleMargins: { top: 0.12, bottom: 0.08 } };
+    o.timeScale = { borderColor: theme.border, visible: true, timeVisible: !!intraday, secondsVisible: false, rightOffset: 4 };
+    return o;
+  }
+  function createPane(id, title) {
+    const theme = state.theme;
+    const el = document.createElement('div');
+    el.className = 'pane';
+    el.style.height = paneHeight() + 'px';
+    el.style.marginTop = PANE_GAP + 'px';
+    el.style.borderColor = theme.border;
+    el.style.background = theme.bg;
+    const chartEl = document.createElement('div');
+    chartEl.className = 'pane-chart';
+    const legendEl = document.createElement('div');
+    legendEl.className = 'pane-legend';
+    const expandBtn = document.createElement('div');
+    expandBtn.className = 'pane-btn';
+    expandBtn.addEventListener('click', toggleExpanded);
+    el.appendChild(chartEl); el.appendChild(legendEl); el.appendChild(expandBtn);
+    panesEl.appendChild(el);
+    const chart = LightweightCharts.createChart(chartEl, paneOptions(theme, !!state.meta.intraday));
+    const pane = { id: id, title: title, el: el, chart: chart, legendEl: legendEl, expandBtn: expandBtn, series: {}, data: [], target: null, settled: false };
+    updateExpandButtons();
+    new ResizeObserver(() => chart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight })).observe(chartEl);
+    // The main chart leads: its range is pushed to the pane (syncPaneRange). Range events
+    // arrive asynchronously, so a pane event that merely echoes the pushed range is ignored,
+    // and nothing is pushed back until the pane has caught up once (its own default zoom
+    // must never override the main chart's). After that, panning or zooming inside the pane
+    // moves the main chart too.
+    chart.timeScale().subscribeVisibleLogicalRangeChange(r => {
+      if (!r || !pane.target) return;
+      const echo = Math.abs(r.from - pane.target.from) < 1e-6 && Math.abs(r.to - pane.target.to) < 1e-6;
+      if (echo) { pane.settled = true; return; }
+      if (!pane.settled) return;
+      state.chart.timeScale().setVisibleLogicalRange(r);
+    });
+    chart.subscribeCrosshairMove(p => {
+      if (!state.main || !state.bars.length || state.syncingCrosshair) return;
+      state.syncingCrosshair = true;
+      try { paneHover(p); } finally { state.syncingCrosshair = false; }
+    });
+    function paneHover(p) {
+      if (p && p.time !== undefined) {
+        const intraday = !!state.meta.intraday;
+        const bar = state.bars.find(b => sameTime(toTime(b.t, intraday), p.time));
+        if (bar) { state.chart.setCrosshairPosition(bar.c, p.time, state.main); updateLegend({ time: p.time, seriesData: new Map(), fromPane: bar }); }
+      } else {
+        state.chart.clearCrosshairPosition();
+        updateLegend(null);
+      }
+      updatePaneLegends(p && p.time !== undefined ? p.time : null);
+    }
+    state.panes.push(pane);
+    return pane;
+  }
+  function removePanes() {
+    for (const pane of state.panes) { try { pane.chart.remove(); } catch (e) {} if (pane.el.parentNode) pane.el.parentNode.removeChild(pane.el); }
+    state.panes = [];
+  }
+  function sameTime(a, b) {
+    if (a === undefined || b === undefined || a === null || b === null) return false;
+    return typeof a === 'object' ? (a.year === b.year && a.month === b.month && a.day === b.day) : a === b;
+  }
+  function syncPaneRange(r) {
+    if (!r) return;
+    for (const pane of state.panes) {
+      pane.target = { from: r.from, to: r.to };
+      pane.chart.timeScale().setVisibleLogicalRange(r);
+    }
+  }
+  function syncPaneCrosshair(p) {
+    const hovering = p && p.time !== undefined;
+    for (const pane of state.panes) {
+      const anchor = pane.series.line || pane.series.hist;
+      if (!anchor) continue;
+      if (hovering) {
+        const row = pane.data.find(d => sameTime(d.time, p.time));
+        const value = row ? (row.macd !== undefined ? row.macd : row.value) : null;
+        if (value !== null && value !== undefined) pane.chart.setCrosshairPosition(value, p.time, anchor);
+        else pane.chart.clearCrosshairPosition();
+      } else {
+        pane.chart.clearCrosshairPosition();
+      }
+    }
+    updatePaneLegends(hovering ? p.time : null);
+  }
+  function updatePaneLegends(time) {
+    const theme = state.theme;
+    for (const pane of state.panes) {
+      let row = null;
+      if (time !== null) row = pane.data.find(d => sameTime(d.time, time)) || null;
+      if (!row) { for (let i = pane.data.length - 1; i >= 0; i--) { if (pane.data[i].macd !== undefined && pane.data[i].macd !== null) { row = pane.data[i]; break; } } }
+      if (pane.id === 'macd') {
+        const hv = row ? row.hist : undefined;
+        const hcol = (hv === undefined || hv === null) ? theme.text : (hv >= 0 ? theme.up : theme.down);
+        pane.legendEl.innerHTML = '<span class="title" style="color:' + (theme.macd || '#60a5fa') + '">' + pane.title + '</span>'
+          + '<span><b style="color:' + (theme.macd || '#60a5fa') + '">' + fmt(row ? row.macd : undefined, 3) + '</b></span>'
+          + '<span>Signal <b style="color:' + (theme.macdSignal || '#fb923c') + '">' + fmt(row ? row.signal : undefined, 3) + '</b></span>'
+          + '<span>Hist <b style="color:' + hcol + '">' + fmt(hv, 3) + '</b></span>';
+      }
+    }
   }
 
   function removeSeries() {
-    for (const key of ['main', 'volume', 'sma', 'ema']) {
+    for (const key of ['main', 'volume']) {
       if (state[key]) { state.chart.removeSeries(state[key]); state[key] = null; }
     }
+    for (const o of state.overlays) { try { state.chart.removeSeries(o.series); } catch (e) {} }
+    state.overlays = [];
+    removePanes();
+  }
+
+  function renderIndicators(bars, intraday) {
+    const theme = state.theme;
+    let slot = 0;
+    for (const spec of indicatorList()) {
+      if (!spec || (spec.type !== 'sma' && spec.type !== 'ema')) continue;
+      const period = Math.max(2, spec.period | 0);
+      const color = overlayColor(spec, slot++);
+      if (bars.length < period) continue;
+      const series = state.chart.addLineSeries({ color: color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+      const data = (spec.type === 'sma' ? sma : ema)(bars, period);
+      series.setData(data.map(p => ({ time: toTime(p.t, intraday), value: p.value })));
+      state.overlays.push({ spec: spec, color: color, series: series, data: data });
+    }
+    const m = macdSpec();
+    if (m) {
+      const fast = Math.max(2, m.fast | 0), slow = Math.max(fast + 1, m.slow | 0), signal = Math.max(1, m.signal | 0);
+      const pane = createPane('macd', indicatorLabel({ type: 'macd', fast: fast, slow: slow, signal: signal }));
+      // Every bar time is present (whitespace before the first MACD value) so the pane's
+      // logical indices match the main chart's and the two time scales stay aligned.
+      const values = bars.length >= slow ? macd(bars, fast, slow, signal) : [];
+      const byT = new Map(values.map(v => [v.t, v]));
+      pane.data = bars.map(b => { const v = byT.get(b.t); const time = toTime(b.t, intraday); return v ? { time: time, macd: v.macd, signal: v.signal, hist: v.hist } : { time: time, macd: null, signal: null, hist: null }; });
+      const fmtOpts = { priceFormat: { type: 'price', precision: 3, minMove: 0.001 }, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false };
+      const hist = pane.chart.addHistogramSeries(Object.assign({ base: 0 }, fmtOpts, { lastValueVisible: false }));
+      hist.setData(pane.data.map(p => p.hist === null ? { time: p.time } : { time: p.time, value: p.hist, color: alpha(p.hist >= 0 ? theme.up : theme.down, 0.65) }));
+      const line = pane.chart.addLineSeries(Object.assign({ color: theme.macd || '#60a5fa', lineWidth: 1 }, fmtOpts));
+      line.setData(pane.data.map(p => p.macd === null ? { time: p.time } : { time: p.time, value: p.macd }));
+      const sig = pane.chart.addLineSeries(Object.assign({ color: theme.macdSignal || '#fb923c', lineWidth: 1 }, fmtOpts));
+      sig.setData(pane.data.map(p => p.signal === null ? { time: p.time } : { time: p.time, value: p.signal }));
+      line.createPriceLine({ price: 0, color: alpha(theme.text, 0.35), lineWidth: 1, lineStyle: 3, axisLabelVisible: false });
+      pane.series = { hist: hist, line: line, signal: sig };
+      const range = state.chart.timeScale().getVisibleLogicalRange();
+      if (range) syncPaneRange(range);
+    }
+    updatePaneLegends(null);
   }
 
   function render(fit) {
     ensureChart();
     removeSeries();
+    applyLayout();
     const theme = state.theme, opts = state.options, intraday = !!state.meta.intraday;
     state.chart.applyOptions(chartOptions(theme, intraday));
     const bars = opts.type === 'heikin' ? heikinAshi(state.bars) : state.bars;
@@ -119,21 +419,21 @@ const char* const kControllerJs = R"js(
       });
       state.main.setData(data);
     }
-    if (opts.volume) {
+    const lay = layout();
+    if (opts.volume && lay.vol) {
       state.volume = state.chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: 'vol' });
-      state.chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+      state.chart.priceScale('vol').applyOptions({ scaleMargins: lay.vol });
       state.volume.setData(bars.map(b => ({ time: toTime(b.t, intraday), value: b.v, color: alpha(b.c >= b.o ? theme.up : theme.down, 0.45) })));
     }
-    if (opts.sma && opts.sma.on && bars.length >= opts.sma.period) {
-      state.sma = state.chart.addLineSeries({ color: theme.accent2, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-      state.sma.setData(sma(bars, opts.sma.period).map(p => ({ time: toTime(p.t, intraday), value: p.value })));
-    }
-    if (opts.ema && opts.ema.on && bars.length >= opts.ema.period) {
-      state.ema = state.chart.addLineSeries({ color: theme.accent3, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-      state.ema.setData(ema(bars, opts.ema.period).map(p => ({ time: toTime(p.t, intraday), value: p.value })));
-    }
+    renderIndicators(bars, intraday);
     applyLiveLine();
-    if (fit) state.chart.timeScale().fitContent();
+    if (fit) {
+      // A new symbol or timeframe: back to autoscale so a manually stretched axis never
+      // squashes the new bars into a stale price range.
+      state.chart.priceScale('right').applyOptions({ autoScale: true });
+      state.chart.timeScale().fitContent();
+    }
+    updateAutoButton();
     updateLegend(null);
     redraw();
   }
@@ -142,6 +442,8 @@ const char* const kControllerJs = R"js(
     if (!state.chart) return;
     state.chart.priceScale('right').applyOptions({ autoScale: true });
     try { state.chart.priceScale('vol').applyOptions({ autoScale: true }); } catch (e) {}
+    for (const pane of state.panes) { try { pane.chart.priceScale('right').applyOptions({ autoScale: true }); } catch (e) {} }
+    updateAutoButton();
     state.chart.timeScale().resetTimeScale();
     render(true);
     setTool('cursor');
@@ -168,7 +470,11 @@ const char* const kControllerJs = R"js(
     const theme = state.theme, opts = state.options;
     const source = opts.type === 'heikin' ? heikinAshi(state.bars) : state.bars;
     let bar = source[source.length - 1];
-    if (param && param.time !== undefined && state.main) {
+    if (param && param.fromPane) {
+      // Hover originated in an indicator pane: show that bar's figures.
+      const b = source.find(x => x.t === param.fromPane.t) || param.fromPane;
+      bar = { t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v };
+    } else if (param && param.time !== undefined && state.main) {
       const d = param.seriesData.get(state.main);
       const hovered = source.find(b => { const tt = toTime(b.t, !!state.meta.intraday); return typeof tt === 'object' ? (tt.year === param.time.year && tt.month === param.time.month && tt.day === param.time.day) : tt === param.time; });
       if (d && d.open !== undefined) bar = { t: hovered ? hovered.t : bar.t, o: d.open, h: d.high, l: d.low, c: d.close, v: bar.v };
@@ -204,8 +510,21 @@ const char* const kControllerJs = R"js(
       html += '<span style="color:' + lcol + '">' + (lc >= 0 ? '+' : '') + fmt(lc) + ' (' + (lc >= 0 ? '+' : '') + fmt(lp) + '%)</span>';
       html += '<span class="asof">' + (state.live.source || '') + (state.live.asOf ? ' ' + state.live.asOf : '') + '</span>';
     }
-    if (opts.sma && opts.sma.on) html += '<span style="color:' + theme.accent2 + '">SMA ' + opts.sma.period + '</span>';
-    if (opts.ema && opts.ema.on) html += '<span style="color:' + theme.accent3 + '">EMA ' + opts.ema.period + '</span>';
+    // Indicator readouts: the hovered bar's value, otherwise the latest one.
+    const hovering = param && param.time !== undefined;
+    const valueOf = (series, data, key) => {
+      if (hovering) {
+        const d = param.seriesData.get(series);
+        if (d) return d.value;
+        const row = data.find(x => sameTime(toTime(x.t, !!state.meta.intraday), param.time));
+        return row ? (key ? row[key] : row.value) : undefined;
+      }
+      for (let i = data.length - 1; i >= 0; i--) { const v = key ? data[i][key] : data[i].value; if (v !== null && v !== undefined) return v; }
+      return undefined;
+    };
+    for (const o of state.overlays) {
+      html += '<span style="color:' + o.color + '">' + indicatorLabel(o.spec) + ' <b>' + fmt(valueOf(o.series, o.data)) + '</b></span>';
+    }
     if (state.meta.asOf) html += '<span class="asof">' + state.meta.asOf + '</span>';
     legend.innerHTML = html;
   }
@@ -232,8 +551,14 @@ const char* const kControllerJs = R"js(
   }
 
   function paneRect() {
+    // The time axis is hidden when indicator panes are shown, so measure the plot area from
+    // the container and the price axis rather than from the time scale widget.
     const ts = state.chart.timeScale();
-    return { w: ts.width(), h: container.clientHeight - ts.height() };
+    let axis = 0;
+    try { axis = state.chart.priceScale('right').width() || 0; } catch (e) {}
+    const w = axis ? container.clientWidth - axis : ts.width();
+    const h = container.clientHeight - (wantedPanes().length ? 0 : ts.height());
+    return { w: w, h: h };
   }
   function logicalOfX(x) {
     const r = state.chart.timeScale().getVisibleLogicalRange(); const w = paneRect().w;
@@ -524,14 +849,39 @@ const char* const kControllerJs = R"js(
     setLive: function (live) { state.live = live || null; if (state.chart && state.main) { applyLiveLine(); updateLegend(null); } },
     screenshot: function () {
       if (!state.chart || !state.bars.length) return '';
+      // takeScreenshot() paints the chart at its current size, which also refreshes the price
+      // scale's coordinate mapping; the drawing overlay is redrawn after that so a resize
+      // (pane expanded, window changed) that has not been painted yet still exports correctly.
       const shot = state.chart.takeScreenshot();
-      if (!D.items.length) return shot.toDataURL('image/png');
-      const out = document.createElement('canvas'); out.width = shot.width; out.height = shot.height;
-      const ctx = out.getContext('2d'); ctx.drawImage(shot, 0, 0);
+      redraw();
+      if (!D.items.length && !state.panes.length) return shot.toDataURL('image/png');
+      // Main chart with its drawings, then each pane below with a frame, at the screenshot's pixel ratio.
+      const scale = shot.width / Math.max(1, container.clientWidth);
+      const paneShots = state.panes.map(p => p.chart.takeScreenshot());
+      const gap = Math.round(PANE_GAP * scale);
+      const out = document.createElement('canvas');
+      out.width = shot.width;
+      out.height = shot.height + paneShots.reduce((h, s) => h + s.height + gap, 0);
+      const ctx = out.getContext('2d');
+      ctx.fillStyle = state.theme.bg; ctx.fillRect(0, 0, out.width, out.height);
+      ctx.drawImage(shot, 0, 0);
       ctx.drawImage(draw, 0, 0, draw.width, draw.height, 0, 0, shot.width, shot.height);
+      let y = shot.height;
+      paneShots.forEach((s, i) => {
+        y += gap;
+        ctx.drawImage(s, 0, y);
+        ctx.strokeStyle = state.theme.border; ctx.lineWidth = Math.max(1, Math.round(scale));
+        ctx.strokeRect(0.5, y + 0.5, s.width - 1, s.height - 1);
+        // Pane legend text is HTML; repeat it on the image.
+        ctx.font = Math.round(11 * scale) + 'px Menlo, "SF Mono", monospace'; ctx.fillStyle = state.theme.text;
+        ctx.fillText(state.panes[i].legendEl.innerText.replace(/\s+/g, ' '), Math.round(10 * scale), y + Math.round(16 * scale));
+        y += s.height;
+      });
       return out.toDataURL('image/png');
     },
     barCount: function () { return state.bars.length; },
+    // Test hook / UI action: expand or restore the indicator pane; returns its height in px (0 without panes).
+    togglePaneExpanded: function () { if (!state.panes.length) return 0; toggleExpanded(); return paneHeight(); },
     // Drawing tools
     setTool: setTool,
     setDrawings: function (items) {
@@ -582,19 +932,26 @@ const char* const kControllerJs = R"js(
     },
     // Test hook: right-click the first drawing (through the real handlers) and pick Delete.
     simulateContextDelete: function () {
+      // Negative results say why: -2 nothing to delete, -3 no pixel position, -4 point outside
+      // the plot area, -5 the menu did not open, -6 no Delete entry (nothing was hit), -7 the
+      // click did not remove it.
       const target = D.items.find(d => d.type === 'trend') || D.items[0];
-      if (!target || !state.main) return -1;
+      if (!target || !state.main) return -2;
       const pane = paneRect();
       let x, y;
-      if (target.type === 'trend') { const p = trendPoints(target); if (!p) return -1; x = (p.x1 + p.x2) / 2; y = (p.y1 + p.y2) / 2; }
+      if (target.type === 'trend') { const p = trendPoints(target); if (!p) return -3; x = (p.x1 + p.x2) / 2; y = (p.y1 + p.y2) / 2; }
       else { x = pane.w / 2; y = yOfPrice((target.lo + target.hi) / 2); }
+      if (x === null || y === null || isNaN(x) || isNaN(y)) return -3;
+      if (x < 0 || y < 0 || x > pane.w || y > pane.h) return -4;
       const r = draw.getBoundingClientRect();
       const before = D.items.length;
+      lastMenuAt = 0;
       container.dispatchEvent(new MouseEvent('contextmenu', { clientX: r.left + x, clientY: r.top + y, bubbles: true, cancelable: true, button: 2 }));
-      const shown = menu.style.display === 'block';
+      if (menu.style.display !== 'block') return -5;
       const item = menu.querySelector('[data-act="delete"]');
-      if (item) item.click();
-      return shown && D.items.length === before - 1 ? D.items.length : -1;
+      if (!item) { hideMenu(); return -6; }
+      item.click();
+      return D.items.length === before - 1 ? D.items.length : -7;
     },
     stashDrawings: function () {
       if (!D.stash) D.stash = D.items.slice();
@@ -638,8 +995,26 @@ QString chartPageHtml()
 <html><head><meta charset="utf-8">
 <style>
   html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0a0f1c; }
-  #chart { position: absolute; inset: 0; }
+  #chart { position: absolute; left: 0; right: 0; top: 0; bottom: 0; }
   #draw { position: absolute; left: 0; top: 0; z-index: 4; pointer-events: none; }
+  #panes { position: absolute; left: 0; right: 0; bottom: 0; display: none; }
+  .pane { position: relative; box-sizing: border-box; border: 1px solid #273449; border-radius: 4px; overflow: hidden; }
+  .pane-chart { position: absolute; inset: 0; }
+  .pane-legend { position: absolute; left: 10px; top: 4px; z-index: 5; pointer-events: none; display: flex; gap: 0 12px;
+                 font: 11px Menlo, "SF Mono", monospace; color: #c7d2e3; line-height: 18px; }
+  .pane-legend .title { font-weight: 700; }
+  .pane-legend b { font-weight: 600; }
+  .pane-btn { position: absolute; right: 86px; top: 3px; z-index: 6; width: 20px; height: 18px; line-height: 18px; text-align: center;
+              border: 1px solid #273449; border-radius: 4px; background: rgba(18,26,43,0.85); color: #8294ad; font-size: 12px; cursor: pointer; user-select: none; }
+  .pane-btn:hover { color: #f3f6fb; border-color: #3b82f6; }
+  #pane-handle { position: absolute; left: 0; right: 0; height: 8px; z-index: 7; display: none; cursor: ns-resize; }
+  #pane-handle::after { content: ''; position: absolute; left: 50%; top: 3px; width: 36px; height: 2px; margin-left: -18px; border-radius: 1px;
+                        background: rgba(130,148,173,0.45); }
+  #pane-handle:hover::after, #pane-handle.active::after { background: #3b82f6; }
+  #auto-scale { position: absolute; right: 6px; bottom: 34px; z-index: 6; display: none; padding: 0 6px; height: 18px; line-height: 18px;
+                border: 1px solid #273449; border-radius: 4px; background: rgba(18,26,43,0.9); color: #8294ad;
+                font: 11px -apple-system, "Helvetica Neue", sans-serif; cursor: pointer; user-select: none; }
+  #auto-scale:hover { color: #f3f6fb; border-color: #3b82f6; }
   #menu { position: absolute; z-index: 20; display: none; min-width: 190px; padding: 4px 0; border: 1px solid #273449; border-radius: 6px;
           background: #121a2b; color: #c7d2e3; font: 12px -apple-system, "Helvetica Neue", sans-serif; box-shadow: 0 8px 24px rgba(0,0,0,0.45);
           --menu-hover: #3b82f6; user-select: none; }
@@ -656,6 +1031,9 @@ QString chartPageHtml()
 </style></head>
 <body>
 <div id="chart"></div>
+<div id="panes"></div>
+<div id="pane-handle" title="Drag to resize the indicator pane; double-click to expand or restore"></div>
+<div id="auto-scale" title="The price axis has been scaled by hand; click to return to automatic scaling">Auto</div>
 <canvas id="draw"></canvas>
 <div id="menu"></div>
 <div id="legend"></div>

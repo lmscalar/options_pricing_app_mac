@@ -71,12 +71,31 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   (default every 60 s). Columns are resizable by dragging the header dividers, and
   clicking a header sorts numerically by Last, Price Chg. or Pct Change (a third click
   restores watchlist order); widths and sort are remembered. Selecting a row loads its
-  chart; the ticker from the Option Chain tab is added automatically. The chart is TradingView's open-source Lightweight Charts
+  chart; the ticker from the Option Chain tab is added automatically. Watchlists are named
+  and saved: the **Watchlist** selector loads one (the table switches, quotes refresh and
+  the list's option chains are preloaded into memory, refreshing any older than ten
+  minutes), and the **Lists** menu creates an empty list, saves the current one under a new
+  name, renames, deletes, creates a list from the clipboard (“AAPL,NVDA,IBM,ORCL”, lines
+  or spaces, or cells copied from a spreadsheet as a row or a column; with a header such as
+  Ticker or Symbol only that column is used; a leading `$`, quotes and Excel's `="AAPL"`
+  are ignored), adds clipboard tickers to the current
+  list, imports tickers from a text/CSV file or exports them. The Add box also accepts
+  several tickers at once. Ticker
+  edits save into the active list automatically; the assistant can list, load and create
+  watchlists, and "load the energy watchlist" works as a spoken or typed command. The chart is TradingView's open-source Lightweight Charts
   (see below) inside a `QWebEngineView`, with timeframe buttons 1m, 2m, 3m, 5m, 15m, 1H,
   1D (one year of daily bars) and 1W (five years of weekly bars), the selected one
   highlighted in the accent colour; Candlestick, Bar,
-  Heikin-Ashi and Line styles; optional SMA and EMA overlays with editable periods; a
-  volume histogram; a crosshair legend with OHLC, volume and moving-average values; Save
+  Heikin-Ashi and Line styles; an **Indicators** drop-down that adds up to three SMAs
+  and three EMAs (each with its own period and colour), a MACD drawn in its own framed
+  pane below the price and volume with its own value axis (editable fast/slow/signal,
+  default 12/26/9, with signal line, histogram and zero line; the pane is a second chart
+  whose time scale and crosshair are linked to the main one, so panning, zooming and
+  hovering stay in step and Save Image… includes it; drag the handle above the pane to
+  resize it, or double-click the handle / click the ⤢ button to expand and restore, and
+  the height is remembered as `quotes/paneHeight`) and the volume histogram, with each indicator's submenu offering Edit and
+  Remove, the set remembered as the default for the next launch (`quotes/indicators`);
+  a crosshair legend with OHLC, volume and every indicator's value at the hovered bar; Save
   Image… (rendered by the chart library, so it works headless too) and Open Option Chain.
   Intraday bars are shown in local time. A **Draw** toolbar adds trend lines (drag, or
   click-move-click; the line extends to the right as a dashed ray) and shaded
@@ -86,8 +105,10 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   returns to the cursor. Right-clicking anywhere on the chart opens a menu: on a drawing it
   offers to delete that drawing, and always offers Delete all drawings and Reset chart view.
   The **Reset** button under the chart reloads the bars, restores autoscale and the default
-  zoom and returns to the cursor tool (drawings are kept); the price axis cannot be dragged
-  out of shape, and double-clicking an axis resets it. Drawings are anchored to bar time and price, so they survive
+  zoom and returns to the cursor tool (drawings are kept). Drag the price axis to stretch
+  or compress the scale (the indicator pane's axis too); an **Auto** button then appears on
+  the axis to return to automatic scaling, double-clicking an axis resets it, and loading
+  another symbol or timeframe always starts from autoscale. Drawings are anchored to bar time and price, so they survive
   scrolling, zooming and timeframe changes, are saved per symbol, and are included in
   Save Image…. The drawing layer is the app's own canvas over the chart; Lightweight
   Charts itself has no drawing tools.
@@ -165,7 +186,8 @@ summary of the current tab.
 
 The model can act through tools: `show_ticker` (loads a symbol everywhere), `switch_tab`,
 `get_bars`, `draw_trend_line`, `draw_zone` (shaded support/resistance), `clear_drawings`,
-`list_drawings`, `set_timeframe`, `set_chart_type`, `get_option_chain`, `get_volatility`,
+`list_drawings`, `set_timeframe`, `set_chart_type`, `add_indicator`, `remove_indicator`,
+`set_indicators`, `get_option_chain`, `get_volatility`,
 `set_market_volatility`, `load_strategy_preset`, `get_strategy`, `get_pricer`,
 `set_pricer_contract`, `get_heatmap`. "Mark support and resistance on this chart" therefore
 produces real zones and trend lines on the chart, persisted like hand-drawn ones.
@@ -187,6 +209,12 @@ and is sent. Replies can be read aloud (**Speak replies**, AVSpeechSynthesizer).
 navigation commands are parsed locally and need no AI key: "pull up option chains for
 AAPL", "chart NVDA", "switch to the volatility tab", "show volatility for TSLA", "clear
 drawings". Anything else goes to the model.
+
+The headline banner shows the ticker, company name and logo, the spot and daily change,
+and a one-line description of the business (industry classification and the first
+sentence of the issuer's description from Massive's reference data, cached on disk next
+to the logo); hovering it shows the full description and the price provenance (parity
+versus vendor, timestamps, delay, contract count).
 
 The **File** menu saves and opens workspace files (`.optws`, JSON), imports chains,
 batch-prices a CSV and exports or copies the current tab as CSV. The **Market** menu

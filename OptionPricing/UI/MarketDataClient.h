@@ -55,6 +55,7 @@ public:
         QString iconUrl;             ///< square icon (PNG/JPEG), empty if none
         QString logoUrl;             ///< wordmark (often SVG), empty if none
         QString description;
+        QString sicDescription;      ///< industry classification text, e.g. "Services-Prepackaged Software"
         double marketCap = 0.0;
     };
 

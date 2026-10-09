@@ -361,6 +361,7 @@ void MarketDataClient::fetchTickerDetails(const QString& ticker, std::function<v
         d.iconUrl = branding["icon_url"].toString();
         d.logoUrl = branding["logo_url"].toString();
         d.description = r["description"].toString();
+        d.sicDescription = r["sic_description"].toString();
         d.marketCap = r["market_cap"].toDouble();
         ok(d);
     }, err);

@@ -6,7 +6,30 @@
 #include "MarketState.h"
 #include "../Pricing/Activity.h"
 
+#include <QtCore/QRegularExpression>
+
 #include <cmath>
+
+QString MarketState::businessSummary(int maxChars) const
+{
+    QString industryText = industry.trimmed();
+    if (!industryText.isEmpty()) {
+        // "Services-Prepackaged Software" -> "Services – Prepackaged Software", in title case.
+        industryText.replace(QRegularExpression("\\s*-\\s*"), QStringLiteral(" – "));
+        QStringList words = industryText.toLower().split(' ', Qt::SkipEmptyParts);
+        for (QString& w : words) if (!w.isEmpty() && w[0].isLetter()) w[0] = w[0].toUpper();
+        industryText = words.join(' ');
+    }
+    QString sentence = companyDescription.trimmed();
+    if (!sentence.isEmpty()) {
+        const QRegularExpressionMatch end = QRegularExpression("[.!?](\\s|$)").match(sentence);
+        if (end.hasMatch()) sentence = sentence.left(end.capturedStart() + 1);
+    }
+    QString out = industryText;
+    if (!sentence.isEmpty()) out += (out.isEmpty() ? QString() : QStringLiteral("  ·  ")) + sentence;
+    if (out.size() > maxChars) out = out.left(maxChars - 1).trimmed() + QStringLiteral("…");
+    return out;
+}
 
 void MarketState::applySpotPolicy()
 {
@@ -107,6 +130,8 @@ QJsonObject MarketState::toJson() const
     if (!underlyingTicker.isEmpty()) root["underlyingTicker"] = underlyingTicker;
     if (!companyName.isEmpty()) root["companyName"] = companyName;
     if (!exchange.isEmpty()) root["exchange"] = exchange;
+    if (!industry.isEmpty()) root["industry"] = industry;
+    if (!companyDescription.isEmpty()) root["companyDescription"] = companyDescription;
     if (previousClose > 0.0) root["previousClose"] = previousClose;
     if (!spotSource.isEmpty()) {
         root["spotSource"] = spotSource;
@@ -143,6 +168,8 @@ void MarketState::fromJson(const QJsonObject& root)
     underlyingTicker = root["underlyingTicker"].toString();
     companyName = root["companyName"].toString();
     exchange = root["exchange"].toString();
+    industry = root["industry"].toString();
+    companyDescription = root["companyDescription"].toString();
     logo = QImage();   // re-fetched (or served from the disk cache) when the chain tab sees the ticker
     previousClose = root["previousClose"].toDouble(0.0);
     spotSource = root["spotSource"].toString();

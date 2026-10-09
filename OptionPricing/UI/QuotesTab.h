@@ -4,8 +4,10 @@
 //
 //  Quotes and charts: an editable watchlist (ticker, last, change, percent change) on
 //  the left and a TradingView Lightweight Charts(TM) view on the right with timeframe
-//  buttons, candlestick / bar / Heikin-Ashi / line styles, SMA and EMA overlays and a
-//  volume histogram. Data comes from Massive.com aggregates and bulk snapshots.
+//  buttons, candlestick / bar / Heikin-Ashi / line styles, an Indicators menu (up to three
+//  SMAs and three EMAs with their own periods and colours, a MACD with editable
+//  fast/slow/signal, volume) remembered between sessions. Data comes from Massive.com
+//  aggregates and bulk snapshots.
 //
 
 #pragma once
@@ -45,9 +47,24 @@ public:
     std::function<void(const QString& ticker)> onOpenInChain;
     /// Fired when the user highlights a watchlist row; the app cascades the ticker to every tab.
     std::function<void(const QString& ticker)> onTickerSelected;
-    /// Fired after a ticker is added to or removed from the watchlist.
+    /// Fired after a ticker is added to or removed from the watchlist, or another list is loaded.
     std::function<void(const QStringList& watchlist)> onWatchlistChanged;
     QStringList watchlist() const { return m_watchlist; }
+
+    // ---- Named watchlists (saved in the preferences) ----
+    QStringList watchlistNames() const;
+    QString activeWatchlistName() const { return m_activeWatchlist; }
+    /// Loads a saved list: replaces the table, refreshes quotes and fires onWatchlistChanged
+    /// (which preloads the option chains). False if no list has that name.
+    bool loadWatchlistNamed(const QString& name);
+    bool createWatchlist(const QString& name, const QStringList& tickers, bool activate);
+    /// Creates and loads a list from free text ("AAPL,NVDA,IBM", lines, spaces); false if no symbols.
+    bool createWatchlistFromText(const QString& name, const QString& text);
+    /// Adds every symbol found in the list that is not already present; returns how many were added.
+    int addTickers(const QStringList& tickers);
+    QStringList clipboardTickers() const;
+    bool renameWatchlist(const QString& from, const QString& to);
+    bool deleteWatchlist(const QString& name);
 
     // ---- Assistant hooks ----
     const MarketDataClient::BarSeries& bars() const { return m_bars; }
@@ -57,6 +74,25 @@ public:
     /// Switches the timeframe button (and reloads the chart); false if the label is unknown.
     bool setTimeframe(const QString& label);
     bool setChartType(const QString& type);
+
+    // ---- Technical indicators ----
+    // Each indicator is a JSON object: {"type":"sma"|"ema","period":N,"color":"#rrggbb"} or
+    // {"type":"macd","fast":12,"slow":26,"signal":9}. At most three SMAs, three EMAs and one
+    // MACD; the list is saved in the preferences and restored on the next launch.
+    static constexpr int kMaxMovingAverages = 3;
+    QJsonArray indicators() const { return m_indicators; }
+    /// Replaces the whole set after validation; on failure nothing changes and `error` says why.
+    bool setIndicators(const QJsonArray& indicators, QString* error = nullptr);
+    /// Adds one indicator (a colour is chosen if the spec has none); false with `error` if invalid or at the limit.
+    bool addIndicator(QJsonObject spec, QString* error = nullptr);
+    /// Removes indicators matching `type` ("sma", "ema", "macd" or "all") and, when > 0, `period`. Returns how many were removed.
+    int removeIndicators(const QString& type, int period = 0);
+    bool volumeShown() const;
+    void setVolumeShown(bool on);
+    /// Human-readable list, e.g. "SMA 20, EMA 50, MACD 12/26/9; volume on".
+    QString indicatorsSummary() const;
+    static QString indicatorLabel(const QJsonObject& spec);
+
     /// Loads `symbol` on `timeframe` (empty = current) and reports when the bars are in.
     void loadChartThen(const QString& symbol, const QString& timeframe, std::function<void(bool ok)> done);
     /// Adds a drawing from a JSON spec (see chartApi.addDrawing) and persists it.
@@ -84,6 +120,8 @@ public:
     void debugSimulateContextDelete(std::function<void(int remaining)> done);
     /// Puts back the drawings stashed by debugSimulateDrawings(); reports how many were restored.
     void debugRestoreDrawings(std::function<void(int count)> done);
+    /// Toggles the indicator pane between its default and expanded height; reports the pane height in px (0 = no pane).
+    void debugTogglePane(std::function<void(int px)> done);
     /// Sets the user's drawings aside (without persisting the empty set) so tests start clean.
     void debugStashDrawings(std::function<void(int stashed)> done);
     bool hasStoredDrawings(const QString& symbol) const;
@@ -102,11 +140,27 @@ private:
     void wire();
     void loadWatchlist();
     void saveWatchlist() const;
+    void refreshWatchlistCombo();
+    void promptNewWatchlist(bool copyCurrent);
+    void promptRenameWatchlist();
+    void promptDeleteWatchlist();
+    void importWatchlistFile();
+    void exportWatchlistFile();
+    void createWatchlistFromClipboard();
+    void addTickersFromClipboard();
     void addTicker(const QString& ticker);
     void removeSelectedTicker();
     void rebuildTable();
     void fillQuoteRow(int row, const MarketDataClient::Quote& quote);
     void loadChart(const QString& ticker);
+    void loadIndicators();
+    void saveIndicators() const;
+    void rebuildIndicatorsMenu();
+    /// Dialog to add or edit an indicator; returns false if cancelled or invalid.
+    bool editIndicatorDialog(QJsonObject& spec, bool adding);
+    void promptAddIndicator(const QString& type);
+    QString nextIndicatorColor() const;
+    static bool normalizeIndicator(QJsonObject& spec, QString* error);
     void pushBars();
     void pushOptions();
     void pushTheme();
@@ -131,7 +185,13 @@ private:
     MarketDataClient m_client;
     ChainStore* m_store = nullptr;
     Theme m_theme;
-    QStringList m_watchlist;
+    QStringList m_watchlist;                      ///< tickers of the active list
+    QMap<QString, QStringList> m_watchlists;      ///< every saved list by name
+    QString m_activeWatchlist;
+    bool m_updatingWatchlists = false;
+    QComboBox* m_watchlistCombo = nullptr;
+    QToolButton* m_watchlistMenu = nullptr;
+    QAction* m_deleteWatchlistAction = nullptr;
     std::map<QString, MarketDataClient::Quote> m_quotes;
     std::map<QString, QString> m_names;            ///< company names resolved from branding lookups
 
@@ -162,11 +222,10 @@ private:
     QLabel* m_chartName = nullptr;
     QButtonGroup* m_timeframeGroup = nullptr;
     QComboBox* m_chartType = nullptr;
-    QCheckBox* m_smaCheck = nullptr;
-    QSpinBox* m_smaPeriod = nullptr;
-    QCheckBox* m_emaCheck = nullptr;
-    QSpinBox* m_emaPeriod = nullptr;
-    QCheckBox* m_volumeCheck = nullptr;
+    QToolButton* m_indicatorsButton = nullptr;   ///< "Indicators ▾" drop-down menu
+    QMenu* m_indicatorsMenu = nullptr;
+    QAction* m_volumeAction = nullptr;           ///< checkable "Volume" entry in the menu
+    QJsonArray m_indicators;                     ///< see indicators(); mirrors QSettings quotes/indicators
     QCheckBox* m_priceLineCheck = nullptr;
     QPushButton* m_openChain = nullptr;
     QPushButton* m_saveImage = nullptr;

@@ -29,6 +29,11 @@ public:
     QString underlyingTicker;                        ///< symbol the chain and spot came from, if downloaded
     QString companyName;                             ///< issuer name from the reference data, if known
     QString exchange;                                ///< primary exchange code, if known
+    QString industry;                                ///< SIC industry description, if known
+    QString companyDescription;                      ///< issuer's business description, if known
+    /// One line describing the business for the headline banner: the industry and the first
+    /// sentence of the description (empty when neither is known).
+    QString businessSummary(int maxChars = 220) const;
     QImage logo;                                     ///< company icon, null when unavailable
     QString spotSource;                              ///< "last minute bar", "day close", "option parity", ... (empty for manual spot)
     QString vendorSource;                            ///< what the vendor price is ("last minute bar", "day close", ...)

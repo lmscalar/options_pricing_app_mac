@@ -7,13 +7,45 @@
 #include "ChartPage.h"
 #include "Formatting.h"
 
+#include <QtCore/QSet>
+
+#include <algorithm>
 #include <cmath>
 
 namespace {
 enum Column { ColTicker = 0, ColLast, ColChange, ColPercent, ColumnCount };
-constexpr const char* kWatchlistKey = "quotes/watchlist";
+constexpr const char* kWatchlistKey = "quotes/watchlist";             ///< the active list (kept for compatibility)
+constexpr const char* kWatchlistsKey = "quotes/watchlists";           ///< JSON object: name -> [tickers]
+constexpr const char* kActiveWatchlistKey = "quotes/activeWatchlist";
+constexpr const char* kDefaultWatchlistName = "Default";
 constexpr const char* kTimeframeKey = "quotes/timeframe";
 constexpr const char* kChartTypeKey = "quotes/chartType";
+constexpr const char* kIndicatorsKey = "quotes/indicators";  ///< JSON array, see QuotesTab::indicators()
+constexpr const char* kVolumeKey = "quotes/volume";
+constexpr const char* kPriceLineKey = "quotes/priceLine";
+constexpr const char* kPaneHeightKey = "quotes/paneHeight";   ///< indicator pane height as a fraction of the chart
+/// Overlay colours handed out in order to new moving averages (first unused wins).
+const QStringList& indicatorPalette()
+{
+    static const QStringList palette{ "#f59e0b", "#22d3ee", "#a78bfa", "#f472b6", "#34d399", "#fb923c" };
+    return palette;
+}
+const QStringList& indicatorPaletteNames()
+{
+    static const QStringList names{ "Amber", "Cyan", "Violet", "Pink", "Green", "Orange" };
+    return names;
+}
+QIcon swatchIcon(const QString& color)
+{
+    QPixmap pm(14, 14);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(color));
+    p.drawRoundedRect(QRectF(1, 1, 12, 12), 3, 3);
+    return QIcon(pm);
+}
 constexpr const char* kHeaderKey = "quotes/header";       ///< column widths and sort indicator
 constexpr const char* kDrawingsPrefix = "quotes/drawings/"; ///< + symbol -> JSON array of drawings
 constexpr int kValueRole = Qt::UserRole;                   ///< numeric value used for sorting
@@ -35,6 +67,48 @@ public:
         return data(kValueRole).toDouble() < other.data(kValueRole).toDouble();
     }
 };
+/// Extracts ticker symbols from free text: "AAPL,NVDA,IBM", one per line, space-separated, or
+/// cells copied from a spreadsheet (a row is tab-separated, a column is one per line). When a
+/// copied block has a header such as "Ticker" or "Symbol", only that column is used.
+QStringList parseTickers(const QString& rawText)
+{
+    static const QRegularExpression headerWord("^(ticker|tickers|symbol|symbols|stock|stocks|name|company|instrument)$", QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression tickerShape("^[A-Z][A-Z0-9.\\-]{0,7}$");
+    auto clean = [](QString token) {
+        token = token.trimmed();
+        token.remove(QRegularExpression("^=?[\"'$]+|[\"')]+$"));   // Excel ="AAPL", quotes, a leading $
+        token.remove(QRegularExpression("[.:,;]+$"));
+        return token.toUpper();
+    };
+    QString text = rawText;
+    text.replace("\r\n", "\n").replace('\r', '\n');
+    QStringList tokens;
+    const QStringList lines = text.split('\n', Qt::SkipEmptyParts);
+    const bool sheet = std::any_of(lines.begin(), lines.end(), [](const QString& l) { return l.contains('\t'); });
+    if (sheet) {
+        // Spreadsheet block: find a header cell naming the ticker column; otherwise take every cell.
+        int column = -1;
+        const QStringList header = lines.first().split('\t');
+        for (int i = 0; i < header.size(); ++i) {
+            if (headerWord.match(header[i].trimmed()).hasMatch() && !header[i].trimmed().toLower().startsWith("name") && !header[i].trimmed().toLower().startsWith("company")) { column = i; break; }
+        }
+        for (int r = 0; r < lines.size(); ++r) {
+            const QStringList cells = lines[r].split('\t');
+            if (column >= 0) { if (r > 0 && column < cells.size()) tokens << cells[column]; }
+            else tokens << cells;
+        }
+    } else {
+        tokens = text.split(QRegularExpression("[\\s,;|]+"), Qt::SkipEmptyParts);
+    }
+    QStringList tickers;
+    for (const QString& token : tokens) {
+        const QString symbol = clean(token);
+        if (symbol.isEmpty() || headerWord.match(symbol).hasMatch()) continue;
+        if (tickerShape.match(symbol).hasMatch() && !tickers.contains(symbol)) tickers << symbol;
+    }
+    return tickers;
+}
+
 /// Bars are stamped at the start of their window in New York time; daily bars therefore
 /// carry a session date that must be read in that zone, not in the local one.
 const QTimeZone& exchangeZone()
@@ -113,6 +187,35 @@ void QuotesTab::buildUi()
     addRow->addWidget(m_tickerEdit, 1);
     addRow->addWidget(m_addButton);
 
+    // Named watchlists: pick one to load it (and preload its option chains); the menu
+    // creates, copies, renames, deletes, imports and exports lists.
+    m_watchlistCombo = new QComboBox(this);
+    m_watchlistCombo->setToolTip("Saved watchlists. Loading one replaces the table, refreshes quotes and preloads its option chains into memory.");
+    m_watchlistCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    m_watchlistMenu = new QToolButton(this);
+    m_watchlistMenu->setText("Lists ▾");
+    m_watchlistMenu->setPopupMode(QToolButton::InstantPopup);
+    m_watchlistMenu->setCursor(Qt::PointingHandCursor);
+    m_watchlistMenu->setToolTip("Create, copy, rename, delete, import or export watchlists");
+    auto* menu = new QMenu(m_watchlistMenu);
+    menu->addAction("New Watchlist…", this, [this] { promptNewWatchlist(false); });
+    menu->addAction("Save Current As…", this, [this] { promptNewWatchlist(true); });
+    menu->addAction("Rename…", this, [this] { promptRenameWatchlist(); });
+    m_deleteWatchlistAction = menu->addAction("Delete Watchlist", this, [this] { promptDeleteWatchlist(); });
+    menu->addSeparator();
+    menu->addAction("New Watchlist from Clipboard…", this, [this] { createWatchlistFromClipboard(); });
+    menu->addAction("Add Clipboard Tickers to Current List", this, [this] { addTickersFromClipboard(); });
+    menu->addAction("Import Tickers from File…", this, [this] { importWatchlistFile(); });
+    menu->addAction("Export Tickers to File…", this, [this] { exportWatchlistFile(); });
+    m_watchlistMenu->setMenu(menu);
+    auto* listRow = new QHBoxLayout;
+    listRow->setSpacing(8);
+    auto* listLabel = new QLabel("Watchlist", this);
+    listLabel->setObjectName("muted");
+    listRow->addWidget(listLabel);
+    listRow->addWidget(m_watchlistCombo, 1);
+    listRow->addWidget(m_watchlistMenu);
+
     m_table = new QTableWidget(0, ColumnCount, this);
     m_table->setHorizontalHeaderLabels({ "Ticker", "Last", "Price Chg.", "Pct Change" });
     m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
@@ -160,6 +263,7 @@ void QuotesTab::buildUi()
     auto* watchLayout = new QVBoxLayout(watchBox);
     watchLayout->setContentsMargins(12, 12, 12, 12);
     watchLayout->setSpacing(8);
+    watchLayout->addLayout(listRow);
     watchLayout->addLayout(addRow);
     watchLayout->addWidget(m_table, 1);
     watchLayout->addLayout(refreshRow);
@@ -199,22 +303,22 @@ void QuotesTab::buildUi()
     // min-width rule is re-applied on every polish and would override setMinimumWidth here.
     m_chartType->setObjectName("chartTypeCombo");
     m_chartType->setToolTip("Chart style");
-    m_smaCheck = new QCheckBox("SMA", this);
-    m_smaCheck->setChecked(true);
-    m_smaPeriod = ui::makeIntSpinBox(this, 2, 500, 20);
-    m_emaCheck = new QCheckBox("EMA", this);
-    m_emaCheck->setChecked(true);
-    m_emaPeriod = ui::makeIntSpinBox(this, 2, 500, 50);
-    m_volumeCheck = new QCheckBox("Volume", this);
-    m_volumeCheck->setChecked(true);
+    // Technical indicators live in a drop-down menu: add up to three SMAs and three EMAs
+    // (each with its own period and colour), one MACD with editable parameters, and the
+    // volume histogram. The chosen set is saved and restored on the next launch.
+    m_indicatorsButton = new QToolButton(this);
+    m_indicatorsButton->setText("Indicators ▾");
+    m_indicatorsButton->setPopupMode(QToolButton::InstantPopup);
+    m_indicatorsButton->setCursor(Qt::PointingHandCursor);
+    m_indicatorsButton->setToolTip("Add, edit or remove moving averages and the MACD; toggle the volume histogram");
+    m_indicatorsMenu = new QMenu(this);
+    m_indicatorsButton->setMenu(m_indicatorsMenu);
+    m_volumeAction = new QAction("Volume", this);
+    m_volumeAction->setCheckable(true);
+    m_volumeAction->setChecked(QSettings().value(kVolumeKey, true).toBool());
     m_openChain = ui::makeButton(this, "Open Option Chain", "secondary", "Fetch this ticker's option chain on the Option Chain tab");
     m_saveImage = ui::makeButton(this, "Save Image…", "secondary", "Save the chart as a PNG image");
     m_resetChart = ui::makeButton(this, "Reset", "secondary", "Reset the chart view: reload the bars, restore autoscale and the default zoom, return to the cursor tool (drawings are kept)");
-    for (QSpinBox* box : { m_smaPeriod, m_emaPeriod }) {
-        box->setMaximumWidth(72);
-        box->setToolTip("Period in bars");
-    }
-
     // Two toolbar rows so the chart pane stays usable at laptop widths.
     auto* toolbarTop = new QHBoxLayout;
     toolbarTop->setSpacing(10);
@@ -225,13 +329,9 @@ void QuotesTab::buildUi()
     toolbarBottom->setSpacing(10);
     toolbarBottom->addWidget(m_chartType);
     toolbarBottom->addSpacing(6);
-    toolbarBottom->addWidget(m_smaCheck);
-    toolbarBottom->addWidget(m_smaPeriod);
-    toolbarBottom->addWidget(m_emaCheck);
-    toolbarBottom->addWidget(m_emaPeriod);
-    toolbarBottom->addWidget(m_volumeCheck);
+    toolbarBottom->addWidget(m_indicatorsButton);
     m_priceLineCheck = new QCheckBox("Price line", this);
-    m_priceLineCheck->setChecked(QSettings().value("quotes/priceLine", true).toBool());
+    m_priceLineCheck->setChecked(QSettings().value(kPriceLineKey, true).toBool());
     m_priceLineCheck->setToolTip("Horizontal line at the live price (or the last close): a chart marker, not a drawing");
     toolbarBottom->addWidget(m_priceLineCheck);
     toolbarBottom->addStretch(1);
@@ -336,6 +436,10 @@ void QuotesTab::buildUi()
 
 void QuotesTab::wire()
 {
+    connect(m_watchlistCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (m_updatingWatchlists || index < 0) return;
+        loadWatchlistNamed(m_watchlistCombo->itemText(index));
+    });
     connect(m_addButton, &QPushButton::clicked, this, [this] { addTicker(m_tickerEdit->text()); m_tickerEdit->clear(); });
     connect(m_tickerEdit, &QLineEdit::returnPressed, this, [this] { addTicker(m_tickerEdit->text()); m_tickerEdit->clear(); });
     connect(m_removeButton, &QPushButton::clicked, this, [this] { removeSelectedTicker(); });
@@ -392,13 +496,12 @@ void QuotesTab::wire()
         QSettings().setValue(kChartTypeKey, m_chartType->currentData().toString());
         pushOptions();
     });
-    connect(m_priceLineCheck, &QCheckBox::toggled, this, [this](bool on) { QSettings().setValue("quotes/priceLine", on); pushOptions(); });
-    for (QCheckBox* box : { m_smaCheck, m_emaCheck, m_volumeCheck }) {
-        connect(box, &QCheckBox::toggled, this, [this](bool) { pushOptions(); });
-    }
-    for (QSpinBox* box : { m_smaPeriod, m_emaPeriod }) {
-        connect(box, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) { pushOptions(); });
-    }
+    connect(m_priceLineCheck, &QCheckBox::toggled, this, [this](bool on) { QSettings().setValue(kPriceLineKey, on); pushOptions(); });
+    connect(m_volumeAction, &QAction::toggled, this, [this](bool on) {
+        QSettings().setValue(kVolumeKey, on);
+        rebuildIndicatorsMenu();
+        pushOptions();
+    });
     connect(m_view, &QWebEngineView::loadFinished, this, [this](bool ok) {
         m_pageReady = ok;
         if (!ok) {
@@ -424,6 +527,7 @@ void QuotesTab::wire()
     if (QAbstractButton* button = m_timeframeGroup->button(m_timeframeIndex)) button->setChecked(true);
     const int typeIndex = m_chartType->findData(settings.value(kChartTypeKey, "candles").toString());
     m_chartType->setCurrentIndex(std::max(0, typeIndex));
+    loadIndicators();
     const QByteArray header = settings.value(kHeaderKey).toByteArray();
     if (!header.isEmpty()) m_table->horizontalHeader()->restoreState(header);
 }
@@ -453,26 +557,254 @@ int QuotesTab::rowForTicker(const QString& symbol) const
 void QuotesTab::loadWatchlist()
 {
     const QSettings settings;
-    m_watchlist = settings.value(kWatchlistKey, QStringList{ "AAPL", "NVDA", "MSFT", "AMZN", "TSLA", "SPY", "QQQ" }).toStringList();
+    m_watchlists.clear();
+    const QJsonObject stored = QJsonDocument::fromJson(settings.value(kWatchlistsKey).toString().toUtf8()).object();
+    for (auto it = stored.begin(); it != stored.end(); ++it) {
+        QStringList tickers;
+        for (const QJsonValue v : it.value().toArray()) tickers << v.toString().trimmed().toUpper();
+        tickers.removeAll(QString());
+        if (!it.key().trimmed().isEmpty()) m_watchlists.insert(it.key().trimmed(), tickers);
+    }
+    if (m_watchlists.isEmpty()) {
+        // First run with named lists: the single legacy list becomes "Default".
+        m_watchlists.insert(kDefaultWatchlistName, settings.value(kWatchlistKey, QStringList{ "AAPL", "NVDA", "MSFT", "AMZN", "TSLA", "SPY", "QQQ" }).toStringList());
+    }
+    m_activeWatchlist = settings.value(kActiveWatchlistKey).toString();
+    if (!m_watchlists.contains(m_activeWatchlist)) m_activeWatchlist = m_watchlists.firstKey();
+    m_watchlist = m_watchlists.value(m_activeWatchlist);
+    refreshWatchlistCombo();
 }
 
 void QuotesTab::saveWatchlist() const
 {
     QSettings settings;
-    settings.setValue(kWatchlistKey, m_watchlist);
+    settings.setValue(kWatchlistKey, m_watchlist);   // the active list, as before
+    QJsonObject stored;
+    for (auto it = m_watchlists.begin(); it != m_watchlists.end(); ++it) {
+        stored[it.key()] = QJsonArray::fromStringList(it.key() == m_activeWatchlist ? m_watchlist : it.value());
+    }
+    settings.setValue(kWatchlistsKey, QString::fromUtf8(QJsonDocument(stored).toJson(QJsonDocument::Compact)));
+    settings.setValue(kActiveWatchlistKey, m_activeWatchlist);
+}
+
+// MARK: - Named watchlists
+
+QStringList QuotesTab::watchlistNames() const
+{
+    return m_watchlists.keys();
+}
+
+void QuotesTab::refreshWatchlistCombo()
+{
+    m_updatingWatchlists = true;
+    m_watchlistCombo->clear();
+    m_watchlistCombo->addItems(m_watchlists.keys());
+    m_watchlistCombo->setCurrentText(m_activeWatchlist);
+    m_updatingWatchlists = false;
+    if (m_deleteWatchlistAction) m_deleteWatchlistAction->setEnabled(m_watchlists.size() > 1);
+}
+
+bool QuotesTab::loadWatchlistNamed(const QString& rawName)
+{
+    const QString name = rawName.trimmed();
+    if (!m_watchlists.contains(name)) return false;
+    // Remember the outgoing list's current tickers before switching.
+    m_watchlists[m_activeWatchlist] = m_watchlist;
+    m_activeWatchlist = name;
+    m_watchlist = m_watchlists.value(name);
+    saveWatchlist();
+    refreshWatchlistCombo();
+    rebuildTable();
+    if (!m_watchlist.contains(m_chartTicker)) {
+        // Chart the first row of the new list (no cascade; the user's click decides that).
+        m_autoSelecting = true;
+        if (m_table->rowCount() > 0) m_table->selectRow(0);
+        m_autoSelecting = false;
+    }
+    refreshQuotes();
+    setStatus(QStringLiteral("Watchlist “%1” loaded: %2 ticker%3. Refreshing quotes and preloading option chains…").arg(name).arg(m_watchlist.size()).arg(m_watchlist.size() == 1 ? "" : "s"),
+              ui::StatusKind::Info);
+    if (onWatchlistChanged) onWatchlistChanged(m_watchlist);
+    return true;
+}
+
+bool QuotesTab::createWatchlist(const QString& rawName, const QStringList& tickers, bool activate)
+{
+    const QString name = rawName.trimmed();
+    if (name.isEmpty()) return false;
+    QStringList clean;
+    for (const QString& t : tickers) {
+        const QString symbol = t.trimmed().toUpper();
+        if (!symbol.isEmpty() && !clean.contains(symbol)) clean << symbol;
+    }
+    m_watchlists[m_activeWatchlist] = m_watchlist;
+    m_watchlists.insert(name, clean);
+    saveWatchlist();
+    refreshWatchlistCombo();
+    if (activate) return loadWatchlistNamed(name);
+    return true;
+}
+
+bool QuotesTab::renameWatchlist(const QString& from, const QString& rawTo)
+{
+    const QString to = rawTo.trimmed();
+    if (to.isEmpty() || !m_watchlists.contains(from) || (m_watchlists.contains(to) && to != from)) return false;
+    const QStringList tickers = from == m_activeWatchlist ? m_watchlist : m_watchlists.value(from);
+    m_watchlists.remove(from);
+    m_watchlists.insert(to, tickers);
+    if (m_activeWatchlist == from) m_activeWatchlist = to;
+    saveWatchlist();
+    refreshWatchlistCombo();
+    return true;
+}
+
+bool QuotesTab::deleteWatchlist(const QString& name)
+{
+    if (!m_watchlists.contains(name) || m_watchlists.size() <= 1) return false;
+    m_watchlists.remove(name);
+    if (m_activeWatchlist == name) {
+        m_activeWatchlist = m_watchlists.firstKey();
+        m_watchlist = m_watchlists.value(m_activeWatchlist);
+        saveWatchlist();
+        refreshWatchlistCombo();
+        rebuildTable();
+        refreshQuotes();
+        if (onWatchlistChanged) onWatchlistChanged(m_watchlist);
+    } else {
+        saveWatchlist();
+        refreshWatchlistCombo();
+    }
+    return true;
+}
+
+void QuotesTab::promptNewWatchlist(bool copyCurrent)
+{
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, copyCurrent ? "Save Watchlist As" : "New Watchlist",
+                                               copyCurrent ? QStringLiteral("Name for a copy of “%1”:").arg(m_activeWatchlist) : QStringLiteral("Name for the new (empty) watchlist:"),
+                                               QLineEdit::Normal, QString(), &ok).trimmed();
+    if (!ok || name.isEmpty()) return;
+    if (m_watchlists.contains(name)) {
+        QMessageBox::warning(this, "Watchlist exists", QStringLiteral("A watchlist named “%1” already exists.").arg(name));
+        return;
+    }
+    createWatchlist(name, copyCurrent ? m_watchlist : QStringList(), true);
+}
+
+void QuotesTab::promptRenameWatchlist()
+{
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, "Rename Watchlist", QStringLiteral("New name for “%1”:").arg(m_activeWatchlist), QLineEdit::Normal, m_activeWatchlist, &ok).trimmed();
+    if (!ok || name.isEmpty() || name == m_activeWatchlist) return;
+    if (!renameWatchlist(m_activeWatchlist, name)) QMessageBox::warning(this, "Rename failed", QStringLiteral("A watchlist named “%1” already exists.").arg(name));
+}
+
+void QuotesTab::promptDeleteWatchlist()
+{
+    if (m_watchlists.size() <= 1) {
+        QMessageBox::information(this, "Delete Watchlist", "The last watchlist cannot be deleted; create another one first.");
+        return;
+    }
+    if (QMessageBox::question(this, "Delete Watchlist", QStringLiteral("Delete the watchlist “%1” (%2 tickers)?").arg(m_activeWatchlist).arg(m_watchlist.size())) == QMessageBox::Yes) {
+        deleteWatchlist(m_activeWatchlist);
+    }
+}
+
+void QuotesTab::importWatchlistFile()
+{
+    const QString path = QFileDialog::getOpenFileName(this, "Import tickers", QString(), "Text or CSV (*.txt *.csv);;All files (*)");
+    if (path.isEmpty()) return;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    const QStringList tickers = parseTickers(QString::fromUtf8(file.readAll()));
+    if (tickers.isEmpty()) {
+        QMessageBox::warning(this, "Import tickers", "No ticker symbols were found in that file.");
+        return;
+    }
+    const QString suggested = QFileInfo(path).completeBaseName();
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, "Import tickers", QStringLiteral("%1 tickers found. Name for the new watchlist:").arg(tickers.size()), QLineEdit::Normal, suggested, &ok).trimmed();
+    if (!ok || name.isEmpty()) return;
+    createWatchlist(m_watchlists.contains(name) ? name + " (imported)" : name, tickers, true);
+}
+
+void QuotesTab::exportWatchlistFile()
+{
+    const QString path = QFileDialog::getSaveFileName(this, "Export tickers", m_activeWatchlist + ".txt", "Text (*.txt);;CSV (*.csv)");
+    if (path.isEmpty()) return;
+    QFile file(path);
+    if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        file.write((m_watchlist.join(path.endsWith(".csv", Qt::CaseInsensitive) ? "," : "\n") + "\n").toUtf8());
+        setStatus(QStringLiteral("Exported %1 tickers to %2.").arg(m_watchlist.size()).arg(path), ui::StatusKind::Info);
+    }
 }
 
 void QuotesTab::addTicker(const QString& ticker)
 {
-    const QString symbol = ticker.trimmed().toUpper();
-    if (symbol.isEmpty()) return;
-    if (!m_watchlist.contains(symbol)) {
-        m_watchlist << symbol;
+    // Accepts one symbol or several ("AAPL, NVDA IBM"), e.g. pasted into the Add box.
+    addTickers(parseTickers(ticker));
+}
+
+int QuotesTab::addTickers(const QStringList& tickers)
+{
+    int added = 0;
+    for (const QString& symbol : tickers) {
+        if (!symbol.isEmpty() && !m_watchlist.contains(symbol)) {
+            m_watchlist << symbol;
+            ++added;
+        }
+    }
+    if (added > 0) {
         saveWatchlist();
         rebuildTable();
         refreshQuotes();
         if (onWatchlistChanged) onWatchlistChanged(m_watchlist);
     }
+    return added;
+}
+
+QStringList QuotesTab::clipboardTickers() const
+{
+    return parseTickers(QGuiApplication::clipboard()->text());
+}
+
+bool QuotesTab::createWatchlistFromText(const QString& name, const QString& text)
+{
+    const QStringList tickers = parseTickers(text);
+    if (tickers.isEmpty()) return false;
+    return createWatchlist(name, tickers, true);
+}
+
+void QuotesTab::createWatchlistFromClipboard()
+{
+    const QStringList tickers = clipboardTickers();
+    if (tickers.isEmpty()) {
+        QMessageBox::information(this, "New Watchlist from Clipboard", "The clipboard holds no ticker symbols. Copy text such as “AAPL,NVDA,IBM,ORCL” first.");
+        return;
+    }
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, "New Watchlist from Clipboard",
+                                               QStringLiteral("%1 ticker%2 found: %3\n\nName for the new watchlist:").arg(tickers.size()).arg(tickers.size() == 1 ? "" : "s", tickers.join(", ")),
+                                               QLineEdit::Normal, QStringLiteral("Pasted %1").arg(QDate::currentDate().toString("MMM d")), &ok).trimmed();
+    if (!ok || name.isEmpty()) return;
+    if (m_watchlists.contains(name)) {
+        QMessageBox::warning(this, "Watchlist exists", QStringLiteral("A watchlist named “%1” already exists.").arg(name));
+        return;
+    }
+    createWatchlist(name, tickers, true);
+}
+
+void QuotesTab::addTickersFromClipboard()
+{
+    const QStringList tickers = clipboardTickers();
+    if (tickers.isEmpty()) {
+        QMessageBox::information(this, "Add Tickers from Clipboard", "The clipboard holds no ticker symbols. Copy text such as “AAPL,NVDA,IBM,ORCL” first.");
+        return;
+    }
+    const int added = addTickers(tickers);
+    setStatus(QStringLiteral("%1 ticker%2 added to “%3” from the clipboard%4.").arg(added).arg(added == 1 ? "" : "s", m_activeWatchlist,
+                                                                                      added < tickers.size() ? QStringLiteral(" (%1 already present)").arg(tickers.size() - added) : QString()),
+              ui::StatusKind::Info);
 }
 
 void QuotesTab::removeSelectedTicker()
@@ -862,8 +1194,7 @@ QString QuotesTab::contextSummary(int maxBars) const
     s << "Quotes tab. Chart: " << m_chartTicker;
     if (m_names.count(m_chartTicker)) s << " (" << m_names.at(m_chartTicker) << ")";
     s << ", timeframe " << tf.label << " (" << tf.multiplier << " " << tf.timespan << " bars), style " << m_chartType->currentData().toString()
-      << ", SMA " << (m_smaCheck->isChecked() ? QString::number(m_smaPeriod->value()) : QStringLiteral("off"))
-      << ", EMA " << (m_emaCheck->isChecked() ? QString::number(m_emaPeriod->value()) : QStringLiteral("off")) << ".\n";
+      << ". Indicators: " << indicatorsSummary() << ".\n";
     const auto quote = m_quotes.find(m_chartTicker);
     if (quote != m_quotes.end()) {
         s << "Latest quote: last " << ui::number(quote->second.last, 2) << ", change " << ui::number(quote->second.change, 2) << " ("
@@ -925,19 +1256,292 @@ void QuotesTab::pushBars()
 
 void QuotesTab::pushOptions()
 {
-    QJsonObject sma;
-    sma["on"] = m_smaCheck->isChecked();
-    sma["period"] = m_smaPeriod->value();
-    QJsonObject ema;
-    ema["on"] = m_emaCheck->isChecked();
-    ema["period"] = m_emaPeriod->value();
     QJsonObject opts;
     opts["type"] = m_chartType->currentData().toString();
-    opts["sma"] = sma;
-    opts["ema"] = ema;
-    opts["volume"] = m_volumeCheck->isChecked();
+    opts["indicators"] = m_indicators;
+    opts["volume"] = m_volumeAction->isChecked();
     opts["priceLine"] = m_priceLineCheck->isChecked();
+    opts["paneHeight"] = QSettings().value(kPaneHeightKey, 0.24).toDouble();   // indicator pane, fraction of the chart height
     runJs(QStringLiteral("chartApi.setOptions(%1);").arg(QString::fromUtf8(QJsonDocument(opts).toJson(QJsonDocument::Compact))));
+}
+
+// ---- Technical indicators -------------------------------------------------------------
+
+QString QuotesTab::indicatorLabel(const QJsonObject& spec)
+{
+    const QString type = spec.value("type").toString();
+    if (type == "macd") {
+        return QStringLiteral("MACD %1/%2/%3").arg(spec.value("fast").toInt(12)).arg(spec.value("slow").toInt(26)).arg(spec.value("signal").toInt(9));
+    }
+    return QStringLiteral("%1 %2").arg(type.toUpper()).arg(spec.value("period").toInt());
+}
+
+bool QuotesTab::normalizeIndicator(QJsonObject& spec, QString* error)
+{
+    auto fail = [error](const QString& why) { if (error) *error = why; return false; };
+    const QString type = spec.value("type").toString().trimmed().toLower();
+    QJsonObject out;
+    if (type == "sma" || type == "ema") {
+        const int period = spec.value("period").toInt(spec.value("length").toInt());
+        if (period < 2 || period > 500) return fail(QStringLiteral("%1 period must be between 2 and 500 bars.").arg(type.toUpper()));
+        out["type"] = type;
+        out["period"] = period;
+        const QColor color(spec.value("color").toString());
+        if (color.isValid()) out["color"] = color.name();
+    } else if (type == "macd") {
+        const int fast = spec.value("fast").toInt(12), slow = spec.value("slow").toInt(26), signal = spec.value("signal").toInt(9);
+        if (fast < 2 || fast > 200 || slow < 3 || slow > 500 || signal < 1 || signal > 200) return fail("MACD parameters out of range (fast 2-200, slow 3-500, signal 1-200).");
+        if (fast >= slow) return fail("MACD fast period must be shorter than the slow period.");
+        out["type"] = type;
+        out["fast"] = fast;
+        out["slow"] = slow;
+        out["signal"] = signal;
+    } else {
+        return fail(QStringLiteral("Unknown indicator type '%1'. Use sma, ema or macd.").arg(type));
+    }
+    spec = out;
+    return true;
+}
+
+QString QuotesTab::nextIndicatorColor() const
+{
+    QSet<QString> used;
+    for (const QJsonValue v : m_indicators) used.insert(v.toObject().value("color").toString().toLower());
+    for (const QString& color : indicatorPalette()) {
+        if (!used.contains(color)) return color;
+    }
+    return indicatorPalette().at(m_indicators.size() % indicatorPalette().size());
+}
+
+bool QuotesTab::setIndicators(const QJsonArray& indicators, QString* error)
+{
+    auto fail = [error](const QString& why) { if (error) *error = why; return false; };
+    QJsonArray clean;
+    int smas = 0, emas = 0, macds = 0;
+    QSet<QString> seen;
+    for (const QJsonValue v : indicators) {
+        QJsonObject spec = v.toObject();
+        if (!normalizeIndicator(spec, error)) return false;
+        const QString type = spec.value("type").toString();
+        if (type == "sma" && ++smas > kMaxMovingAverages) return fail(QStringLiteral("At most %1 SMAs can be shown.").arg(kMaxMovingAverages));
+        if (type == "ema" && ++emas > kMaxMovingAverages) return fail(QStringLiteral("At most %1 EMAs can be shown.").arg(kMaxMovingAverages));
+        if (type == "macd" && ++macds > 1) return fail("Only one MACD can be shown.");
+        const QString key = indicatorLabel(spec);
+        if (seen.contains(key)) continue;   // duplicates collapse silently
+        seen.insert(key);
+        clean.append(spec);
+    }
+    // Hand out colours to moving averages that have none, avoiding the ones already taken.
+    m_indicators = QJsonArray();
+    for (const QJsonValue v : clean) {
+        QJsonObject spec = v.toObject();
+        if (spec.value("type").toString() != "macd" && !spec.contains("color")) spec["color"] = nextIndicatorColor();
+        m_indicators.append(spec);
+    }
+    saveIndicators();
+    rebuildIndicatorsMenu();
+    pushOptions();
+    return true;
+}
+
+bool QuotesTab::addIndicator(QJsonObject spec, QString* error)
+{
+    if (!normalizeIndicator(spec, error)) return false;
+    QJsonArray next = m_indicators;
+    // Re-adding an existing MACD replaces its parameters; a same-period MA is a no-op.
+    for (int i = 0; i < next.size(); ++i) {
+        const QJsonObject existing = next.at(i).toObject();
+        if (spec.value("type") == "macd" && existing.value("type") == "macd") { next.removeAt(i); break; }
+        if (indicatorLabel(existing) == indicatorLabel(spec)) return true;
+    }
+    next.append(spec);
+    return setIndicators(next, error);
+}
+
+int QuotesTab::removeIndicators(const QString& rawType, int period)
+{
+    const QString type = rawType.trimmed().toLower();
+    QJsonArray next;
+    int removed = 0;
+    for (const QJsonValue v : m_indicators) {
+        const QJsonObject spec = v.toObject();
+        const bool typeMatch = type == "all" || type.isEmpty() || spec.value("type").toString() == type;
+        const bool periodMatch = period <= 0 || spec.value("period").toInt() == period;
+        if (typeMatch && periodMatch) { ++removed; continue; }
+        next.append(spec);
+    }
+    if (removed) setIndicators(next);
+    return removed;
+}
+
+bool QuotesTab::volumeShown() const { return m_volumeAction->isChecked(); }
+void QuotesTab::setVolumeShown(bool on) { m_volumeAction->setChecked(on); }
+
+QString QuotesTab::indicatorsSummary() const
+{
+    QStringList parts;
+    for (const QJsonValue v : m_indicators) parts << indicatorLabel(v.toObject());
+    return (parts.isEmpty() ? QStringLiteral("none") : parts.join(", ")) + (m_volumeAction->isChecked() ? "; volume on" : "; volume off");
+}
+
+void QuotesTab::loadIndicators()
+{
+    const QSettings settings;
+    QJsonArray list;
+    if (settings.contains(kIndicatorsKey)) {
+        list = QJsonDocument::fromJson(settings.value(kIndicatorsKey).toByteArray()).array();
+    } else {
+        // First run (or upgrade from the fixed SMA/EMA pair): the previous defaults.
+        list.append(QJsonObject{ { "type", "sma" }, { "period", 20 } });
+        list.append(QJsonObject{ { "type", "ema" }, { "period", 50 } });
+    }
+    if (!setIndicators(list)) setIndicators(QJsonArray());
+}
+
+void QuotesTab::saveIndicators() const
+{
+    QSettings().setValue(kIndicatorsKey, QJsonDocument(m_indicators).toJson(QJsonDocument::Compact));
+}
+
+void QuotesTab::rebuildIndicatorsMenu()
+{
+    if (!m_indicatorsMenu) return;
+    m_indicatorsMenu->clear();
+    int smas = 0, emas = 0;
+    bool hasMacd = false;
+    for (const QJsonValue v : m_indicators) {
+        const QString type = v.toObject().value("type").toString();
+        if (type == "sma") ++smas;
+        else if (type == "ema") ++emas;
+        else if (type == "macd") hasMacd = true;
+    }
+    QAction* addSma = m_indicatorsMenu->addAction("Add SMA…", this, [this] { promptAddIndicator("sma"); });
+    addSma->setEnabled(smas < kMaxMovingAverages);
+    addSma->setToolTip(QStringLiteral("Simple moving average of the close (up to %1)").arg(kMaxMovingAverages));
+    QAction* addEma = m_indicatorsMenu->addAction("Add EMA…", this, [this] { promptAddIndicator("ema"); });
+    addEma->setEnabled(emas < kMaxMovingAverages);
+    addEma->setToolTip(QStringLiteral("Exponentially weighted moving average of the close (up to %1)").arg(kMaxMovingAverages));
+    QAction* addMacd = m_indicatorsMenu->addAction(hasMacd ? "Edit MACD…" : "Add MACD…", this, [this] { promptAddIndicator("macd"); });
+    addMacd->setToolTip("Moving average convergence/divergence in its own pane: MACD line, signal line and histogram");
+    m_indicatorsMenu->addSeparator();
+    m_indicatorsMenu->addAction(m_volumeAction);
+    if (!m_indicators.isEmpty()) {
+        m_indicatorsMenu->addSeparator();
+        for (int i = 0; i < m_indicators.size(); ++i) {
+            const QJsonObject spec = m_indicators.at(i).toObject();
+            QMenu* sub = m_indicatorsMenu->addMenu(indicatorLabel(spec));
+            if (spec.contains("color")) sub->setIcon(swatchIcon(spec.value("color").toString()));
+            sub->addAction(spec.value("type").toString() == "macd" ? "Edit parameters…" : "Edit period and colour…", this, [this, i] {
+                if (i >= m_indicators.size()) return;
+                QJsonObject edited = m_indicators.at(i).toObject();
+                if (!editIndicatorDialog(edited, false)) return;
+                QJsonArray next = m_indicators;
+                next[i] = edited;
+                QString error;
+                if (!setIndicators(next, &error)) setStatus(error, ui::StatusKind::Error);
+            });
+            sub->addAction("Remove", this, [this, i] {
+                if (i >= m_indicators.size()) return;
+                QJsonArray next = m_indicators;
+                next.removeAt(i);
+                setIndicators(next);
+            });
+        }
+        m_indicatorsMenu->addSeparator();
+        m_indicatorsMenu->addAction("Remove all indicators", this, [this] { setIndicators(QJsonArray()); });
+    }
+    m_indicatorsMenu->addAction("Restore defaults (SMA 20, EMA 50)", this, [this] {
+        setIndicators(QJsonArray{ QJsonObject{ { "type", "sma" }, { "period", 20 } }, QJsonObject{ { "type", "ema" }, { "period", 50 } } });
+    });
+    m_indicatorsButton->setText(m_indicators.isEmpty() ? QStringLiteral("Indicators ▾") : QStringLiteral("Indicators (%1) ▾").arg(m_indicators.size()));
+    m_indicatorsButton->setToolTip(QStringLiteral("Indicators: %1\nAdd, edit or remove moving averages and the MACD; toggle the volume histogram").arg(indicatorsSummary()));
+}
+
+void QuotesTab::promptAddIndicator(const QString& type)
+{
+    QJsonObject spec{ { "type", type } };
+    if (type == "macd") {
+        for (const QJsonValue v : m_indicators) {
+            if (v.toObject().value("type").toString() == "macd") { spec = v.toObject(); break; }
+        }
+        if (!spec.contains("fast")) { spec["fast"] = 12; spec["slow"] = 26; spec["signal"] = 9; }
+    } else {
+        // Suggest the first common period not already on the chart.
+        QSet<int> used;
+        for (const QJsonValue v : m_indicators) {
+            if (v.toObject().value("type").toString() == type) used.insert(v.toObject().value("period").toInt());
+        }
+        const std::vector<int> common = type == "sma" ? std::vector<int>{ 20, 50, 100, 200, 10 } : std::vector<int>{ 50, 21, 9, 200, 100 };
+        int period = common.front();
+        for (int p : common) { if (!used.contains(p)) { period = p; break; } }
+        spec["period"] = period;
+        spec["color"] = nextIndicatorColor();
+    }
+    if (!editIndicatorDialog(spec, true)) return;
+    QString error;
+    if (!addIndicator(spec, &error)) setStatus(error, ui::StatusKind::Error);
+}
+
+bool QuotesTab::editIndicatorDialog(QJsonObject& spec, bool adding)
+{
+    const QString type = spec.value("type").toString();
+    QDialog dialog(this);
+    dialog.setWindowTitle((adding ? "Add " : "Edit ") + (type == "macd" ? QStringLiteral("MACD") : type.toUpper()));
+    auto* form = new QFormLayout(&dialog);
+    form->setContentsMargins(14, 12, 14, 10);
+    form->setSpacing(8);
+    QSpinBox* period = nullptr;
+    QComboBox* color = nullptr;
+    QSpinBox* fast = nullptr;
+    QSpinBox* slow = nullptr;
+    QSpinBox* signal = nullptr;
+    if (type == "macd") {
+        fast = ui::makeIntSpinBox(&dialog, 2, 200, spec.value("fast").toInt(12));
+        slow = ui::makeIntSpinBox(&dialog, 3, 500, spec.value("slow").toInt(26));
+        signal = ui::makeIntSpinBox(&dialog, 1, 200, spec.value("signal").toInt(9));
+        fast->setToolTip("Fast EMA period (bars)");
+        slow->setToolTip("Slow EMA period (bars); must be longer than the fast period");
+        signal->setToolTip("EMA period of the signal line (bars)");
+        form->addRow("Fast EMA", fast);
+        form->addRow("Slow EMA", slow);
+        form->addRow("Signal", signal);
+    } else {
+        period = ui::makeIntSpinBox(&dialog, 2, 500, spec.value("period").toInt(20));
+        period->setToolTip("Look-back in bars of the current timeframe");
+        form->addRow("Period (bars)", period);
+        color = new QComboBox(&dialog);
+        for (int i = 0; i < indicatorPalette().size(); ++i) color->addItem(swatchIcon(indicatorPalette().at(i)), indicatorPaletteNames().at(i), indicatorPalette().at(i));
+        const int current = static_cast<int>(indicatorPalette().indexOf(spec.value("color").toString().toLower()));
+        color->setCurrentIndex(current >= 0 ? current : 0);
+        form->addRow("Colour", color);
+    }
+    auto* note = new QLabel(&dialog);
+    note->setObjectName("muted");
+    note->setWordWrap(true);
+    note->setText(type == "macd" ? "Drawn in its own pane below the price: MACD line, signal line and histogram. The settings become the default for the next launch."
+                                 : "Drawn over the price. Up to three SMAs and three EMAs can be shown; the set becomes the default for the next launch.");
+    form->addRow(note);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)->setText(adding ? "Add" : "Apply");
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        if (fast && slow && fast->value() >= slow->value()) {
+            note->setText("The fast period must be shorter than the slow period.");
+            return;
+        }
+        dialog.accept();
+    });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return false;
+    if (type == "macd") {
+        spec["fast"] = fast->value();
+        spec["slow"] = slow->value();
+        spec["signal"] = signal->value();
+    } else {
+        spec["period"] = period->value();
+        spec["color"] = color->currentData().toString();
+    }
+    return true;
 }
 
 QString QuotesTab::themeJson() const
@@ -995,8 +1599,10 @@ void QuotesTab::onPageMessage(const QString& kind, const QString& payload)
         if (obj.contains("priceLine")) {
             const QSignalBlocker blocker(m_priceLineCheck);
             m_priceLineCheck->setChecked(obj.value("priceLine").toBool(true));
-            QSettings().setValue("quotes/priceLine", m_priceLineCheck->isChecked());
+            QSettings().setValue(kPriceLineKey, m_priceLineCheck->isChecked());
         }
+        // The user dragged the indicator pane's handle (or toggled expand): remember the height.
+        if (obj.contains("paneHeight")) QSettings().setValue(kPaneHeightKey, std::clamp(obj.value("paneHeight").toDouble(0.24), 0.1, 0.7));
     } else if (kind == "menu") {
         qInfo("[chart] context menu opened on %s", qPrintable(payload));
     } else if (kind == "tool") {
@@ -1022,6 +1628,12 @@ void QuotesTab::debugLegendText(std::function<void(const QString&)> done)
 {
     if (!m_pageReady) { done(QString()); return; }
     m_view->page()->runJavaScript(QStringLiteral("document.getElementById('legend').innerText"), [done](const QVariant& result) { done(result.toString()); });
+}
+
+void QuotesTab::debugTogglePane(std::function<void(int)> done)
+{
+    if (!m_pageReady) { done(-1); return; }
+    m_view->page()->runJavaScript(QStringLiteral("chartApi.togglePaneExpanded()"), [done](const QVariant& result) { done(result.toInt()); });
 }
 
 void QuotesTab::debugStashDrawings(std::function<void(int)> done)

@@ -164,6 +164,7 @@ void MainWindow::assistantContext(std::function<void(const QString&, const QImag
       << ui::number(m_state.market.volatility * 100.0, 2) << "%";
     if (m_state.hasDayChange()) s << ", day change " << ui::number(m_state.dayChange(), 2) << " (" << ui::number(m_state.dayChangePercent(), 2) << "%)";
     s << ".\n";
+    if (!m_state.businessSummary().isEmpty()) s << "Business: " << m_state.businessSummary(400) << "\n";
     s << "Watchlist: " << m_quotes->watchlist().join(", ") << ". Option chains in memory: " << m_store.tickerCount() << " tickers.\n\n";
 
     if (current == m_quotes) {
@@ -219,6 +220,18 @@ std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
     tools.push_back({ "list_drawings", "Returns the charted symbol's drawings as JSON.", schema({}) });
     tools.push_back({ "set_timeframe", "Changes the Quotes chart timeframe.", schema({ { "timeframe", prop("string", "Timeframe", timeframes) } }, { "timeframe" }) });
     tools.push_back({ "set_chart_type", "Changes the Quotes chart style.", schema({ { "type", prop("string", "Style", QJsonArray{ "candles", "bars", "heikin", "line" }) } }, { "type" }) });
+    tools.push_back({ "add_indicator",
+                      "Adds a technical indicator to the Quotes chart (kept as the default for future sessions): an SMA or EMA with a period (at most three of each), or the MACD with fast/slow/signal periods (default 12/26/9; re-adding replaces its parameters).",
+                      schema({ { "type", prop("string", "Indicator", QJsonArray{ "sma", "ema", "macd" }) }, { "period", prop("integer", "Moving-average period in bars (2-500)") },
+                               { "fast", prop("integer", "MACD fast EMA period") }, { "slow", prop("integer", "MACD slow EMA period") }, { "signal", prop("integer", "MACD signal EMA period") } },
+                             { "type" }) });
+    tools.push_back({ "remove_indicator", "Removes indicators from the Quotes chart: by type (optionally a specific moving-average period), or every indicator with type 'all'.",
+                      schema({ { "type", prop("string", "Indicator", QJsonArray{ "sma", "ema", "macd", "all" }) }, { "period", prop("integer", "Only the moving average with this period") } }, { "type" }) });
+    tools.push_back({ "set_indicators", "Replaces the whole indicator set on the Quotes chart and optionally toggles the volume histogram.",
+                      schema({ { "indicators", QJsonObject{ { "type", "array" }, { "description", "List of {type:'sma'|'ema', period} or {type:'macd', fast, slow, signal}" },
+                                                             { "items", QJsonObject{ { "type", "object" } } } } },
+                               { "volume", prop("boolean", "Show the volume histogram") } },
+                             { "indicators" }) });
     tools.push_back({ "get_option_chain",
                       "Returns the loaded option chain's per-expiry summary (ATM implied vol, forward, contract counts) and the visible strike slice. Use show_ticker first for another symbol.",
                       schema({ { "symbol", prop("string", "Ticker (default: the loaded chain)") } }) });
@@ -235,6 +248,14 @@ std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
                       schema({ { "strike", prop("number", "Strike") }, { "expiry_date", prop("string", "Expiry date yyyy-MM-dd") }, { "volatility_percent", prop("number", "Volatility in percent (default: market sigma)") } },
                              { "strike", "expiry_date" }) });
     tools.push_back({ "get_heatmap", "Returns the Heatmap tab's most-active contracts, put-call parity by expiry and the activity grid (CSV).", schema({}) });
+    tools.push_back({ "list_watchlists", "Returns the saved watchlists with their tickers and which one is active.", schema({}) });
+    tools.push_back({ "load_watchlist", "Loads a saved watchlist: the Quotes table switches to it, quotes refresh and its option chains are preloaded into memory.",
+                      schema({ { "name", prop("string", "Watchlist name", QJsonArray::fromStringList(m_quotes->watchlistNames())) } }, { "name" }) });
+    tools.push_back({ "create_watchlist_from_clipboard", "Creates (and loads) a new saved watchlist from the ticker symbols currently on the clipboard (e.g. \"AAPL,NVDA,IBM\").",
+                      schema({ { "name", prop("string", "Name for the watchlist") } }, { "name" }) });
+    tools.push_back({ "create_watchlist", "Creates (and loads) a new saved watchlist from a list of tickers.",
+                      schema({ { "name", prop("string", "Name for the watchlist") }, { "tickers", QJsonObject{ { "type", "array" }, { "items", QJsonObject{ { "type", "string" } } }, { "description", "Ticker symbols" } } } },
+                             { "name", "tickers" }) });
     return tools;
 }
 
@@ -306,6 +327,20 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
     } else if (name == "set_chart_type") {
         if (!m_quotes->setChartType(input.value("type").toString())) return fail("Unknown chart type.");
         done(QStringLiteral("Chart style set to %1.").arg(input.value("type").toString()), false);
+    } else if (name == "add_indicator") {
+        QString error;
+        if (!m_quotes->addIndicator(input, &error)) return fail(error);
+        m_tabs->setCurrentWidget(m_quotes);
+        done(QStringLiteral("Indicators now: %1.").arg(m_quotes->indicatorsSummary()), false);
+    } else if (name == "remove_indicator") {
+        const int removed = m_quotes->removeIndicators(input.value("type").toString(), input.value("period").toInt(0));
+        done(QStringLiteral("%1 indicator(s) removed. Indicators now: %2.").arg(removed).arg(m_quotes->indicatorsSummary()), false);
+    } else if (name == "set_indicators") {
+        QString error;
+        if (!m_quotes->setIndicators(input.value("indicators").toArray(), &error)) return fail(error);
+        if (input.contains("volume")) m_quotes->setVolumeShown(input.value("volume").toBool(true));
+        m_tabs->setCurrentWidget(m_quotes);
+        done(QStringLiteral("Indicators now: %1.").arg(m_quotes->indicatorsSummary()), false);
     } else if (name == "get_option_chain") {
         const QString symbol = symbolArg(m_state.underlyingTicker);
         if (symbol.isEmpty()) return fail("No chain is loaded; call show_ticker with a symbol.");
@@ -347,6 +382,37 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
         done(clip(m_pricer->resultsCsv(), 8000), false);
     } else if (name == "get_heatmap") {
         done(clip(m_heatmap->resultsCsv(), 9000), false);
+    } else if (name == "list_watchlists") {
+        QJsonObject out;
+        out["active"] = m_quotes->activeWatchlistName();
+        QJsonObject lists;
+        for (const QString& n : m_quotes->watchlistNames()) lists[n] = QJsonArray::fromStringList(n == m_quotes->activeWatchlistName() ? m_quotes->watchlist() : QStringList());
+        lists[m_quotes->activeWatchlistName()] = QJsonArray::fromStringList(m_quotes->watchlist());
+        out["watchlists"] = lists;
+        done(out, false);
+    } else if (name == "load_watchlist") {
+        const QString list = input.value("name").toString();
+        if (!m_quotes->loadWatchlistNamed(list)) return fail(QStringLiteral("No watchlist named '%1'. Available: %2").arg(list, m_quotes->watchlistNames().join(", ")));
+        m_tabs->setCurrentWidget(m_quotes);
+        done(QStringLiteral("Watchlist '%1' loaded with %2 tickers: %3. Quotes are refreshing and its option chains are being preloaded.").arg(list).arg(m_quotes->watchlist().size()).arg(m_quotes->watchlist().join(", ")), false);
+    } else if (name == "create_watchlist_from_clipboard") {
+        const QString list = input.value("name").toString().trimmed();
+        const QStringList tickers = m_quotes->clipboardTickers();
+        if (list.isEmpty()) return fail("A name is required.");
+        if (tickers.isEmpty()) return fail("The clipboard holds no ticker symbols.");
+        if (m_quotes->watchlistNames().contains(list)) return fail(QStringLiteral("A watchlist named '%1' already exists.").arg(list));
+        m_quotes->createWatchlist(list, tickers, true);
+        m_tabs->setCurrentWidget(m_quotes);
+        done(QStringLiteral("Watchlist '%1' created from the clipboard with %2 tickers (%3); option chains are being preloaded.").arg(list).arg(tickers.size()).arg(tickers.join(", ")), false);
+    } else if (name == "create_watchlist") {
+        QStringList tickers;
+        for (const QJsonValue v : input.value("tickers").toArray()) tickers << v.toString();
+        const QString list = input.value("name").toString().trimmed();
+        if (list.isEmpty() || tickers.isEmpty()) return fail("A name and at least one ticker are required.");
+        if (m_quotes->watchlistNames().contains(list)) return fail(QStringLiteral("A watchlist named '%1' already exists.").arg(list));
+        m_quotes->createWatchlist(list, tickers, true);
+        m_tabs->setCurrentWidget(m_quotes);
+        done(QStringLiteral("Watchlist '%1' created and loaded with %2 tickers; option chains are being preloaded.").arg(list).arg(m_quotes->watchlist().size()), false);
     } else {
         fail(QStringLiteral("Unknown tool '%1'.").arg(name));
     }
@@ -361,6 +427,38 @@ bool MainWindow::handleLocalCommand(const QString& rawText, QString& feedback)
     const QString lower = text.toLower();
     auto symbolFrom = [](const QString& s) { return s.trimmed().toUpper().remove(QRegularExpression("[^A-Z.]")); };
 
+    // "add a 200 day SMA", "add the 21 EMA", "show the MACD", "remove the 50 day sma", "remove the macd", "remove all indicators"
+    QRegularExpression addIndRe("^(?:please\\s+)?(?:add|show|plot|put|overlay|turn\\s+on)\\s+(?:a\\s+|an\\s+|the\\s+)?(?:(\\d{1,3})\\s*[- ]?\\s*(?:day|bar|period|week|minute)?\\s*(sma|ema|simple\\s+moving\\s+average|exponential\\s+moving\\s+average|moving\\s+average)|(macd)(?:\\s*\\(?\\s*(\\d+)\\s*[,/ ]\\s*(\\d+)\\s*[,/ ]\\s*(\\d+)\\s*\\)?)?)(?:\\s+(?:on|to)\\s+the\\s+chart)?$",
+                               QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = addIndRe.match(text); m.hasMatch()) {
+        QJsonObject spec;
+        if (!m.captured(3).isEmpty()) {
+            spec["type"] = "macd";
+            if (!m.captured(4).isEmpty()) { spec["fast"] = m.captured(4).toInt(); spec["slow"] = m.captured(5).toInt(); spec["signal"] = m.captured(6).toInt(); }
+        } else {
+            const QString kind = m.captured(2).toLower();
+            spec["type"] = kind.startsWith("ema") || kind.startsWith("exponential") ? "ema" : "sma";
+            spec["period"] = m.captured(1).toInt();
+        }
+        QString error;
+        if (!m_quotes->addIndicator(spec, &error)) { feedback = error; return true; }
+        m_tabs->setCurrentWidget(m_quotes);
+        feedback = QStringLiteral("Added %1. Indicators now: %2.").arg(QuotesTab::indicatorLabel(spec), m_quotes->indicatorsSummary());
+        return true;
+    }
+    QRegularExpression removeIndRe("^(?:please\\s+)?(?:remove|hide|delete|turn\\s+off|clear)\\s+(?:the\\s+)?(?:(\\d{1,3})\\s*[- ]?\\s*(?:day|bar|period|week|minute)?\\s*)?(sma|ema|macd|all\\s+indicators|indicators|moving\\s+averages?)(?:\\s+(?:from|on)\\s+the\\s+chart)?$",
+                                  QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = removeIndRe.match(text); m.hasMatch()) {
+        const QString what = m.captured(2).toLower();
+        const int period = m.captured(1).toInt();
+        int removed = 0;
+        if (what.startsWith("all") || what == "indicators") removed = m_quotes->removeIndicators("all");
+        else if (what.startsWith("moving")) removed = m_quotes->removeIndicators("sma", period) + m_quotes->removeIndicators("ema", period);
+        else removed = m_quotes->removeIndicators(what, period);
+        feedback = removed ? QStringLiteral("Removed %1 indicator(s). Indicators now: %2.").arg(removed).arg(m_quotes->indicatorsSummary())
+                           : QStringLiteral("Nothing matched. Indicators now: %1.").arg(m_quotes->indicatorsSummary());
+        return true;
+    }
     // "pull up / show / open / load the option chain(s) for AAPL"
     QRegularExpression chainRe("^(?:please\\s+)?(?:pull\\s+up|show(?:\\s+me)?|open|load|bring\\s+up|display|get)\\s+(?:the\\s+)?(?:options?\\s*chains?|chains?)\\s+(?:for|of|on)\\s+([A-Za-z.]{1,6})$",
                                QRegularExpression::CaseInsensitiveOption);
@@ -402,6 +500,33 @@ bool MainWindow::handleLocalCommand(const QString& rawText, QString& feedback)
         m_volatility->setTicker(symbol);
         m_volatility->fetchAll();
         feedback = QStringLiteral("Loading %1 volatility history (and its chain).").arg(symbol);
+        return true;
+    }
+    // "load / switch to / open (the) <name> watchlist" or "load watchlist <name>"
+    QRegularExpression listRe("^(?:please\\s+)?(?:load|switch\\s+to|open|show(?:\\s+me)?|use)\\s+(?:the\\s+)?(?:watchlist\\s+(.+?)|(.+?)\\s+watchlist)$", QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = listRe.match(text); m.hasMatch()) {
+        const QString wanted = (m.captured(1).isEmpty() ? m.captured(2) : m.captured(1)).trimmed();
+        for (const QString& n : m_quotes->watchlistNames()) {
+            if (n.compare(wanted, Qt::CaseInsensitive) == 0 || n.contains(wanted, Qt::CaseInsensitive)) {
+                m_tabs->setCurrentWidget(m_quotes);
+                m_quotes->loadWatchlistNamed(n);
+                feedback = QStringLiteral("Loaded the “%1” watchlist (%2 tickers); refreshing quotes and preloading its option chains.").arg(n).arg(m_quotes->watchlist().size());
+                return true;
+            }
+        }
+        feedback = QStringLiteral("No watchlist called “%1”. Available: %2.").arg(wanted, m_quotes->watchlistNames().join(", "));
+        return true;
+    }
+    // "create / make / new watchlist from (the) clipboard (called X)"
+    QRegularExpression clipRe("^(?:please\\s+)?(?:create|make|add|new)\\s+(?:a\\s+)?(?:new\\s+)?watchlist\\s+from\\s+(?:the\\s+)?clipboard(?:\\s+(?:called|named)\\s+(.+))?$", QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = clipRe.match(text); m.hasMatch()) {
+        const QStringList tickers = m_quotes->clipboardTickers();
+        if (tickers.isEmpty()) { feedback = "The clipboard holds no ticker symbols; copy text like “AAPL,NVDA,IBM” first."; return true; }
+        QString list = m.captured(1).trimmed();
+        if (list.isEmpty()) list = QStringLiteral("Pasted %1").arg(QDate::currentDate().toString("MMM d HH:mm"));
+        m_quotes->createWatchlist(list, tickers, true);
+        m_tabs->setCurrentWidget(m_quotes);
+        feedback = QStringLiteral("Created and loaded “%1” with %2 tickers from the clipboard: %3. Preloading its option chains.").arg(list).arg(tickers.size()).arg(tickers.join(", "));
         return true;
     }
     if (lower == "clear drawings" || lower == "clear the drawings" || lower == "remove all drawings") {

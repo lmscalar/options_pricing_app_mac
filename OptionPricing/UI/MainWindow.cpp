@@ -64,7 +64,12 @@ void MainWindow::buildUi()
     m_volatility->onRequestChain = [this](const QString& ticker) { showTicker(ticker, false); };
     m_quotes->onOpenInChain = [this](const QString& ticker) { showTicker(ticker, true); };
     m_quotes->onTickerSelected = [this](const QString& ticker) { showTicker(ticker, false); };
-    m_quotes->onWatchlistChanged = [this](const QStringList& watchlist) { m_store.preload(watchlist); };
+    m_quotes->onWatchlistChanged = [this](const QStringList& watchlist) {
+        // Fetch chains for new tickers and refresh any that are older than ten minutes.
+        m_store.preload(watchlist, 10 * 60);
+        statusBar()->showMessage(QStringLiteral("Watchlist “%1”: %2 tickers; %3 option chain download%4 queued.")
+                                     .arg(m_quotes->activeWatchlistName()).arg(watchlist.size()).arg(m_store.pending()).arg(m_store.pending() == 1 ? "" : "s"), 8000);
+    };
     m_store.onProgress = [this](const QString& ticker, int done, int total) {
         statusBar()->showMessage(QStringLiteral("Preloading option chains into memory: %1 of %2 (%3)").arg(done).arg(total).arg(ticker), 6000);
     };
@@ -408,9 +413,16 @@ void MainWindow::updateBanner()
     }
     if (m_state.chainTime.isValid()) meta << QStringLiteral("chain %1").arg(m_state.chainTime.toString("HH:mm:ss"));
     if (!m_state.chainQuotes.empty()) meta << QStringLiteral("%1 contracts").arg(m_state.chainQuotes.size());
-    m_bannerMetaFull = meta.join("  ·  ");
-    m_bannerMeta->setToolTip(m_bannerMetaFull);
-    m_bannerName->setToolTip(m_bannerNameFull);
+    const QString provenance = meta.join("  ·  ");
+    // The line under the company name describes the business; price provenance moves to the
+    // tooltip (it stays visible on the Option Chain tab's header).
+    const QString business = live ? m_state.businessSummary() : QString();
+    m_bannerMetaFull = business.isEmpty() ? provenance : business;
+    QString tip = provenance;
+    if (!m_state.companyDescription.isEmpty()) tip = m_state.companyDescription + "\n\n" + provenance;
+    if (!m_state.industry.isEmpty()) tip = QStringLiteral("Industry: %1\n").arg(m_state.industry) + tip;
+    m_bannerMeta->setToolTip(tip);
+    m_bannerName->setToolTip(m_bannerNameFull + (m_state.exchange.isEmpty() ? QString() : QStringLiteral(" · %1").arg(m_state.exchange)));
     elideBanner();
 }
 
@@ -685,6 +697,33 @@ QStringList MainWindow::captureTabs(const QString& directory)
     m_strategy->loadPreset();
     m_volatility->loadSample();
     {
+        // Named watchlists: create, load back, rename, delete; the preferences end up unchanged.
+        const QString original = m_quotes->activeWatchlistName();
+        const QStringList before = m_quotes->watchlist();
+        const bool created = m_quotes->createWatchlist("Smoke Test", { "MSFT", "GOOG", "META" }, true);
+        qInfo("[screenshot] watchlists: created %s -> active '%s' with %zu tickers; lists: %s", created ? "ok" : "FAILED", qPrintable(m_quotes->activeWatchlistName()),
+              static_cast<size_t>(m_quotes->watchlist().size()), qPrintable(m_quotes->watchlistNames().join(", ")));
+        QGuiApplication::clipboard()->setText("AAPL, NVDA,IBM,ORCL\n$msft  goog;AMZN aapl 123 BRK.B");
+        qInfo("[screenshot] watchlists: clipboard (comma/space text) parses to %s", qPrintable(m_quotes->clipboardTickers().join(" ")));
+        // A spreadsheet block with a header row and extra columns: only the Symbol column counts.
+        QGuiApplication::clipboard()->setText("Symbol\tName\tLast\nAAPL\tApple Inc.\t333.12\nNVDA\tNVIDIA Corp\t230.75\n=\"BRK.B\"\tBerkshire\t512.0\n");
+        qInfo("[screenshot] watchlists: clipboard (sheet block with header) parses to %s", qPrintable(m_quotes->clipboardTickers().join(" ")));
+        QGuiApplication::clipboard()->setText("TSLA\tAMZN\tMSFT\tQQQ");   // a copied row
+        qInfo("[screenshot] watchlists: clipboard (sheet row) parses to %s", qPrintable(m_quotes->clipboardTickers().join(" ")));
+        QGuiApplication::clipboard()->setText("Ticker\nSPY\nIWM\nDIA\n");   // a copied column with a header
+        qInfo("[screenshot] watchlists: clipboard (sheet column) parses to %s", qPrintable(m_quotes->clipboardTickers().join(" ")));
+        QGuiApplication::clipboard()->setText("AAPL, NVDA,IBM,ORCL\n$msft  goog;AMZN aapl 123 BRK.B");
+        const bool pasted = m_quotes->createWatchlistFromText("Smoke Clip", QGuiApplication::clipboard()->text());
+        qInfo("[screenshot] watchlists: created from clipboard %s -> active '%s' with %zu tickers", pasted ? "ok" : "FAILED", qPrintable(m_quotes->activeWatchlistName()), static_cast<size_t>(m_quotes->watchlist().size()));
+        m_quotes->deleteWatchlist("Smoke Clip");
+        const bool renamed = m_quotes->renameWatchlist("Smoke Test", "Smoke Renamed");
+        const bool loadedBack = m_quotes->loadWatchlistNamed(original);
+        const bool deleted = m_quotes->deleteWatchlist("Smoke Renamed");
+        qInfo("[screenshot] watchlists: renamed %s, loaded '%s' back %s (%zu tickers, unchanged: %s), deleted %s; lists now: %s", renamed ? "ok" : "FAILED",
+              qPrintable(original), loadedBack ? "ok" : "FAILED", static_cast<size_t>(m_quotes->watchlist().size()), m_quotes->watchlist() == before ? "yes" : "NO",
+              deleted ? "ok" : "FAILED", qPrintable(m_quotes->watchlistNames().join(", ")));
+    }
+    {
         // Typed requests through the real input widgets (local commands, so no AI key is needed):
         // Enter key, then the Send button.
         m_assistantDock->show();
@@ -806,6 +845,7 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                   qPrintable(m_chain->ticker()), m_state.chainQuotes.size(), qPrintable(m_state.underlyingTicker), qPrintable(m_volatility->ticker()),
                   m_quotes->hasTicker(m_state.underlyingTicker) ? "yes" : "no");
             qInfo("[live-smoke] volatility: %s", qPrintable(m_volatility->summaryText()));
+            qInfo("[live-smoke] banner business line for %s: %s", qPrintable(m_state.underlyingTicker), qPrintable(m_state.businessSummary()));
             {
                 QElapsedTimer clock;
                 clock.start();
@@ -944,6 +984,46 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     oneLine.replace('\n', ' ');
                     qInfo("[live-smoke] quote sync: chart legend: %s", qPrintable(oneLine.left(300)));
                 });
+            }
+            // Indicators: a full set (three SMAs, an EMA and the MACD) rendered to chart-indicators.png,
+            // local add/remove commands, then the user's own set is put back.
+            {
+                const QJsonArray userIndicators = m_quotes->indicators();
+                const bool userVolume = m_quotes->volumeShown();
+                QString error, feedback;
+                const bool ok = m_quotes->setIndicators(QJsonArray{ QJsonObject{ { "type", "sma" }, { "period", 20 } }, QJsonObject{ { "type", "sma" }, { "period", 50 } },
+                                                                    QJsonObject{ { "type", "ema" }, { "period", 21 } }, QJsonObject{ { "type", "macd" }, { "fast", 12 }, { "slow", 26 }, { "signal", 9 } } }, &error);
+                qInfo("[live-smoke] indicators set: %s -> %s", ok ? "ok" : qPrintable(error), qPrintable(m_quotes->indicatorsSummary()));
+                const bool handledAdd = handleLocalCommand("add a 200 day SMA", feedback);
+                qInfo("[live-smoke] local command (add indicator): %s -> %s", handledAdd ? "handled" : "NOT handled", qPrintable(feedback));
+                const bool handledLimit = handleLocalCommand("add the 100 day sma", feedback);
+                qInfo("[live-smoke] local command (fourth SMA, expected refusal): %s -> %s", handledLimit ? "handled" : "NOT handled", qPrintable(feedback));
+                const bool handledMacd = handleLocalCommand("show the MACD (8, 17, 9)", feedback);
+                qInfo("[live-smoke] local command (edit MACD): %s -> %s", handledMacd ? "handled" : "NOT handled", qPrintable(feedback));
+                m_quotes->setVolumeShown(true);
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 800);
+                m_quotes->debugLegendText([](const QString& legend) {
+                    QString oneLine = legend;
+                    oneLine.replace('\n', ' ');
+                    qInfo("[live-smoke] indicators: chart legend: %s", qPrintable(oneLine.left(400)));
+                });
+                // Expand the indicator pane for the screenshot, then put the user's height back.
+                const QVariant userPaneHeight = QSettings().value("quotes/paneHeight");
+                m_quotes->debugTogglePane([](int px) { qInfo("[live-smoke] indicator pane expanded: %d px", px); });
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 600);
+                m_quotes->saveChartImage(shotDir + "/chart-indicators.png", [](const QString& written) {
+                    qInfo("[live-smoke] indicators chart image %s", written.isEmpty() ? "FAILED" : qPrintable(written));
+                });
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 1200);
+                m_quotes->debugTogglePane([](int px) { qInfo("[live-smoke] indicator pane restored: %d px", px); });
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
+                if (userPaneHeight.isValid()) QSettings().setValue("quotes/paneHeight", userPaneHeight);
+                else QSettings().remove("quotes/paneHeight");
+                const bool handledRemove = handleLocalCommand("remove the macd", feedback);
+                qInfo("[live-smoke] local command (remove indicator): %s -> %s", handledRemove ? "handled" : "NOT handled", qPrintable(feedback));
+                m_quotes->setIndicators(userIndicators);
+                m_quotes->setVolumeShown(userVolume);
+                qInfo("[live-smoke] indicators restored: %s", qPrintable(m_quotes->indicatorsSummary()));
             }
             // OPTION_PRICER_AI="OpenAI/gpt-4.1-mini" or "Ollama/llama3.2:latest" selects the provider under test.
             const QString aiOverride = qEnvironmentVariable("OPTION_PRICER_AI");
