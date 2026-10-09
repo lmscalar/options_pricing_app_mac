@@ -14,7 +14,11 @@ const char* const kControllerJs = R"js(
 (function () {
   const state = {
     chart: null, main: null, volume: null,
-    overlays: [],            // [{spec, series, data}] moving averages drawn on the price scale
+    overlays: [],            // indicators drawn on the price scale (entries of state.indicators)
+    // Indicator results computed by the host with TA-Lib: [{id, func, label, shortLabel,
+    // placement:'overlay'|'pane'|'markers', precision, levels, outputs:[{name, short, style,
+    // color, zero, negative, upper, lower, values:[aligned with bars, null = none]}]}].
+    indicators: [],
     // Oscillators (MACD today) live in framed panes below the main chart, each a second
     // chart whose time scale and crosshair are linked to the main one: [{id, spec, el,
     // chart, legendEl, series:{...}, data, syncing}].
@@ -22,9 +26,8 @@ const char* const kControllerJs = R"js(
     bars: [], meta: {}, theme: null, live: null, liveLine: null, liveLineSeries: null, syncingCrosshair: false,
     // indicators: [{type:'sma'|'ema', period, color}, {type:'macd', fast, slow, signal}] (at
     // most three SMAs, three EMAs and one MACD; the host enforces the limits).
-    options: { type: 'candles', indicators: [{ type: 'sma', period: 20 }, { type: 'ema', period: 50 }], volume: true, priceLine: true, paneHeight: 0.24 },
+    options: { type: 'candles', volume: true, priceLine: true, paneHeight: 0.24 },
   };
-  const PALETTE = ['#f59e0b', '#22d3ee', '#a78bfa', '#f472b6', '#34d399', '#fb923c'];
   const container = document.getElementById('chart');
   const panesEl = document.getElementById('panes');
   const legend = document.getElementById('legend');
@@ -55,48 +58,19 @@ const char* const kControllerJs = R"js(
     return out;
   }
 
-  function sma(bars, period) {
-    const out = []; let sum = 0;
-    for (let i = 0; i < bars.length; i++) {
-      sum += bars[i].c;
-      if (i >= period) sum -= bars[i - period].c;
-      if (i >= period - 1) out.push({ t: bars[i].t, value: sum / period });
-    }
-    return out;
+  function paneIndicators() { return state.indicators.filter(i => i && i.placement === 'pane'); }
+  function timeOf(i) { return toTime(state.bars[i].t, !!state.meta.intraday); }
+  function indexOfTime(t) {
+    const intraday = !!state.meta.intraday;
+    for (let i = state.bars.length - 1; i >= 0; i--) { if (sameTime(toTime(state.bars[i].t, intraday), t)) return i; }
+    return -1;
   }
-
-  function ema(bars, period) {
-    const out = []; const k = 2 / (period + 1); let value = null;
-    for (let i = 0; i < bars.length; i++) {
-      value = value === null ? bars[i].c : bars[i].c * k + value * (1 - k);
-      if (i >= period - 1) out.push({ t: bars[i].t, value: value });
-    }
-    return out;
+  function valueAt(values, idx) {
+    if (!values) return undefined;
+    if (idx >= 0) return values[idx];
+    for (let i = values.length - 1; i >= 0; i--) { if (values[i] !== null && values[i] !== undefined) return values[i]; }
+    return undefined;
   }
-
-  // MACD: EMA(fast) − EMA(slow), its EMA(signal) and the histogram (line − signal). EMAs are
-  // seeded with the first close like ema() above; values start once the slow EMA has `slow` bars.
-  function macd(bars, fast, slow, signal) {
-    const emaSeries = (period) => { const out = []; const k = 2 / (period + 1); let v = null; for (const b of bars) { v = v === null ? b.c : b.c * k + v * (1 - k); out.push(v); } return out; };
-    const f = emaSeries(fast), s = emaSeries(slow);
-    const out = []; let sv = null; const ks = 2 / (signal + 1);
-    for (let i = 0; i < bars.length; i++) {
-      if (i < slow - 1) continue;
-      const m = f[i] - s[i];
-      sv = sv === null ? m : m * ks + sv * (1 - ks);
-      const ready = i >= slow - 1 + signal - 1;
-      out.push({ t: bars[i].t, macd: m, signal: ready ? sv : null, hist: ready ? m - sv : null });
-    }
-    return out;
-  }
-
-  function indicatorList() { return Array.isArray(state.options.indicators) ? state.options.indicators : []; }
-  function macdSpec() { return indicatorList().find(i => i && i.type === 'macd') || null; }
-  function indicatorLabel(spec) {
-    if (spec.type === 'macd') return 'MACD ' + spec.fast + '/' + spec.slow + '/' + spec.signal;
-    return spec.type.toUpperCase() + ' ' + spec.period;
-  }
-  function overlayColor(spec, index) { return spec.color || PALETTE[index % PALETTE.length]; }
 
   // Main chart layout: the volume strip, when on, occupies the bottom of the price pane
   // (as on professional platforms); oscillators get their own panes below (see panes).
@@ -104,10 +78,10 @@ const char* const kControllerJs = R"js(
     const vol = !!state.options.volume;
     return vol ? { priceBottom: 0.25, vol: { top: 0.82, bottom: 0 } } : { priceBottom: 0.08, vol: null };
   }
-  function wantedPanes() { return macdSpec() ? ['macd'] : []; }
+  function wantedPanes() { return paneIndicators().map(i => 'ind' + i.id); }
   const PANE_GAP = 8;            // px between the main chart and the first pane (the drag handle), and between panes
   const AXIS_WIDTH = 78;         // fixed right-axis width so the main chart and the panes line up
-  const PANE_DEFAULT = 0.24, PANE_EXPANDED = 0.5, PANE_MIN = 0.1, PANE_MAX = 0.7;
+  const PANE_DEFAULT = 0.24, PANE_EXPANDED = 0.5, PANE_MIN = 0.1, PANE_MAX = 0.65;
   // Pane height as a fraction of the chart area; the user drags the handle or toggles expand,
   // and the host remembers the value (options.paneHeight).
   function paneFraction() {
@@ -115,8 +89,12 @@ const char* const kControllerJs = R"js(
     return isNaN(f) || f <= 0 ? PANE_DEFAULT : Math.max(PANE_MIN, Math.min(PANE_MAX, f));
   }
   function paneHeight() {
+    // Per-pane height from the preferred fraction, but all panes together never take more
+    // than PANE_MAX of the chart, so the price chart keeps room however many panes are open.
     const total = document.body.clientHeight;
-    return Math.max(90, Math.round(total * paneFraction()));
+    const n = Math.max(1, wantedPanes().length);
+    const perPaneCap = Math.floor((total * PANE_MAX - n * PANE_GAP) / n);
+    return Math.max(60, Math.min(Math.round(total * paneFraction()), perPaneCap));
   }
   // Sizes the main chart and the pane strip; the charts follow via their ResizeObservers.
   function applyLayout() {
@@ -318,34 +296,31 @@ const char* const kControllerJs = R"js(
   }
   function syncPaneCrosshair(p) {
     const hovering = p && p.time !== undefined;
+    const idx = hovering ? indexOfTime(p.time) : -1;
     for (const pane of state.panes) {
-      const anchor = pane.series.line || pane.series.hist;
+      const ind = pane.indicator;
+      const anchor = ind && ind.series ? ind.series[0] : null;
       if (!anchor) continue;
-      if (hovering) {
-        const row = pane.data.find(d => sameTime(d.time, p.time));
-        const value = row ? (row.macd !== undefined ? row.macd : row.value) : null;
-        if (value !== null && value !== undefined) pane.chart.setCrosshairPosition(value, p.time, anchor);
-        else pane.chart.clearCrosshairPosition();
-      } else {
-        pane.chart.clearCrosshairPosition();
-      }
+      const value = hovering && ind.outputs.length ? valueAt(ind.outputs[0].values, idx) : null;
+      if (hovering && value !== null && value !== undefined) pane.chart.setCrosshairPosition(value, p.time, anchor);
+      else pane.chart.clearCrosshairPosition();
     }
     updatePaneLegends(hovering ? p.time : null);
   }
   function updatePaneLegends(time) {
     const theme = state.theme;
+    const idx = time === null ? -1 : indexOfTime(time);
     for (const pane of state.panes) {
-      let row = null;
-      if (time !== null) row = pane.data.find(d => sameTime(d.time, time)) || null;
-      if (!row) { for (let i = pane.data.length - 1; i >= 0; i--) { if (pane.data[i].macd !== undefined && pane.data[i].macd !== null) { row = pane.data[i]; break; } } }
-      if (pane.id === 'macd') {
-        const hv = row ? row.hist : undefined;
-        const hcol = (hv === undefined || hv === null) ? theme.text : (hv >= 0 ? theme.up : theme.down);
-        pane.legendEl.innerHTML = '<span class="title" style="color:' + (theme.macd || '#60a5fa') + '">' + pane.title + '</span>'
-          + '<span><b style="color:' + (theme.macd || '#60a5fa') + '">' + fmt(row ? row.macd : undefined, 3) + '</b></span>'
-          + '<span>Signal <b style="color:' + (theme.macdSignal || '#fb923c') + '">' + fmt(row ? row.signal : undefined, 3) + '</b></span>'
-          + '<span>Hist <b style="color:' + hcol + '">' + fmt(hv, 3) + '</b></span>';
+      const ind = pane.indicator;
+      if (!ind) continue;
+      const titleColor = ind.outputs.length ? ind.outputs[0].color : theme.text;
+      let html = '<span class="title" style="color:' + titleColor + '">' + ind.label + '</span>';
+      for (const o of ind.outputs) {
+        const v = valueAt(o.values, idx);
+        const col = o.style === 'hist' ? ((v === undefined || v === null) ? theme.text : (v >= 0 ? theme.up : theme.down)) : o.color;
+        html += '<span>' + (ind.outputs.length > 1 ? o.short + ' ' : '') + '<b style="color:' + col + '">' + fmt(v, ind.precision === undefined ? 3 : ind.precision) + '</b></span>';
       }
+      pane.legendEl.innerHTML = html;
     }
   }
 
@@ -353,45 +328,80 @@ const char* const kControllerJs = R"js(
     for (const key of ['main', 'volume']) {
       if (state[key]) { state.chart.removeSeries(state[key]); state[key] = null; }
     }
-    for (const o of state.overlays) { try { state.chart.removeSeries(o.series); } catch (e) {} }
+    for (const ind of state.overlays) { for (const srs of (ind.series || [])) { try { state.chart.removeSeries(srs); } catch (e) {} } ind.series = []; }
     state.overlays = [];
     removePanes();
   }
 
-  function renderIndicators(bars, intraday) {
+  function seriesData(values) {
+    const out = [];
+    for (let i = 0; i < state.bars.length; i++) {
+      const v = values ? values[i] : null;
+      out.push(v === null || v === undefined ? { time: timeOf(i) } : { time: timeOf(i), value: v });
+    }
+    return out;
+  }
+  function lineStyleFor(style) { return style === 'dash' ? 2 : style === 'dot' ? 1 : style === 'dots' ? 3 : 0; }
+  // One chart series per indicator output, styled from TA-Lib's display hint.
+  function addOutputSeries(chart, out, theme, opts) {
+    const base = Object.assign({ priceLineVisible: false, lastValueVisible: !!opts.lastValue, crosshairMarkerVisible: false }, opts.extra || {});
+    if (out.style === 'hist') {
+      const srs = chart.addHistogramSeries(Object.assign({ base: 0 }, base, { lastValueVisible: false }));
+      srs.setData(state.bars.map((b, i) => {
+        const v = out.values ? out.values[i] : null; const t = timeOf(i);
+        return (v === null || v === undefined) ? { time: t } : { time: t, value: v, color: alpha(v >= 0 ? theme.up : theme.down, 0.65) };
+      }));
+      return srs;
+    }
+    const srs = chart.addLineSeries(Object.assign({ color: out.color, lineWidth: out.style === 'dots' ? 1 : 1, lineStyle: lineStyleFor(out.style) }, base));
+    srs.setData(seriesData(out.values));
+    return srs;
+  }
+
+  function renderIndicators() {
     const theme = state.theme;
-    let slot = 0;
-    for (const spec of indicatorList()) {
-      if (!spec || (spec.type !== 'sma' && spec.type !== 'ema')) continue;
-      const period = Math.max(2, spec.period | 0);
-      const color = overlayColor(spec, slot++);
-      if (bars.length < period) continue;
-      const series = state.chart.addLineSeries({ color: color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-      const data = (spec.type === 'sma' ? sma : ema)(bars, period);
-      series.setData(data.map(p => ({ time: toTime(p.t, intraday), value: p.value })));
-      state.overlays.push({ spec: spec, color: color, series: series, data: data });
+    const markers = [];
+    for (const ind of state.indicators) {
+      if (!ind || !Array.isArray(ind.outputs)) continue;
+      if (ind.placement === 'overlay') {
+        ind.series = ind.outputs.map(o => addOutputSeries(state.chart, o, theme, { lastValue: false }));
+        state.overlays.push(ind);
+      } else if (ind.placement === 'markers') {
+        // Candlestick patterns: +100 bullish below the bar, -100 bearish above it.
+        const o = ind.outputs[0];
+        if (!o || !o.values) continue;
+        for (let i = 0; i < state.bars.length && i < o.values.length; i++) {
+          const v = o.values[i];
+          if (!v) continue;
+          markers.push({ i: i, time: timeOf(i), position: v > 0 ? 'belowBar' : 'aboveBar', color: v > 0 ? theme.up : theme.down, shape: v > 0 ? 'arrowUp' : 'arrowDown', text: ind.shortLabel || ind.label });
+        }
+      } else if (ind.placement === 'pane') {
+        const pane = createPane('ind' + ind.id, ind.label);
+        pane.indicator = ind;
+        const precision = ind.precision === undefined ? 3 : ind.precision;
+        const fmtOpts = { priceFormat: { type: 'price', precision: precision, minMove: Math.pow(10, -precision) } };
+        ind.series = ind.outputs.map(o => addOutputSeries(pane.chart, o, theme, { lastValue: o.style !== 'hist', extra: fmtOpts }));
+        const anchorIndex = ind.outputs.findIndex(o => o.style !== 'hist');
+        const anchor = ind.series[anchorIndex >= 0 ? anchorIndex : 0];
+        if (anchor && ind.outputs.some(o => o.zero || o.negative)) {
+          anchor.createPriceLine({ price: 0, color: alpha(theme.text, 0.35), lineWidth: 1, lineStyle: 3, axisLabelVisible: false });
+        }
+        // Reference levels for bounded oscillators (e.g. RSI 30/70) supplied by the host.
+        if (anchor) for (const lvl of (ind.levels || [])) anchor.createPriceLine({ price: lvl, color: alpha(theme.text, 0.3), lineWidth: 1, lineStyle: 2, axisLabelVisible: false });
+        const range = state.chart.timeScale().getVisibleLogicalRange();
+        if (range) syncPaneRange(range);
+      }
     }
-    const m = macdSpec();
-    if (m) {
-      const fast = Math.max(2, m.fast | 0), slow = Math.max(fast + 1, m.slow | 0), signal = Math.max(1, m.signal | 0);
-      const pane = createPane('macd', indicatorLabel({ type: 'macd', fast: fast, slow: slow, signal: signal }));
-      // Every bar time is present (whitespace before the first MACD value) so the pane's
-      // logical indices match the main chart's and the two time scales stay aligned.
-      const values = bars.length >= slow ? macd(bars, fast, slow, signal) : [];
-      const byT = new Map(values.map(v => [v.t, v]));
-      pane.data = bars.map(b => { const v = byT.get(b.t); const time = toTime(b.t, intraday); return v ? { time: time, macd: v.macd, signal: v.signal, hist: v.hist } : { time: time, macd: null, signal: null, hist: null }; });
-      const fmtOpts = { priceFormat: { type: 'price', precision: 3, minMove: 0.001 }, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false };
-      const hist = pane.chart.addHistogramSeries(Object.assign({ base: 0 }, fmtOpts, { lastValueVisible: false }));
-      hist.setData(pane.data.map(p => p.hist === null ? { time: p.time } : { time: p.time, value: p.hist, color: alpha(p.hist >= 0 ? theme.up : theme.down, 0.65) }));
-      const line = pane.chart.addLineSeries(Object.assign({ color: theme.macd || '#60a5fa', lineWidth: 1 }, fmtOpts));
-      line.setData(pane.data.map(p => p.macd === null ? { time: p.time } : { time: p.time, value: p.macd }));
-      const sig = pane.chart.addLineSeries(Object.assign({ color: theme.macdSignal || '#fb923c', lineWidth: 1 }, fmtOpts));
-      sig.setData(pane.data.map(p => p.signal === null ? { time: p.time } : { time: p.time, value: p.signal }));
-      line.createPriceLine({ price: 0, color: alpha(theme.text, 0.35), lineWidth: 1, lineStyle: 3, axisLabelVisible: false });
-      pane.series = { hist: hist, line: line, signal: sig };
-      const range = state.chart.timeScale().getVisibleLogicalRange();
-      if (range) syncPaneRange(range);
+    if (markers.length && state.main) {
+      // Label the arrows only when there are few of them (and only when several patterns are
+      // on so the label tells them apart); otherwise the names would blanket the bars.
+      markers.sort((a, b) => a.i - b.i);
+      const patternCount = state.indicators.filter(x => x && x.placement === 'markers').length;
+      const withText = markers.length <= 12 && patternCount > 1;
+      state.main.setMarkers(markers.map(m => ({ time: m.time, position: m.position, color: m.color, shape: m.shape, text: withText ? m.text : undefined })));
     }
+    // Only the bottom pane shows the time axis; the others would repeat it.
+    state.panes.forEach((pane, k) => pane.chart.applyOptions({ timeScale: { visible: k === state.panes.length - 1 } }));
     updatePaneLegends(null);
   }
 
@@ -425,7 +435,7 @@ const char* const kControllerJs = R"js(
       state.chart.priceScale('vol').applyOptions({ scaleMargins: lay.vol });
       state.volume.setData(bars.map(b => ({ time: toTime(b.t, intraday), value: b.v, color: alpha(b.c >= b.o ? theme.up : theme.down, 0.45) })));
     }
-    renderIndicators(bars, intraday);
+    renderIndicators();
     applyLiveLine();
     if (fit) {
       // A new symbol or timeframe: back to autoscale so a manually stretched axis never
@@ -512,18 +522,14 @@ const char* const kControllerJs = R"js(
     }
     // Indicator readouts: the hovered bar's value, otherwise the latest one.
     const hovering = param && param.time !== undefined;
-    const valueOf = (series, data, key) => {
-      if (hovering) {
-        const d = param.seriesData.get(series);
-        if (d) return d.value;
-        const row = data.find(x => sameTime(toTime(x.t, !!state.meta.intraday), param.time));
-        return row ? (key ? row[key] : row.value) : undefined;
+    const hoverIdx = hovering ? indexOfTime(param.time) : -1;
+    for (const ind of state.overlays) {
+      if (!ind.outputs.length) continue;
+      html += '<span style="color:' + ind.outputs[0].color + '">' + ind.label;
+      for (const o of ind.outputs) {
+        html += ' <b style="color:' + o.color + '">' + (ind.outputs.length > 1 ? o.short + ' ' : '') + fmt(valueAt(o.values, hoverIdx), ind.precision === undefined ? 2 : ind.precision) + '</b>';
       }
-      for (let i = data.length - 1; i >= 0; i--) { const v = key ? data[i][key] : data[i].value; if (v !== null && v !== undefined) return v; }
-      return undefined;
-    };
-    for (const o of state.overlays) {
-      html += '<span style="color:' + o.color + '">' + indicatorLabel(o.spec) + ' <b>' + fmt(valueOf(o.series, o.data)) + '</b></span>';
+      html += '</span>';
     }
     if (state.meta.asOf) html += '<span class="asof">' + state.meta.asOf + '</span>';
     legend.innerHTML = html;
@@ -834,6 +840,39 @@ const char* const kControllerJs = R"js(
   window.addEventListener('blur', hideMenu);
   window.addEventListener('keydown', e => { if (e.key === 'Escape') hideMenu(); }, true);
 
+  function screenshotImpl() {
+    if (!state.chart || !state.bars.length) return '';
+    // takeScreenshot() paints the chart at its current size, which also refreshes the price
+    // scale's coordinate mapping; the drawing overlay is redrawn after that so a resize
+    // (pane expanded, window changed) that has not been painted yet still exports correctly.
+    const shot = state.chart.takeScreenshot();
+    redraw();
+    if (!D.items.length && !state.panes.length) return shot.toDataURL('image/png');
+    // Main chart with its drawings, then each pane below with a frame, at the screenshot's pixel ratio.
+    const scale = shot.width / Math.max(1, container.clientWidth);
+    const paneShots = state.panes.map(p => p.chart.takeScreenshot());
+    const gap = Math.round(PANE_GAP * scale);
+    const out = document.createElement('canvas');
+    out.width = shot.width;
+    out.height = shot.height + paneShots.reduce((h, s) => h + s.height + gap, 0);
+    const ctx = out.getContext('2d');
+    ctx.fillStyle = state.theme.bg; ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(shot, 0, 0);
+    ctx.drawImage(draw, 0, 0, draw.width, draw.height, 0, 0, shot.width, shot.height);
+    let y = shot.height;
+    paneShots.forEach((s, i) => {
+      y += gap;
+      ctx.drawImage(s, 0, y);
+      ctx.strokeStyle = state.theme.border; ctx.lineWidth = Math.max(1, Math.round(scale));
+      ctx.strokeRect(0.5, y + 0.5, s.width - 1, s.height - 1);
+      // Pane legend text is HTML; repeat it on the image.
+      ctx.font = Math.round(11 * scale) + 'px Menlo, "SF Mono", monospace'; ctx.fillStyle = state.theme.text;
+      ctx.fillText(state.panes[i].legendEl.innerText.replace(/\s+/g, ' '), Math.round(10 * scale), y + Math.round(16 * scale));
+      y += s.height;
+    });
+    return out.toDataURL('image/png');
+    }
+
   window.chartApi = {
     init: function (theme) { state.theme = theme; document.body.style.background = theme.bg; styleMenu(theme); ensureChart(); render(true); },
     setTheme: function (theme) { state.theme = theme; document.body.style.background = theme.bg; styleMenu(theme); if (state.chart) render(false); },
@@ -843,41 +882,14 @@ const char* const kControllerJs = R"js(
       state.bars = payload.bars || []; state.meta = meta; render(true);
     },
     setOptions: function (opts) { state.options = Object.assign(state.options, opts); if (state.chart) render(false); },
+    // Indicator results from the host (see state.indicators); re-renders without changing the zoom.
+    setIndicators: function (list) { state.indicators = Array.isArray(list) ? list : []; if (state.chart) render(false); },
     // Restores autoscale, the default zoom/pan and the cursor tool; bars are re-rendered.
     reset: resetView,
     // Live quote for the charted symbol: {price, previousClose, source, asOf} or null.
     setLive: function (live) { state.live = live || null; if (state.chart && state.main) { applyLiveLine(); updateLegend(null); } },
     screenshot: function () {
-      if (!state.chart || !state.bars.length) return '';
-      // takeScreenshot() paints the chart at its current size, which also refreshes the price
-      // scale's coordinate mapping; the drawing overlay is redrawn after that so a resize
-      // (pane expanded, window changed) that has not been painted yet still exports correctly.
-      const shot = state.chart.takeScreenshot();
-      redraw();
-      if (!D.items.length && !state.panes.length) return shot.toDataURL('image/png');
-      // Main chart with its drawings, then each pane below with a frame, at the screenshot's pixel ratio.
-      const scale = shot.width / Math.max(1, container.clientWidth);
-      const paneShots = state.panes.map(p => p.chart.takeScreenshot());
-      const gap = Math.round(PANE_GAP * scale);
-      const out = document.createElement('canvas');
-      out.width = shot.width;
-      out.height = shot.height + paneShots.reduce((h, s) => h + s.height + gap, 0);
-      const ctx = out.getContext('2d');
-      ctx.fillStyle = state.theme.bg; ctx.fillRect(0, 0, out.width, out.height);
-      ctx.drawImage(shot, 0, 0);
-      ctx.drawImage(draw, 0, 0, draw.width, draw.height, 0, 0, shot.width, shot.height);
-      let y = shot.height;
-      paneShots.forEach((s, i) => {
-        y += gap;
-        ctx.drawImage(s, 0, y);
-        ctx.strokeStyle = state.theme.border; ctx.lineWidth = Math.max(1, Math.round(scale));
-        ctx.strokeRect(0.5, y + 0.5, s.width - 1, s.height - 1);
-        // Pane legend text is HTML; repeat it on the image.
-        ctx.font = Math.round(11 * scale) + 'px Menlo, "SF Mono", monospace'; ctx.fillStyle = state.theme.text;
-        ctx.fillText(state.panes[i].legendEl.innerText.replace(/\s+/g, ' '), Math.round(10 * scale), y + Math.round(16 * scale));
-        y += s.height;
-      });
-      return out.toDataURL('image/png');
+      try { return screenshotImpl(); } catch (e) { notify('log', 'screenshot failed: ' + (e && e.message ? e.message : e)); return ''; }
     },
     barCount: function () { return state.bars.length; },
     // Test hook / UI action: expand or restore the indicator pane; returns its height in px (0 without panes).

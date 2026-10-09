@@ -28,6 +28,7 @@
 		F376168B30787CE400F5524A /* SpeechDictation.mm in Sources */ = {isa = PBXBuildFile; fileRef = F376168A30787CE400F5524A /* SpeechDictation.mm */; };
 		F376168E30787D5600F5524A /* AssistantPanel.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376168D30787D5600F5524A /* AssistantPanel.cpp */; };
 		F376169830787E3800F5524A /* MainWindowAssistant.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376169730787E3800F5524A /* MainWindowAssistant.cpp */; };
+		F37616B330798BCD00F5524A /* SectorHeatmapTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616B230798BCD00F5524A /* SectorHeatmapTab.cpp */; };
 		F3B6FB022988347000563EB6 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3B6FB012988347000563EB6 /* main.cpp */; };
 /* End PBXBuildFile section */
 
@@ -102,6 +103,10 @@
 		F376168C30787D1A00F5524A /* AssistantPanel.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AssistantPanel.h; sourceTree = "<group>"; };
 		F376168D30787D5600F5524A /* AssistantPanel.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AssistantPanel.cpp; sourceTree = "<group>"; };
 		F376169730787E3800F5524A /* MainWindowAssistant.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = MainWindowAssistant.cpp; sourceTree = "<group>"; };
+		F37616A130797D3600F5524A /* TechnicalAnalysis.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TechnicalAnalysis.h; sourceTree = "<group>"; };
+		F37616AE30798AD700F5524A /* Treemap.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Treemap.h; sourceTree = "<group>"; };
+		F37616B130798B0C00F5524A /* SectorHeatmapTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SectorHeatmapTab.h; sourceTree = "<group>"; };
+		F37616B230798BCD00F5524A /* SectorHeatmapTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = SectorHeatmapTab.cpp; sourceTree = "<group>"; };
 		F3B6FAFE2988347000563EB6 /* OptionPricing */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = OptionPricing; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3B6FB012988347000563EB6 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -145,6 +150,8 @@
 				F37616673077EF8F00F5524A /* Activity.h */,
 				F376166B30781BB500F5524A /* ChainStrategy.h */,
 				F3761675307858C400F5524A /* Volatility.h */,
+				F37616A130797D3600F5524A /* TechnicalAnalysis.h */,
+				F37616AE30798AD700F5524A /* Treemap.h */,
 			);
 			path = Pricing;
 			sourceTree = "<group>";
@@ -195,6 +202,8 @@
 				F376168C30787D1A00F5524A /* AssistantPanel.h */,
 				F376168D30787D5600F5524A /* AssistantPanel.cpp */,
 				F376169730787E3800F5524A /* MainWindowAssistant.cpp */,
+				F37616B130798B0C00F5524A /* SectorHeatmapTab.h */,
+				F37616B230798BCD00F5524A /* SectorHeatmapTab.cpp */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -338,6 +347,7 @@
 				F376163D3077248000F5524A /* MarketState.cpp in Sources */,
 				F376167D30786C6A00F5524A /* ChainStore.cpp in Sources */,
 				F376164F307726DE00F5524A /* BatchDialog.cpp in Sources */,
+				F37616B330798BCD00F5524A /* SectorHeatmapTab.cpp in Sources */,
 				F37616713078471300F5524A /* ChartPage.cpp in Sources */,
 				F37616523077272300F5524A /* MainWindow.cpp in Sources */,
 				F37616363077241000F5524A /* Theme.cpp in Sources */,
@@ -363,10 +373,16 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "/opt/homebrew/opt/ta-lib/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"/opt/homebrew/opt/ta-lib/lib",
+				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = "-lta-lib";
 				PRODUCT_BUNDLE_IDENTIFIER = com.luismolina.PricingTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -386,10 +402,16 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
+				HEADER_SEARCH_PATHS = "/opt/homebrew/opt/ta-lib/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"/opt/homebrew/opt/ta-lib/lib",
+				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = "-lta-lib";
 				PRODUCT_BUNDLE_IDENTIFIER = com.luismolina.PricingTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = macosx;
@@ -526,13 +548,17 @@
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
 				"FRAMEWORK_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/lib;
-				HEADER_SEARCH_PATHS = /opt/homebrew/opt/qt/include;
+				HEADER_SEARCH_PATHS = (
+					/opt/homebrew/opt/qt/include,
+					"/opt/homebrew/opt/ta-lib/include",
+				);
 				INFOPLIST_FILE = OptionPricing/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.luis-molina.OptionPricing";
 				LD_RUNPATH_SEARCH_PATHS = "/opt​/homebrew​/opt​/qt​/lib";
 				"LD_RUNPATH_SEARCH_PATHS[arch=*]" = "";
-				LIBRARY_SEARCH_PATHS = /opt/homebrew/opt/qt/lib;
-				"LIBRARY_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/lib;
+				LIBRARY_SEARCH_PATHS = (
+					/opt/homebrew/opt/qt/lib,
+					"/opt/homebrew/opt/ta-lib/lib",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				OTHER_LDFLAGS = (
 					"-framework",
@@ -559,7 +585,9 @@
 					QtWebEngineWidgets,
 					"-framework",
 					QtWebEngineCore,
+					"-lta-lib",
 				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.luis-molina.OptionPricing";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Debug;
@@ -572,13 +600,16 @@
 				DEAD_CODE_STRIPPING = YES;
 				ENABLE_HARDENED_RUNTIME = NO;
 				"FRAMEWORK_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/lib;
-				HEADER_SEARCH_PATHS = /opt/homebrew/opt/qt/include;
-				"HEADER_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/include;
+				HEADER_SEARCH_PATHS = (
+					/opt/homebrew/opt/qt/include,
+					"/opt/homebrew/opt/ta-lib/include",
+				);
 				INFOPLIST_FILE = OptionPricing/Info.plist;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.luis-molina.OptionPricing";
 				LD_RUNPATH_SEARCH_PATHS = "/opt​/homebrew​/opt​/qt​/lib";
-				LIBRARY_SEARCH_PATHS = /opt/homebrew/opt/qt/lib;
-				"LIBRARY_SEARCH_PATHS[arch=*]" = /opt/homebrew/opt/qt/lib;
+				LIBRARY_SEARCH_PATHS = (
+					/opt/homebrew/opt/qt/lib,
+					"/opt/homebrew/opt/ta-lib/lib",
+				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				OTHER_LDFLAGS = (
 					"-framework",
@@ -605,7 +636,9 @@
 					QtWebEngineWidgets,
 					"-framework",
 					QtWebEngineCore,
+					"-lta-lib",
 				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.luis-molina.OptionPricing";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Release;

@@ -467,6 +467,21 @@ void MarketDataClient::fetchQuotes(const QStringList& tickers, std::function<voi
         }, err);
 }
 
+void MarketDataClient::fetchGroupedDaily(const QDate& date, std::function<void(const std::map<QString, double>&)> ok, ErrorHandler err)
+{
+    get(endpoint(QStringLiteral("/v2/aggs/grouped/locale/us/market/stocks/%1").arg(date.toString(Qt::ISODate)), { { "adjusted", "true" } }),
+        [ok](const QJsonObject& body) {
+            std::map<QString, double> closes;
+            for (const QJsonValue v : body["results"].toArray()) {
+                const QJsonObject o = v.toObject();
+                const QString ticker = o["T"].toString();
+                const double close = o["c"].toDouble();
+                if (!ticker.isEmpty() && close > 0.0) closes[ticker] = close;
+            }
+            ok(closes);
+        }, err);
+}
+
 void MarketDataClient::fetchTreasuryCurve(std::function<void(const TreasuryCurve&)> ok, ErrorHandler err)
 {
     get(endpoint("/fed/v1/treasury-yields", { { "limit", "1" }, { "sort", "date.desc" } }),

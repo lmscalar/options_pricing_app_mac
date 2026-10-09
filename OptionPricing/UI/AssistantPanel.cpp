@@ -105,7 +105,7 @@ void AssistantPanel::buildUi()
     statusRow->addWidget(m_status, 1);
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(10, 8, 10, 8);
+    root->setContentsMargins(6, 8, 10, 8);   // slim left edge: the dock sits right against the chart
     root->setSpacing(6);
     root->addLayout(top);
     root->addLayout(second);

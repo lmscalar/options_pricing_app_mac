@@ -12,11 +12,13 @@
 #include "ChainTab.h"
 #include "Formatting.h"
 #include "HeatmapTab.h"
+#include "SectorHeatmapTab.h"
 #include "PricerTab.h"
 #include "QuotesTab.h"
 #include "ScenarioTab.h"
 #include "StrategyTab.h"
 #include "VolatilityTab.h"
+#include "../Pricing/TechnicalAnalysis.h"
 
 #include <QtWidgets/QDockWidget>
 
@@ -65,7 +67,8 @@ const char* kSystemPrompt =
     "user is looking at right now (and, on the Quotes tab, an image of the chart). Ground your analysis in that context and in tool "
     "results; do not invent numbers.\n\n"
     "Tools let you act in the app: switch tabs, load a ticker everywhere (show_ticker), read bars, draw trend lines and shaded "
-    "support/resistance zones on the chart, change the timeframe or chart style, read the option chain, volatility and strategy "
+    "support/resistance zones on the chart, add or remove any TA-Lib technical indicator (list_indicators shows the catalogue by category), "
+    "change the timeframe or chart style, read the option chain, volatility and strategy "
     "figures, set the market volatility, load a strategy preset, or set the pricer's contract. When asked to mark support and "
     "resistance: use the bars (get_bars if you need more history), identify 2-4 price areas where price repeatedly reversed or "
     "consolidated, and call draw_zone for each with a tight low-high range (typically 0.5%-1.5% of price), support below the current "
@@ -97,6 +100,10 @@ void MainWindow::buildAssistant()
     addDockWidget(Qt::RightDockWidgetArea, m_assistantDock);
     resizeDocks({ m_assistantDock }, { 440 }, Qt::Horizontal);
     m_assistantDock->setVisible(QSettings().value("ai.panelVisible", true).toBool());
+    connect(m_assistantDock, &QDockWidget::visibilityChanged, this, [this](bool) { updateCentralMargins(); });
+    connect(m_assistantDock, &QDockWidget::dockLocationChanged, this, [this](Qt::DockWidgetArea) { updateCentralMargins(); });
+    connect(m_assistantDock, &QDockWidget::topLevelChanged, this, [this](bool) { updateCentralMargins(); });
+    updateCentralMargins();
 
     m_assistant->contextProvider = [this](std::function<void(const QString&, const QImage&)> done) { assistantContext(std::move(done)); };
     m_assistant->localCommandHandler = [this](const QString& text, QString& feedback) { return handleLocalCommand(text, feedback); };
@@ -105,6 +112,18 @@ void MainWindow::buildAssistant()
     m_assistant->client().setToolExecutor([this](const QString& name, const QJsonObject& input, AssistantClient::ToolDone done) {
         executeAssistantTool(name, input, std::move(done));
     });
+}
+
+void MainWindow::updateCentralMargins()
+{
+    if (!m_rootLayout) return;
+    // 24 px of breathing room at the window edges, but only 6 px against a docked assistant:
+    // together with the slim dock separator the chart and the chat then sit close together.
+    const bool docked = m_assistantDock && m_assistantDock->isVisible() && !m_assistantDock->isFloating();
+    const Qt::DockWidgetArea area = docked ? dockWidgetArea(m_assistantDock) : Qt::NoDockWidgetArea;
+    const int left = area == Qt::LeftDockWidgetArea ? 6 : 24;
+    const int right = area == Qt::RightDockWidgetArea ? 6 : 24;
+    m_rootLayout->setContentsMargins(left, 16, right, 12);
 }
 
 QString MainWindow::tabNameOf(QWidget* tab) const
@@ -123,6 +142,7 @@ QWidget* MainWindow::tabByName(const QString& name) const
     }
     if (wanted.contains("chain") || wanted.contains("option")) return m_chain;
     if (wanted.contains("vol")) return m_volatility;
+    if (wanted.contains("sector") || wanted.contains("market map") || wanted.contains("treemap")) return m_sectorHeatmap;
     if (wanted.contains("heat")) return m_heatmap;
     if (wanted.contains("quote") || wanted.contains("chart") || wanted.contains("watch")) return m_quotes;
     if (wanted.contains("scenario") || wanted.contains("grid")) return m_scenario;
@@ -175,6 +195,8 @@ void MainWindow::assistantContext(std::function<void(const QString&, const QImag
         s << chainSummary(30) << "\nVisible slice (CSV):\n" << clip(m_chain->resultsCsv(), 7000);
     } else if (current == m_heatmap) {
         s << chainSummary(12) << "\nHeatmap tab (CSV):\n" << clip(m_heatmap->resultsCsv(), 7000);
+    } else if (current == m_sectorHeatmap) {
+        s << m_sectorHeatmap->summaryText() << "\nSector Heatmap (CSV: sector, ticker, name, market cap bn, last, performance %):\n" << clip(m_sectorHeatmap->resultsCsv(), 9000);
     } else if (current == m_strategy) {
         s << "Strategy tab (CSV):\n" << clip(m_strategy->resultsCsv(), 7000) << "\n" << chainSummary(8);
     } else if (current == m_scenario) {
@@ -195,7 +217,7 @@ void MainWindow::assistantContext(std::function<void(const QString&, const QImag
 
 std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
 {
-    const QJsonArray tabs{ "Quotes", "Pricer", "Strategy", "Scenarios", "Option Chain", "Heatmap", "Volatility" };
+    const QJsonArray tabs{ "Quotes", "Pricer", "Strategy", "Scenarios", "Option Chain", "Heatmap", "Sector Heatmap", "Volatility" };
     const QJsonArray timeframes = QJsonArray::fromStringList(m_quotes->timeframeLabels());
     std::vector<AssistantClient::Tool> tools;
     tools.push_back({ "get_screen_context", "Returns a fresh text description of what is on screen now (same format as the [Screen context] block).", schema({}) });
@@ -220,21 +242,30 @@ std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
     tools.push_back({ "list_drawings", "Returns the charted symbol's drawings as JSON.", schema({}) });
     tools.push_back({ "set_timeframe", "Changes the Quotes chart timeframe.", schema({ { "timeframe", prop("string", "Timeframe", timeframes) } }, { "timeframe" }) });
     tools.push_back({ "set_chart_type", "Changes the Quotes chart style.", schema({ { "type", prop("string", "Style", QJsonArray{ "candles", "bars", "heikin", "line" }) } }, { "type" }) });
+    tools.push_back({ "list_indicators",
+                      "Lists the technical-indicator catalogue (TA-Lib) by category: Overlap Studies, Momentum, Volume, Volatility, Price Transform, Cycle, Pattern Recognition, Statistics; each with its parameters and defaults.",
+                      schema({ { "category", prop("string", "Only this category (default: all)") } }) });
     tools.push_back({ "add_indicator",
-                      "Adds a technical indicator to the Quotes chart (kept as the default for future sessions): an SMA or EMA with a period (at most three of each), or the MACD with fast/slow/signal periods (default 12/26/9; re-adding replaces its parameters).",
-                      schema({ { "type", prop("string", "Indicator", QJsonArray{ "sma", "ema", "macd" }) }, { "period", prop("integer", "Moving-average period in bars (2-500)") },
-                               { "fast", prop("integer", "MACD fast EMA period") }, { "slow", prop("integer", "MACD slow EMA period") }, { "signal", prop("integer", "MACD signal EMA period") } },
-                             { "type" }) });
-    tools.push_back({ "remove_indicator", "Removes indicators from the Quotes chart: by type (optionally a specific moving-average period), or every indicator with type 'all'.",
-                      schema({ { "type", prop("string", "Indicator", QJsonArray{ "sma", "ema", "macd", "all" }) }, { "period", prop("integer", "Only the moving average with this period") } }, { "type" }) });
+                      "Adds a TA-Lib technical indicator to the Quotes chart (kept as the default for future sessions). Overlap studies draw on the price, oscillators get their own pane, candlestick patterns mark bars. "
+                      "func is the TA-Lib name (SMA, EMA, BBANDS, RSI, MACD, STOCH, ATR, ADX, OBV, SAR, CDLENGULFING …; see list_indicators); params use TA-Lib names or the aliases period, fast, slow, signal, nbdevup, nbdevdn, matype. "
+                      "Re-adding a pane indicator replaces its parameters; at most three copies of one function.",
+                      schema({ { "func", prop("string", "TA-Lib function name") }, { "params", QJsonObject{ { "type", "object" }, { "description", "Parameter values, e.g. {\"period\": 14} or {\"fast\": 12, \"slow\": 26, \"signal\": 9}" } } },
+                               { "period", prop("integer", "Shorthand for params.period") } },
+                             { "func" }) });
+    tools.push_back({ "remove_indicator", "Removes indicators from the Quotes chart by TA-Lib function name (optionally only the one with a given period), or every indicator with func 'all'.",
+                      schema({ { "func", prop("string", "TA-Lib function name, or 'all'") }, { "period", prop("integer", "Only the copy with this time period") } }, { "func" }) });
     tools.push_back({ "set_indicators", "Replaces the whole indicator set on the Quotes chart and optionally toggles the volume histogram.",
-                      schema({ { "indicators", QJsonObject{ { "type", "array" }, { "description", "List of {type:'sma'|'ema', period} or {type:'macd', fast, slow, signal}" },
+                      schema({ { "indicators", QJsonObject{ { "type", "array" }, { "description", "List of {func, params} objects, e.g. [{\"func\":\"SMA\",\"params\":{\"period\":20}},{\"func\":\"RSI\",\"params\":{\"period\":14}}]" },
                                                              { "items", QJsonObject{ { "type", "object" } } } } },
                                { "volume", prop("boolean", "Show the volume histogram") } },
                              { "indicators" }) });
     tools.push_back({ "get_option_chain",
                       "Returns the loaded option chain's per-expiry summary (ATM implied vol, forward, contract counts) and the visible strike slice. Use show_ticker first for another symbol.",
                       schema({ { "symbol", prop("string", "Ticker (default: the loaded chain)") } }) });
+    tools.push_back({ "get_sector_heatmap",
+                      "Returns sector and stock performance from the Sector Heatmap (large caps grouped by sector, cap-weighted sector moves, top movers and laggards, CSV of every stock) for a period: Daily, 1W, 30D, 90D or YTD. Optionally switches the view to stocks or sectors.",
+                      schema({ { "period", prop("string", "Performance period (default: current)", QJsonArray{ "Daily", "1W", "30D", "90D", "YTD" }) },
+                               { "view", prop("string", "Treemap view", QJsonArray{ "stocks", "sectors" }) } }) });
     tools.push_back({ "get_volatility",
                       "Loads daily history for a symbol on the Volatility tab (if needed) and returns realized vol (several estimators), EWMA, GARCH fit and forecast, the vol cone and implied ATM vol.",
                       schema({ { "symbol", prop("string", "Ticker (default: current)") } }) });
@@ -327,13 +358,26 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
     } else if (name == "set_chart_type") {
         if (!m_quotes->setChartType(input.value("type").toString())) return fail("Unknown chart type.");
         done(QStringLiteral("Chart style set to %1.").arg(input.value("type").toString()), false);
+    } else if (name == "list_indicators") {
+        const QString category = input.value("category").toString().trimmed();
+        QString text = QuotesTab::indicatorCatalogText();
+        if (!category.isEmpty()) {
+            QStringList kept;
+            bool inSection = false;
+            for (const QString& line : text.split('\n')) {
+                if (!line.startsWith("  ")) inSection = line.contains(category, Qt::CaseInsensitive);
+                if (inSection) kept << line;
+            }
+            text = kept.isEmpty() ? QStringLiteral("No category matches '%1'.\n").arg(category) + text : kept.join('\n');
+        }
+        done(text, false);
     } else if (name == "add_indicator") {
         QString error;
         if (!m_quotes->addIndicator(input, &error)) return fail(error);
         m_tabs->setCurrentWidget(m_quotes);
         done(QStringLiteral("Indicators now: %1.").arg(m_quotes->indicatorsSummary()), false);
     } else if (name == "remove_indicator") {
-        const int removed = m_quotes->removeIndicators(input.value("type").toString(), input.value("period").toInt(0));
+        const int removed = m_quotes->removeIndicators(input.value("func").toString(input.value("type").toString()), input.value("period").toInt(0));
         done(QStringLiteral("%1 indicator(s) removed. Indicators now: %2.").arg(removed).arg(m_quotes->indicatorsSummary()), false);
     } else if (name == "set_indicators") {
         QString error;
@@ -349,6 +393,15 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
             if (m_state.underlyingTicker != symbol) return fail(QStringLiteral("%1 is downloading; call get_option_chain again in a moment.").arg(symbol));
         }
         done(chainSummary(40) + "\nVisible slice (CSV):\n" + clip(m_chain->resultsCsv(), 9000), false);
+    } else if (name == "get_sector_heatmap") {
+        const QString period = input.value("period").toString();
+        if (!period.isEmpty() && !m_sectorHeatmap->setPeriod(period)) return fail(QStringLiteral("Unknown period '%1'. Use Daily, 1W, 30D, 90D or YTD.").arg(period));
+        if (input.contains("view")) m_sectorHeatmap->setView(input.value("view").toString());
+        m_tabs->setCurrentWidget(m_sectorHeatmap);
+        // Prices may still be downloading after a period change; give the request a moment.
+        QTimer::singleShot(period.isEmpty() ? 0 : 2500, this, [this, done] {
+            done(m_sectorHeatmap->summaryText() + "\n\nCSV (sector, ticker, name, market cap bn, last, performance %):\n" + clip(m_sectorHeatmap->resultsCsv(), 9000), false);
+        });
     } else if (name == "get_volatility") {
         const QString symbol = symbolArg(m_volatility->ticker().isEmpty() ? m_state.underlyingTicker : m_volatility->ticker());
         if (symbol.isEmpty()) return fail("Pass a symbol.");
@@ -427,37 +480,52 @@ bool MainWindow::handleLocalCommand(const QString& rawText, QString& feedback)
     const QString lower = text.toLower();
     auto symbolFrom = [](const QString& s) { return s.trimmed().toUpper().remove(QRegularExpression("[^A-Z.]")); };
 
-    // "add a 200 day SMA", "add the 21 EMA", "show the MACD", "remove the 50 day sma", "remove the macd", "remove all indicators"
-    QRegularExpression addIndRe("^(?:please\\s+)?(?:add|show|plot|put|overlay|turn\\s+on)\\s+(?:a\\s+|an\\s+|the\\s+)?(?:(\\d{1,3})\\s*[- ]?\\s*(?:day|bar|period|week|minute)?\\s*(sma|ema|simple\\s+moving\\s+average|exponential\\s+moving\\s+average|moving\\s+average)|(macd)(?:\\s*\\(?\\s*(\\d+)\\s*[,/ ]\\s*(\\d+)\\s*[,/ ]\\s*(\\d+)\\s*\\)?)?)(?:\\s+(?:on|to)\\s+the\\s+chart)?$",
+    // Indicators by name through the TA-Lib catalogue: "add a 200 day SMA", "add rsi", "show the
+    // MACD (8, 17, 9)", "add bollinger bands", "plot the engulfing pattern", "remove the 50 day sma",
+    // "remove rsi", "remove all indicators". Unknown names are left to the model.
+    QRegularExpression addIndRe("^(?:please\\s+)?(?:add|show|plot|put|overlay|turn\\s+on|draw)\\s+(?:a\\s+|an\\s+|the\\s+)?(?:(\\d{1,3})\\s*[- ]?\\s*(?:day|bar|period|week|minute)?\\s+)?(.+?)(?:\\s+(?:pattern|patterns))?(?:\\s*\\(\\s*([\\d.]+(?:\\s*[,/ ]\\s*[\\d.]+)*)\\s*\\))?(?:\\s+(?:on|to)\\s+the\\s+chart)?$",
                                QRegularExpression::CaseInsensitiveOption);
     if (const auto m = addIndRe.match(text); m.hasMatch()) {
-        QJsonObject spec;
-        if (!m.captured(3).isEmpty()) {
-            spec["type"] = "macd";
-            if (!m.captured(4).isEmpty()) { spec["fast"] = m.captured(4).toInt(); spec["slow"] = m.captured(5).toInt(); spec["signal"] = m.captured(6).toInt(); }
-        } else {
-            const QString kind = m.captured(2).toLower();
-            spec["type"] = kind.startsWith("ema") || kind.startsWith("exponential") ? "ema" : "sma";
-            spec["period"] = m.captured(1).toInt();
+        const QString func = QuotesTab::resolveIndicatorName(m.captured(2));
+        if (!func.isEmpty()) {
+            QJsonObject spec{ { "func", func } };
+            QJsonObject params;
+            if (!m.captured(1).isEmpty()) params["period"] = m.captured(1).toInt();
+            if (!m.captured(3).isEmpty()) {
+                // "(8, 17, 9)": fill the function's integer parameters in order (fast, slow, signal for MACD).
+                const QStringList numbers = m.captured(3).split(QRegularExpression("[,/ ]+"), Qt::SkipEmptyParts);
+                if (const ta::FunctionInfo* info = ta::catalog().find(func.toStdString())) {
+                    int n = 0;
+                    for (const ta::ParamInfo& p : info->params) {
+                        if (p.advanced || n >= numbers.size()) continue;
+                        params[QString::fromStdString(p.name)] = numbers.at(n++).toDouble();
+                    }
+                }
+            }
+            spec["params"] = params;
+            QString error;
+            if (!m_quotes->addIndicator(spec, &error)) { feedback = error; return true; }
+            m_tabs->setCurrentWidget(m_quotes);
+            feedback = QStringLiteral("Added %1. Indicators now: %2.").arg(QuotesTab::indicatorLabel(spec), m_quotes->indicatorsSummary());
+            return true;
         }
-        QString error;
-        if (!m_quotes->addIndicator(spec, &error)) { feedback = error; return true; }
-        m_tabs->setCurrentWidget(m_quotes);
-        feedback = QStringLiteral("Added %1. Indicators now: %2.").arg(QuotesTab::indicatorLabel(spec), m_quotes->indicatorsSummary());
-        return true;
     }
-    QRegularExpression removeIndRe("^(?:please\\s+)?(?:remove|hide|delete|turn\\s+off|clear)\\s+(?:the\\s+)?(?:(\\d{1,3})\\s*[- ]?\\s*(?:day|bar|period|week|minute)?\\s*)?(sma|ema|macd|all\\s+indicators|indicators|moving\\s+averages?)(?:\\s+(?:from|on)\\s+the\\s+chart)?$",
+    QRegularExpression removeIndRe("^(?:please\\s+)?(?:remove|hide|delete|turn\\s+off|clear)\\s+(?:the\\s+)?(?:(\\d{1,3})\\s*[- ]?\\s*(?:day|bar|period|week|minute)?\\s+)?(.+?)(?:\\s+(?:from|on)\\s+the\\s+chart)?$",
                                   QRegularExpression::CaseInsensitiveOption);
     if (const auto m = removeIndRe.match(text); m.hasMatch()) {
-        const QString what = m.captured(2).toLower();
+        const QString what = m.captured(2).trimmed().toLower();
         const int period = m.captured(1).toInt();
-        int removed = 0;
-        if (what.startsWith("all") || what == "indicators") removed = m_quotes->removeIndicators("all");
-        else if (what.startsWith("moving")) removed = m_quotes->removeIndicators("sma", period) + m_quotes->removeIndicators("ema", period);
-        else removed = m_quotes->removeIndicators(what, period);
-        feedback = removed ? QStringLiteral("Removed %1 indicator(s). Indicators now: %2.").arg(removed).arg(m_quotes->indicatorsSummary())
-                           : QStringLiteral("Nothing matched. Indicators now: %1.").arg(m_quotes->indicatorsSummary());
-        return true;
+        QString func;
+        if (what == "all indicators" || what == "indicators" || what == "every indicator") func = "all";
+        else if (what == "moving averages" || what == "moving average") func = "SMA";
+        else func = QuotesTab::resolveIndicatorName(what);
+        if (!func.isEmpty()) {
+            int removed = m_quotes->removeIndicators(func, period);
+            if (what.startsWith("moving average")) removed += m_quotes->removeIndicators("EMA", period);
+            feedback = removed ? QStringLiteral("Removed %1 indicator(s). Indicators now: %2.").arg(removed).arg(m_quotes->indicatorsSummary())
+                               : QStringLiteral("Nothing matched. Indicators now: %1.").arg(m_quotes->indicatorsSummary());
+            return true;
+        }
     }
     // "pull up / show / open / load the option chain(s) for AAPL"
     QRegularExpression chainRe("^(?:please\\s+)?(?:pull\\s+up|show(?:\\s+me)?|open|load|bring\\s+up|display|get)\\s+(?:the\\s+)?(?:options?\\s*chains?|chains?)\\s+(?:for|of|on)\\s+([A-Za-z.]{1,6})$",

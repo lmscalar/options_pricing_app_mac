@@ -177,7 +177,8 @@ void VolatilityTab::buildUi()
     cards->setSpacing(8);
     int index = 0;
     for (const ui::Card& card : { m_cardRealized, m_cardLong, m_cardEwma, m_cardImplied, m_cardGarchNow, m_cardForecast, m_cardLongRun, m_cardPersistence }) {
-        card.frame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        // Cards share whatever height the sidebar has left, so the column has no dead space.
+        card.frame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         card.frame->setMinimumWidth(120);
         card.title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
         card.value->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
@@ -192,8 +193,7 @@ void VolatilityTab::buildUi()
     sidebarLayout->setContentsMargins(0, 0, 8, 0);
     sidebarLayout->setSpacing(10);
     sidebarLayout->addWidget(controls);
-    sidebarLayout->addLayout(cards);
-    sidebarLayout->addStretch(1);
+    sidebarLayout->addLayout(cards, 1);
     auto* sidebar = new QScrollArea(this);
     sidebar->setWidgetResizable(true);
     sidebar->setFrameShape(QFrame::NoFrame);
@@ -265,10 +265,9 @@ void VolatilityTab::buildUi()
 
     m_coneTable = new QTableWidget(0, ConeColumnCount, this);
     m_coneTable->setHorizontalHeaderLabels({ "Days", "Now", "Pctl", "Min", "Median", "Max" });
-    m_coneTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
-    m_coneTable->horizontalHeader()->setStretchLastSection(true);
+    // Six columns share the pane width evenly (the table spans the cone chart below it).
+    m_coneTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_coneTable->horizontalHeader()->setMinimumSectionSize(40);
-    for (int c = 0; c < ConeColumnCount; ++c) m_coneTable->setColumnWidth(c, c == ConeWindow ? 46 : 54);
     m_coneTable->horizontalHeader()->setObjectName("heatmapHeader");
     m_coneTable->horizontalHeader()->setFixedHeight(26);
     m_coneTable->verticalHeader()->setVisible(false);
@@ -276,8 +275,10 @@ void VolatilityTab::buildUi()
     m_coneTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_coneTable->setSelectionMode(QAbstractItemView::NoSelection);
     m_coneTable->setAlternatingRowColors(true);
-    m_coneTable->setMinimumWidth(200);
+    m_coneTable->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_coneTable->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     m_coneTable->setToolTip("Rolling realized vol per window: latest value, its percentile rank in the history, and the range");
+    fitConeTableHeight();
 
     auto* historyPane = new QWidget(this);
     auto* historyLayout = new QVBoxLayout(historyPane);
@@ -289,8 +290,11 @@ void VolatilityTab::buildUi()
     auto* conePane = new QWidget(this);
     auto* coneLayout = new QVBoxLayout(conePane);
     coneLayout->setContentsMargins(0, 0, 0, 0);
-    coneLayout->setSpacing(2);
+    coneLayout->setSpacing(4);
     coneLayout->addWidget(coneView, 1);
+    // The per-window table sits under the cone chart it summarises, sized to its rows, so the
+    // lower row is two equal chart panes with no half-empty table between them.
+    coneLayout->addWidget(m_coneTable);
     coneLayout->addWidget(m_coneReadout);
 
     auto* forecastPane = new QWidget(this);
@@ -305,13 +309,11 @@ void VolatilityTab::buildUi()
     m_lowerSplitter->setObjectName("quotesSplitter");   // thin vertical grip style
     m_lowerSplitter->setHandleWidth(8);
     m_lowerSplitter->setChildrenCollapsible(false);
-    m_lowerSplitter->addWidget(m_coneTable);
     m_lowerSplitter->addWidget(conePane);
     m_lowerSplitter->addWidget(forecastPane);
-    m_lowerSplitter->setStretchFactor(0, 0);
+    m_lowerSplitter->setStretchFactor(0, 1);
     m_lowerSplitter->setStretchFactor(1, 1);
-    m_lowerSplitter->setStretchFactor(2, 1);
-    m_lowerSplitter->setSizes({ 360, 500, 500 });
+    m_lowerSplitter->setSizes({ 500, 500 });
 
     m_chartSplitter = new QSplitter(Qt::Vertical, this);
     m_chartSplitter->setChildrenCollapsible(false);
@@ -319,7 +321,7 @@ void VolatilityTab::buildUi()
     m_chartSplitter->addWidget(m_lowerSplitter);
     m_chartSplitter->setStretchFactor(0, 1);
     m_chartSplitter->setStretchFactor(1, 1);
-    m_chartSplitter->setSizes({ 400, 400 });
+    m_chartSplitter->setSizes({ 360, 460 });   // the lower row also holds the per-window table
 
     // Sidebar (controls + cards, scrolls when short) on the left; charts take the rest.
     m_rootSplitter = new QSplitter(Qt::Horizontal, this);
@@ -339,13 +341,11 @@ void VolatilityTab::buildUi()
     // Remember the pane sizes and table columns between sessions.
     const QSettings settings;
     for (QSplitter* splitter : { m_rootSplitter, m_chartSplitter, m_lowerSplitter }) {
-        const QByteArray state = settings.value(QStringLiteral("volatility/%1").arg(splitter == m_rootSplitter ? "root" : (splitter == m_chartSplitter ? "charts" : "lower"))).toByteArray();
+        const QByteArray state = settings.value(QStringLiteral("volatility/%1").arg(splitter == m_rootSplitter ? "root" : (splitter == m_chartSplitter ? "charts" : "lower2"))).toByteArray();
         if (!state.isEmpty()) splitter->restoreState(state);
         connect(splitter, &QSplitter::splitterMoved, this, [this](int, int) { saveLayoutState(); });
     }
-    const QByteArray header = settings.value("volatility/coneHeader").toByteArray();
-    if (!header.isEmpty()) m_coneTable->horizontalHeader()->restoreState(header);
-    connect(m_coneTable->horizontalHeader(), &QHeaderView::sectionResized, this, [this](int, int, int) { saveLayoutState(); });
+    QSettings().remove("volatility/coneHeader");   // columns now stretch evenly; nothing to restore
 }
 
 void VolatilityTab::wire()
@@ -659,9 +659,19 @@ void VolatilityTab::updateModelLabel()
     m_modelLabel->setToolTip(QStringLiteral("Data: %1 · mean %2 bp/day · last shock %3%").arg(m_barsSource, ui::number(m_garch.mean * 1e4, 2), ui::number(m_garch.lastResidual * 100.0, 2)));
 }
 
+void VolatilityTab::fitConeTableHeight()
+{
+    // Header plus the rows (at least the seven standard windows, so the sidebar does not
+    // jump when data arrives); no scrolling inside the table.
+    const int rows = std::max(7, m_coneTable->rowCount());
+    const int height = m_coneTable->horizontalHeader()->height() + rows * m_coneTable->verticalHeader()->defaultSectionSize() + 2 * m_coneTable->frameWidth();
+    m_coneTable->setFixedHeight(height);
+}
+
 void VolatilityTab::updateConeTable()
 {
     m_coneTable->setRowCount(static_cast<int>(m_cone.size()));
+    fitConeTableHeight();
     const QColor up(m_theme.up.isEmpty() ? "#22c55e" : m_theme.up);
     const QColor down(m_theme.down.isEmpty() ? "#ef4444" : m_theme.down);
     for (size_t i = 0; i < m_cone.size(); ++i) {
@@ -1004,8 +1014,7 @@ void VolatilityTab::saveLayoutState() const
     QSettings settings;
     settings.setValue("volatility/root", m_rootSplitter->saveState());
     settings.setValue("volatility/charts", m_chartSplitter->saveState());
-    settings.setValue("volatility/lower", m_lowerSplitter->saveState());
-    settings.setValue("volatility/coneHeader", m_coneTable->horizontalHeader()->saveState());
+    settings.setValue("volatility/lower2", m_lowerSplitter->saveState());   // two panes since the table moved to the sidebar
 }
 
 void VolatilityTab::setStatus(const QString& text, ui::StatusKind kind)
@@ -1017,6 +1026,9 @@ void VolatilityTab::setStatus(const QString& text, ui::StatusKind kind)
 void VolatilityTab::applyTheme(const Theme& theme)
 {
     m_theme = theme;
+    // Style the charts even while they are empty: the update functions return early without
+    // data, which used to leave Qt's default white chart background under the dark theme.
+    for (QChart* chart : { m_historyChart, m_coneChart, m_forecastChart }) styleChart(chart, theme);
     updateConeTable();
     updateCharts();
 }

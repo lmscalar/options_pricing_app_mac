@@ -6,8 +6,10 @@
 #include "QuotesTab.h"
 #include "ChartPage.h"
 #include "Formatting.h"
+#include "../Pricing/TechnicalAnalysis.h"
 
 #include <QtCore/QSet>
+#include <QtWidgets/QTreeWidget>
 
 #include <algorithm>
 #include <cmath>
@@ -1252,95 +1254,297 @@ void QuotesTab::pushBars()
     payload["bars"] = bars;
     payload["meta"] = meta;
     runJs(QStringLiteral("chartApi.setBars(%1);").arg(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact))));
+    pushIndicators();
 }
 
 void QuotesTab::pushOptions()
 {
     QJsonObject opts;
     opts["type"] = m_chartType->currentData().toString();
-    opts["indicators"] = m_indicators;
     opts["volume"] = m_volumeAction->isChecked();
     opts["priceLine"] = m_priceLineCheck->isChecked();
     opts["paneHeight"] = QSettings().value(kPaneHeightKey, 0.24).toDouble();   // indicator pane, fraction of the chart height
     runJs(QStringLiteral("chartApi.setOptions(%1);").arg(QString::fromUtf8(QJsonDocument(opts).toJson(QJsonDocument::Compact))));
 }
 
-// ---- Technical indicators -------------------------------------------------------------
+// ---- Technical indicators (TA-Lib) ----------------------------------------------------
 
-QString QuotesTab::indicatorLabel(const QJsonObject& spec)
+namespace {
+
+/// Parameter aliases accepted in specs and commands, mapped to TA-Lib's optional-input names.
+QString canonicalParamName(const ta::FunctionInfo& info, const QString& rawKey)
 {
-    const QString type = spec.value("type").toString();
-    if (type == "macd") {
-        return QStringLiteral("MACD %1/%2/%3").arg(spec.value("fast").toInt(12)).arg(spec.value("slow").toInt(26)).arg(spec.value("signal").toInt(9));
+    QString key = rawKey.toLower();
+    key.remove(QRegularExpression("[\\s_\\-]"));
+    static const QHash<QString, QString> aliases{
+        { "period", "optInTimePeriod" }, { "timeperiod", "optInTimePeriod" }, { "length", "optInTimePeriod" }, { "window", "optInTimePeriod" },
+        { "fast", "optInFastPeriod" }, { "fastperiod", "optInFastPeriod" }, { "slow", "optInSlowPeriod" }, { "slowperiod", "optInSlowPeriod" },
+        { "signal", "optInSignalPeriod" }, { "signalperiod", "optInSignalPeriod" }, { "nbdevup", "optInNbDevUp" }, { "up", "optInNbDevUp" }, { "devup", "optInNbDevUp" },
+        { "nbdevdn", "optInNbDevDn" }, { "down", "optInNbDevDn" }, { "devdn", "optInNbDevDn" }, { "matype", "optInMAType" }, { "type", "optInMAType" },
+        { "acceleration", "optInAcceleration" }, { "maximum", "optInMaximum" }, { "nbdev", "optInNbDev" }, { "deviations", "optInNbDev" },
+        { "fastk", "optInFastK_Period" }, { "fastkperiod", "optInFastK_Period" }, { "slowk", "optInSlowK_Period" }, { "slowkperiod", "optInSlowK_Period" },
+        { "slowd", "optInSlowD_Period" }, { "slowdperiod", "optInSlowD_Period" }, { "fastd", "optInFastD_Period" }, { "fastdperiod", "optInFastD_Period" },
+    };
+    for (const ta::ParamInfo& p : info.params) {
+        QString name = QString::fromStdString(p.name);
+        QString bare = name.startsWith("optIn") ? name.mid(5) : name;
+        QString display = QString::fromStdString(p.displayName);
+        for (QString candidate : { name, bare, display }) {
+            candidate = candidate.toLower().remove(QRegularExpression("[\\s_\\-]"));
+            if (candidate == key) return name;
+        }
     }
-    return QStringLiteral("%1 %2").arg(type.toUpper()).arg(spec.value("period").toInt());
+    const QString alias = aliases.value(key);
+    if (!alias.isEmpty()) {
+        for (const ta::ParamInfo& p : info.params) if (QString::fromStdString(p.name) == alias) return alias;
+    }
+    return QString();
+}
+
+ta::Params paramsFromJson(const ta::FunctionInfo& info, const QJsonObject& object)
+{
+    ta::Params params;
+    for (auto it = object.begin(); it != object.end(); ++it) {
+        const QString name = canonicalParamName(info, it.key());
+        if (name.isEmpty() || !it.value().isDouble()) continue;
+        params[name.toStdString()] = it.value().toDouble();
+    }
+    return params;
+}
+
+QJsonObject paramsToJson(const ta::Params& params)
+{
+    QJsonObject out;
+    for (const auto& [name, value] : params) out[QString::fromStdString(name)] = value;
+    return out;
+}
+
+/// "RealUpperBand" -> "Upper", "MACDSignal" -> "Signal", "SlowK" -> "SlowK", "Real" -> the function name.
+QString shortOutputName(const ta::FunctionInfo& info, const ta::OutputInfo& out)
+{
+    QString name = QString::fromStdString(out.shortName);
+    if (name == QString::fromStdString(info.name)) return name;
+    name.remove(QRegularExpression("^Real"));
+    name.remove("Band");
+    if (name.startsWith(QString::fromStdString(info.name)) && name.size() > static_cast<int>(info.name.size())) name = name.mid(static_cast<int>(info.name.size()));
+    return name.isEmpty() ? QString::fromStdString(out.shortName) : name;
+}
+
+const char* styleName(ta::OutputInfo::Style style)
+{
+    switch (style) {
+    case ta::OutputInfo::Style::DashLine: return "dash";
+    case ta::OutputInfo::Style::DotLine: return "dot";
+    case ta::OutputInfo::Style::Dots: return "dots";
+    case ta::OutputInfo::Style::Histogram: return "hist";
+    case ta::OutputInfo::Style::Pattern: return "pattern";
+    case ta::OutputInfo::Style::Line: break;
+    }
+    return "line";
+}
+
+/// Reference lines for bounded oscillators, drawn dashed in the indicator's pane.
+QJsonArray referenceLevels(const QString& func)
+{
+    static const QHash<QString, QList<double>> levels{
+        { "RSI", { 30, 70 } }, { "STOCH", { 20, 80 } }, { "STOCHF", { 20, 80 } }, { "STOCHRSI", { 20, 80 } }, { "MFI", { 20, 80 } },
+        { "ULTOSC", { 30, 70 } }, { "WILLR", { -20, -80 } }, { "CCI", { 100, -100 } }, { "CMO", { 50, -50 } }, { "ADX", { 25 } }, { "ADXR", { 25 } }, { "DX", { 25 } },
+    };
+    QJsonArray out;
+    for (double v : levels.value(func)) out.append(v);
+    return out;
+}
+
+/// Spoken-name aliases for the most requested indicators (anything else resolves through the catalogue search).
+QString aliasFunction(const QString& loweredName)
+{
+    static const QHash<QString, QString> aliases{
+        { "moving average", "SMA" }, { "simple moving average", "SMA" }, { "sma", "SMA" }, { "exponential moving average", "EMA" }, { "ema", "EMA" }, { "ewma", "EMA" },
+        { "weighted moving average", "WMA" }, { "hull", "HMA" }, { "bollinger", "BBANDS" }, { "bollinger bands", "BBANDS" }, { "bands", "BBANDS" },
+        { "macd", "MACD" }, { "rsi", "RSI" }, { "relative strength", "RSI" }, { "stochastic", "STOCH" }, { "stochastics", "STOCH" }, { "stochastic rsi", "STOCHRSI" },
+        { "atr", "ATR" }, { "average true range", "ATR" }, { "adx", "ADX" }, { "obv", "OBV" }, { "on balance volume", "OBV" }, { "parabolic sar", "SAR" }, { "sar", "SAR" },
+        { "cci", "CCI" }, { "momentum", "MOM" }, { "roc", "ROC" }, { "rate of change", "ROC" }, { "williams", "WILLR" }, { "williams r", "WILLR" }, { "mfi", "MFI" },
+        { "money flow", "MFI" }, { "aroon", "AROON" }, { "ichimoku", "" }, { "engulfing", "CDLENGULFING" }, { "doji", "CDLDOJI" }, { "hammer", "CDLHAMMER" },
+        { "shooting star", "CDLSHOOTINGSTAR" }, { "morning star", "CDLMORNINGSTAR" }, { "evening star", "CDLEVENINGSTAR" }, { "three black crows", "CDL3BLACKCROWS" },
+        { "three white soldiers", "CDL3WHITESOLDIERS" }, { "harami", "CDLHARAMI" }, { "hanging man", "CDLHANGINGMAN" }, { "typical price", "TYPPRICE" },
+        { "standard deviation", "STDDEV" }, { "linear regression", "LINEARREG" }, { "trix", "TRIX" }, { "ppo", "PPO" }, { "apo", "APO" }, { "kama", "KAMA" }, { "tema", "TEMA" }, { "dema", "DEMA" },
+    };
+    return aliases.value(loweredName);
+}
+
+} // namespace
+
+QString QuotesTab::resolveIndicatorName(const QString& text)
+{
+    QString name = text.trimmed().toLower();
+    name.remove(QRegularExpression("\\s+(indicator|oscillator|study|line|lines)$"));
+    name = name.simplified();
+    if (name.isEmpty()) return QString();
+    const ta::Catalog& catalog = ta::catalog();
+    QString compact = name.toUpper();
+    compact.remove(QRegularExpression("[^A-Z0-9]"));
+    if (const ta::FunctionInfo* info = catalog.find(compact.toStdString())) return QString::fromStdString(info->name);
+    const QString alias = aliasFunction(name);
+    if (!alias.isEmpty()) return alias;
+    // Exact description match first ("Relative Strength Index"), then a unique substring match.
+    for (const auto& [key, info] : catalog.functions) {
+        if (QString::fromStdString(info.hint).compare(name, Qt::CaseInsensitive) == 0) return QString::fromStdString(info.name);
+    }
+    const auto matches = catalog.search(name.toStdString());
+    if (matches.size() == 1) return QString::fromStdString(matches.front()->name);
+    return QString();
+}
+
+QString QuotesTab::indicatorCatalogText()
+{
+    const ta::Catalog& catalog = ta::catalog();
+    QString out;
+    QTextStream s(&out);
+    for (const std::string& group : catalog.groups) {
+        s << QString::fromStdString(group) << ":\n";
+        auto functions = catalog.inGroup(group);
+        std::sort(functions.begin(), functions.end(), [](const ta::FunctionInfo* a, const ta::FunctionInfo* b) { return a->name < b->name; });
+        for (const ta::FunctionInfo* info : functions) {
+            s << "  " << QString::fromStdString(info->name) << " – " << QString::fromStdString(info->hint);
+            QStringList params;
+            for (const ta::ParamInfo& p : info->params) {
+                if (p.advanced) continue;
+                QString name = QString::fromStdString(p.name);
+                if (name.startsWith("optIn")) name = name.mid(5);
+                params << QStringLiteral("%1=%2").arg(name).arg(p.kind == ta::ParamInfo::Kind::Real ? QString::number(p.defaultValue) : QString::number(static_cast<int>(p.defaultValue)));
+            }
+            if (!params.isEmpty()) s << " (" << params.join(", ") << ")";
+            s << (info->overlay ? " [overlay]" : (info->candlestick ? " [pattern]" : " [pane]")) << "\n";
+        }
+    }
+    return out;
+}
+
+QString QuotesTab::indicatorLabel(const QJsonObject& rawSpec)
+{
+    QJsonObject spec = rawSpec;
+    if (!normalizeIndicator(spec, nullptr)) return rawSpec.value("func").toString(rawSpec.value("type").toString());
+    const ta::FunctionInfo* info = ta::catalog().find(spec.value("func").toString().toStdString());
+    if (!info) return spec.value("func").toString();
+    return QString::fromStdString(ta::label(*info, paramsFromJson(*info, spec.value("params").toObject())));
 }
 
 bool QuotesTab::normalizeIndicator(QJsonObject& spec, QString* error)
 {
     auto fail = [error](const QString& why) { if (error) *error = why; return false; };
-    const QString type = spec.value("type").toString().trimmed().toLower();
-    QJsonObject out;
-    if (type == "sma" || type == "ema") {
-        const int period = spec.value("period").toInt(spec.value("length").toInt());
-        if (period < 2 || period > 500) return fail(QStringLiteral("%1 period must be between 2 and 500 bars.").arg(type.toUpper()));
-        out["type"] = type;
-        out["period"] = period;
-        const QColor color(spec.value("color").toString());
-        if (color.isValid()) out["color"] = color.name();
-    } else if (type == "macd") {
-        const int fast = spec.value("fast").toInt(12), slow = spec.value("slow").toInt(26), signal = spec.value("signal").toInt(9);
-        if (fast < 2 || fast > 200 || slow < 3 || slow > 500 || signal < 1 || signal > 200) return fail("MACD parameters out of range (fast 2-200, slow 3-500, signal 1-200).");
-        if (fast >= slow) return fail("MACD fast period must be shorter than the slow period.");
-        out["type"] = type;
-        out["fast"] = fast;
-        out["slow"] = slow;
-        out["signal"] = signal;
-    } else {
-        return fail(QStringLiteral("Unknown indicator type '%1'. Use sma, ema or macd.").arg(type));
+    QJsonObject in = spec;
+    // Older specs: {"type":"sma","period":20,"color":c} / {"type":"macd","fast":..,"slow":..,"signal":..}
+    if (!in.contains("func") && in.contains("type")) {
+        const QString type = in.value("type").toString().trimmed().toLower();
+        QJsonObject params = in.value("params").toObject();
+        if (type == "sma" || type == "ema") {
+            in["func"] = type.toUpper();
+            if (in.contains("period")) params["optInTimePeriod"] = in.value("period");
+        } else if (type == "macd") {
+            in["func"] = "MACD";
+            if (in.contains("fast")) params["optInFastPeriod"] = in.value("fast");
+            if (in.contains("slow")) params["optInSlowPeriod"] = in.value("slow");
+            if (in.contains("signal")) params["optInSignalPeriod"] = in.value("signal");
+        } else {
+            in["func"] = in.value("type").toString();
+        }
+        in["params"] = params;
+        if (in.contains("color") && !in.contains("colors")) in["colors"] = QJsonArray{ in.value("color") };
     }
+    // Loose top-level parameters (assistant tools): period / fast / slow / signal …
+    QJsonObject params = in.value("params").toObject();
+    for (const char* key : { "period", "fast", "slow", "signal", "nbdevup", "nbdevdn", "matype", "timeperiod" }) {
+        if (in.contains(key) && !params.contains(key)) params[key] = in.value(key);
+    }
+    const QString funcName = in.value("func").toString().trimmed();
+    if (funcName.isEmpty()) return fail("An indicator needs a TA-Lib function name (e.g. SMA, RSI, BBANDS, MACD).");
+    const ta::FunctionInfo* info = ta::catalog().find(funcName.toStdString());
+    if (!info) {
+        const QString resolved = resolveIndicatorName(funcName);
+        if (resolved.isEmpty()) return fail(QStringLiteral("Unknown indicator '%1'. Use a TA-Lib function name such as SMA, EMA, BBANDS, RSI, MACD, ATR, OBV or a candlestick pattern like CDLENGULFING.").arg(funcName));
+        info = ta::catalog().find(resolved.toStdString());
+    }
+    const ta::Params normalized = ta::normalizedParams(*info, paramsFromJson(*info, params));
+    // MACD-style sanity: a fast period at or above the slow one is almost certainly a mistake.
+    if (normalized.count("optInFastPeriod") && normalized.count("optInSlowPeriod") && normalized.at("optInFastPeriod") >= normalized.at("optInSlowPeriod")) {
+        return fail(QStringLiteral("%1: the fast period must be shorter than the slow period.").arg(QString::fromStdString(info->name)));
+    }
+    QJsonArray colors;
+    for (const QJsonValue v : in.value("colors").toArray()) {
+        const QColor c(v.toString());
+        colors.append(c.isValid() ? c.name() : QString());
+    }
+    while (colors.size() > static_cast<int>(info->outputs.size())) colors.removeLast();
+    QJsonObject out;
+    out["func"] = QString::fromStdString(info->name);
+    out["params"] = paramsToJson(normalized);
+    if (!colors.isEmpty()) out["colors"] = colors;
     spec = out;
     return true;
 }
 
-QString QuotesTab::nextIndicatorColor() const
+QStringList QuotesTab::unusedIndicatorColors(int count) const
 {
     QSet<QString> used;
-    for (const QJsonValue v : m_indicators) used.insert(v.toObject().value("color").toString().toLower());
-    for (const QString& color : indicatorPalette()) {
-        if (!used.contains(color)) return color;
+    for (const QJsonValue v : m_indicators) {
+        for (const QJsonValue c : v.toObject().value("colors").toArray()) used.insert(c.toString().toLower());
     }
-    return indicatorPalette().at(m_indicators.size() % indicatorPalette().size());
+    QStringList out;
+    for (const QString& color : indicatorPalette()) {
+        if (!used.contains(color)) out << color;
+        if (out.size() >= count) return out;
+    }
+    int i = 0;
+    while (out.size() < count) out << indicatorPalette().at((m_indicators.size() + i++) % indicatorPalette().size());
+    return out;
 }
 
 bool QuotesTab::setIndicators(const QJsonArray& indicators, QString* error)
 {
     auto fail = [error](const QString& why) { if (error) *error = why; return false; };
     QJsonArray clean;
-    int smas = 0, emas = 0, macds = 0;
+    QHash<QString, int> perFunction;
+    int panes = 0;
     QSet<QString> seen;
     for (const QJsonValue v : indicators) {
         QJsonObject spec = v.toObject();
         if (!normalizeIndicator(spec, error)) return false;
-        const QString type = spec.value("type").toString();
-        if (type == "sma" && ++smas > kMaxMovingAverages) return fail(QStringLiteral("At most %1 SMAs can be shown.").arg(kMaxMovingAverages));
-        if (type == "ema" && ++emas > kMaxMovingAverages) return fail(QStringLiteral("At most %1 EMAs can be shown.").arg(kMaxMovingAverages));
-        if (type == "macd" && ++macds > 1) return fail("Only one MACD can be shown.");
+        const QString func = spec.value("func").toString();
+        const ta::FunctionInfo* info = ta::catalog().find(func.toStdString());
         const QString key = indicatorLabel(spec);
         if (seen.contains(key)) continue;   // duplicates collapse silently
         seen.insert(key);
+        if (++perFunction[func] > kMaxPerFunction) return fail(QStringLiteral("At most %1 copies of %2 can be shown.").arg(kMaxPerFunction).arg(func));
+        if (info && !info->overlay && !info->candlestick && ++panes > kMaxPanes) return fail(QStringLiteral("At most %1 indicators can have their own pane; remove one first.").arg(kMaxPanes));
+        if (clean.size() >= kMaxIndicators) return fail(QStringLiteral("At most %1 indicators can be shown.").arg(kMaxIndicators));
         clean.append(spec);
     }
-    // Hand out colours to moving averages that have none, avoiding the ones already taken.
+    // Colours: keep what was chosen, fill the rest from the palette avoiding colours in use.
     m_indicators = QJsonArray();
     for (const QJsonValue v : clean) {
         QJsonObject spec = v.toObject();
-        if (spec.value("type").toString() != "macd" && !spec.contains("color")) spec["color"] = nextIndicatorColor();
+        const ta::FunctionInfo* info = ta::catalog().find(spec.value("func").toString().toStdString());
+        const int outputs = info ? static_cast<int>(info->outputs.size()) : 1;
+        QJsonArray colors = spec.value("colors").toArray();
+        int missing = 0;
+        for (int k = 0; k < outputs; ++k) if (k >= colors.size() || colors.at(k).toString().isEmpty()) ++missing;
+        if (missing) {
+            m_indicators.append(spec);   // so unusedIndicatorColors() sees the colours already fixed
+            const QStringList fresh = unusedIndicatorColors(missing);
+            m_indicators.removeLast();
+            int next = 0;
+            QJsonArray filled;
+            for (int k = 0; k < outputs; ++k) {
+                const QString c = k < colors.size() ? colors.at(k).toString() : QString();
+                filled.append(c.isEmpty() ? fresh.value(next++) : c);
+            }
+            spec["colors"] = filled;
+        }
         m_indicators.append(spec);
     }
     saveIndicators();
     rebuildIndicatorsMenu();
-    pushOptions();
+    pushIndicators();
     return true;
 }
 
@@ -1348,26 +1552,30 @@ bool QuotesTab::addIndicator(QJsonObject spec, QString* error)
 {
     if (!normalizeIndicator(spec, error)) return false;
     QJsonArray next = m_indicators;
-    // Re-adding an existing MACD replaces its parameters; a same-period MA is a no-op.
+    const QString label = indicatorLabel(spec);
+    const QString func = spec.value("func").toString();
+    const ta::FunctionInfo* info = ta::catalog().find(func.toStdString());
     for (int i = 0; i < next.size(); ++i) {
         const QJsonObject existing = next.at(i).toObject();
-        if (spec.value("type") == "macd" && existing.value("type") == "macd") { next.removeAt(i); break; }
-        if (indicatorLabel(existing) == indicatorLabel(spec)) return true;
+        if (indicatorLabel(existing) == label) return true;   // already there
+        // A single-copy pane indicator (MACD, RSI …) re-added with new parameters replaces the old one.
+        if (info && !info->overlay && !info->candlestick && existing.value("func").toString() == func) { next.removeAt(i); break; }
     }
     next.append(spec);
     return setIndicators(next, error);
 }
 
-int QuotesTab::removeIndicators(const QString& rawType, int period)
+int QuotesTab::removeIndicators(const QString& rawFunc, int period)
 {
-    const QString type = rawType.trimmed().toLower();
+    QString func = rawFunc.trimmed().toUpper();
+    if (func != "ALL" && !func.isEmpty() && !ta::catalog().find(func.toStdString())) func = resolveIndicatorName(rawFunc).toUpper();
     QJsonArray next;
     int removed = 0;
     for (const QJsonValue v : m_indicators) {
         const QJsonObject spec = v.toObject();
-        const bool typeMatch = type == "all" || type.isEmpty() || spec.value("type").toString() == type;
-        const bool periodMatch = period <= 0 || spec.value("period").toInt() == period;
-        if (typeMatch && periodMatch) { ++removed; continue; }
+        const bool funcMatch = func == "ALL" || func.isEmpty() || spec.value("func").toString() == func;
+        const bool periodMatch = period <= 0 || qRound(spec.value("params").toObject().value("optInTimePeriod").toDouble()) == period;
+        if (funcMatch && periodMatch) { ++removed; continue; }
         next.append(spec);
     }
     if (removed) setIndicators(next);
@@ -1391,9 +1599,8 @@ void QuotesTab::loadIndicators()
     if (settings.contains(kIndicatorsKey)) {
         list = QJsonDocument::fromJson(settings.value(kIndicatorsKey).toByteArray()).array();
     } else {
-        // First run (or upgrade from the fixed SMA/EMA pair): the previous defaults.
-        list.append(QJsonObject{ { "type", "sma" }, { "period", 20 } });
-        list.append(QJsonObject{ { "type", "ema" }, { "period", 50 } });
+        list.append(QJsonObject{ { "func", "SMA" }, { "params", QJsonObject{ { "optInTimePeriod", 20 } } } });
+        list.append(QJsonObject{ { "func", "EMA" }, { "params", QJsonObject{ { "optInTimePeriod", 50 } } } });
     }
     if (!setIndicators(list)) setIndicators(QJsonArray());
 }
@@ -1403,26 +1610,88 @@ void QuotesTab::saveIndicators() const
     QSettings().setValue(kIndicatorsKey, QJsonDocument(m_indicators).toJson(QJsonDocument::Compact));
 }
 
+void QuotesTab::pushIndicators()
+{
+    QJsonArray payload;
+    if (!m_bars.bars.empty()) {
+        ta::Bars bars;
+        bars.open.reserve(m_bars.bars.size());
+        for (const MarketDataClient::Bar& b : m_bars.bars) {
+            bars.open.push_back(b.open);
+            bars.high.push_back(b.high);
+            bars.low.push_back(b.low);
+            bars.close.push_back(b.close);
+            bars.volume.push_back(b.volume);
+        }
+        for (int i = 0; i < m_indicators.size(); ++i) {
+            const QJsonObject spec = m_indicators.at(i).toObject();
+            const QString func = spec.value("func").toString();
+            const ta::FunctionInfo* info = ta::catalog().find(func.toStdString());
+            if (!info) continue;
+            const ta::Params params = paramsFromJson(*info, spec.value("params").toObject());
+            const ta::Result result = ta::compute(func.toStdString(), bars, params);
+            if (!result.ok) {
+                qWarning("[indicators] %s: %s", qPrintable(func), result.error.c_str());
+                continue;
+            }
+            const QJsonArray colors = spec.value("colors").toArray();
+            double maxAbs = 0.0;
+            QJsonArray outputs;
+            for (size_t k = 0; k < result.outputs.size(); ++k) {
+                const ta::Series& series = result.outputs[k];
+                QJsonArray values;
+                for (double v : series.values) {
+                    if (std::isnan(v)) { values.append(QJsonValue::Null); continue; }
+                    maxAbs = std::max(maxAbs, std::fabs(v));
+                    values.append(std::round(v * 1e5) / 1e5);
+                }
+                QJsonObject out;
+                out["name"] = QString::fromStdString(series.info.shortName);
+                out["short"] = shortOutputName(*info, series.info);
+                out["style"] = styleName(series.info.style);
+                out["color"] = k < static_cast<size_t>(colors.size()) ? colors.at(static_cast<int>(k)).toString() : indicatorPalette().at(static_cast<int>(k) % indicatorPalette().size());
+                out["zero"] = series.info.hasZero;
+                out["negative"] = series.info.canBeNegative;
+                out["upper"] = series.info.upperLimit;
+                out["lower"] = series.info.lowerLimit;
+                out["values"] = values;
+                outputs.append(out);
+            }
+            QJsonObject item;
+            item["id"] = i;
+            item["func"] = func;
+            item["label"] = QString::fromStdString(ta::label(*info, params));
+            QString shortLabel = QString::fromStdString(info->hint);
+            if (shortLabel.size() > 16) shortLabel = shortLabel.left(15).trimmed() + "…";
+            item["shortLabel"] = shortLabel;
+            item["placement"] = info->candlestick ? "markers" : (info->overlay ? "overlay" : "pane");
+            item["precision"] = info->overlay ? 2 : (maxAbs >= 1000.0 ? 0 : (maxAbs >= 100.0 ? 1 : (maxAbs >= 10.0 ? 2 : 3)));
+            item["levels"] = referenceLevels(func);
+            item["outputs"] = outputs;
+            payload.append(item);
+        }
+    }
+    runJs(QStringLiteral("chartApi.setIndicators(%1);").arg(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact))));
+}
+
 void QuotesTab::rebuildIndicatorsMenu()
 {
     if (!m_indicatorsMenu) return;
     m_indicatorsMenu->clear();
-    int smas = 0, emas = 0;
-    bool hasMacd = false;
-    for (const QJsonValue v : m_indicators) {
-        const QString type = v.toObject().value("type").toString();
-        if (type == "sma") ++smas;
-        else if (type == "ema") ++emas;
-        else if (type == "macd") hasMacd = true;
+    m_indicatorsMenu->addAction("Browse indicators…", this, [this] { promptBrowseIndicators(); });
+    m_indicatorsMenu->addSeparator();
+    // One submenu per TA-Lib category.
+    const ta::Catalog& catalog = ta::catalog();
+    for (const std::string& group : catalog.groups) {
+        QMenu* sub = m_indicatorsMenu->addMenu(QString::fromStdString(group));
+        auto functions = catalog.inGroup(group);
+        std::sort(functions.begin(), functions.end(), [](const ta::FunctionInfo* a, const ta::FunctionInfo* b) { return a->name < b->name; });
+        for (const ta::FunctionInfo* info : functions) {
+            const QString name = QString::fromStdString(info->name);
+            QAction* action = sub->addAction(QString::fromStdString(info->displayName()), this, [this, name] { promptAddIndicator(name); });
+            action->setToolTip(info->overlay ? "Drawn over the price" : (info->candlestick ? "Marks bars where the pattern occurs" : "Drawn in its own pane below the price"));
+        }
     }
-    QAction* addSma = m_indicatorsMenu->addAction("Add SMA…", this, [this] { promptAddIndicator("sma"); });
-    addSma->setEnabled(smas < kMaxMovingAverages);
-    addSma->setToolTip(QStringLiteral("Simple moving average of the close (up to %1)").arg(kMaxMovingAverages));
-    QAction* addEma = m_indicatorsMenu->addAction("Add EMA…", this, [this] { promptAddIndicator("ema"); });
-    addEma->setEnabled(emas < kMaxMovingAverages);
-    addEma->setToolTip(QStringLiteral("Exponentially weighted moving average of the close (up to %1)").arg(kMaxMovingAverages));
-    QAction* addMacd = m_indicatorsMenu->addAction(hasMacd ? "Edit MACD…" : "Add MACD…", this, [this] { promptAddIndicator("macd"); });
-    addMacd->setToolTip("Moving average convergence/divergence in its own pane: MACD line, signal line and histogram");
     m_indicatorsMenu->addSeparator();
     m_indicatorsMenu->addAction(m_volumeAction);
     if (!m_indicators.isEmpty()) {
@@ -1430,8 +1699,9 @@ void QuotesTab::rebuildIndicatorsMenu()
         for (int i = 0; i < m_indicators.size(); ++i) {
             const QJsonObject spec = m_indicators.at(i).toObject();
             QMenu* sub = m_indicatorsMenu->addMenu(indicatorLabel(spec));
-            if (spec.contains("color")) sub->setIcon(swatchIcon(spec.value("color").toString()));
-            sub->addAction(spec.value("type").toString() == "macd" ? "Edit parameters…" : "Edit period and colour…", this, [this, i] {
+            const QJsonArray colors = spec.value("colors").toArray();
+            if (!colors.isEmpty()) sub->setIcon(swatchIcon(colors.first().toString()));
+            sub->addAction("Edit parameters and colours…", this, [this, i] {
                 if (i >= m_indicators.size()) return;
                 QJsonObject edited = m_indicators.at(i).toObject();
                 if (!editIndicatorDialog(edited, false)) return;
@@ -1451,97 +1721,199 @@ void QuotesTab::rebuildIndicatorsMenu()
         m_indicatorsMenu->addAction("Remove all indicators", this, [this] { setIndicators(QJsonArray()); });
     }
     m_indicatorsMenu->addAction("Restore defaults (SMA 20, EMA 50)", this, [this] {
-        setIndicators(QJsonArray{ QJsonObject{ { "type", "sma" }, { "period", 20 } }, QJsonObject{ { "type", "ema" }, { "period", 50 } } });
+        setIndicators(QJsonArray{ QJsonObject{ { "func", "SMA" }, { "params", QJsonObject{ { "optInTimePeriod", 20 } } } },
+                                  QJsonObject{ { "func", "EMA" }, { "params", QJsonObject{ { "optInTimePeriod", 50 } } } } });
     });
-    m_indicatorsButton->setText(m_indicators.isEmpty() ? QStringLiteral("Indicators ▾") : QStringLiteral("Indicators (%1) ▾").arg(m_indicators.size()));
-    m_indicatorsButton->setToolTip(QStringLiteral("Indicators: %1\nAdd, edit or remove moving averages and the MACD; toggle the volume histogram").arg(indicatorsSummary()));
+    m_indicatorsButton->setText(QStringLiteral("Indicators ▾"));   // the active set is listed in the menu and the tooltip
+    m_indicatorsButton->setToolTip(QStringLiteral("%1 active: %2\nTA-Lib catalogue by category; browse, add, edit or remove indicators; toggle the volume histogram")
+                                       .arg(m_indicators.size()).arg(indicatorsSummary()));
 }
 
-void QuotesTab::promptAddIndicator(const QString& type)
+void QuotesTab::promptAddIndicator(const QString& func)
 {
-    QJsonObject spec{ { "type", type } };
-    if (type == "macd") {
-        for (const QJsonValue v : m_indicators) {
-            if (v.toObject().value("type").toString() == "macd") { spec = v.toObject(); break; }
-        }
-        if (!spec.contains("fast")) { spec["fast"] = 12; spec["slow"] = 26; spec["signal"] = 9; }
-    } else {
-        // Suggest the first common period not already on the chart.
+    const ta::FunctionInfo* info = ta::catalog().find(func.toStdString());
+    if (!info) { setStatus(QStringLiteral("Unknown indicator %1.").arg(func), ui::StatusKind::Error); return; }
+    QJsonObject spec{ { "func", QString::fromStdString(info->name) }, { "params", paramsToJson(ta::normalizedParams(*info, {})) } };
+    // Suggest a period not already on the chart for moving averages (20, 50, 100, 200 …).
+    if (info->overlay && info->params.size() == 1 && info->params[0].name == "optInTimePeriod") {
         QSet<int> used;
         for (const QJsonValue v : m_indicators) {
-            if (v.toObject().value("type").toString() == type) used.insert(v.toObject().value("period").toInt());
+            const QJsonObject other = v.toObject();
+            if (other.value("func").toString() == spec.value("func").toString()) used.insert(qRound(other.value("params").toObject().value("optInTimePeriod").toDouble()));
         }
-        const std::vector<int> common = type == "sma" ? std::vector<int>{ 20, 50, 100, 200, 10 } : std::vector<int>{ 50, 21, 9, 200, 100 };
-        int period = common.front();
-        for (int p : common) { if (!used.contains(p)) { period = p; break; } }
-        spec["period"] = period;
-        spec["color"] = nextIndicatorColor();
+        for (int p : { 20, 50, 100, 200, 10 }) { if (!used.contains(p)) { QJsonObject params = spec.value("params").toObject(); params["optInTimePeriod"] = p; spec["params"] = params; break; } }
     }
+    QJsonArray colors;
+    for (const QString& c : unusedIndicatorColors(static_cast<int>(info->outputs.size()))) colors.append(c);
+    spec["colors"] = colors;
     if (!editIndicatorDialog(spec, true)) return;
     QString error;
     if (!addIndicator(spec, &error)) setStatus(error, ui::StatusKind::Error);
+    else setStatus(QStringLiteral("Added %1.").arg(indicatorLabel(spec)), ui::StatusKind::Info);
 }
 
 bool QuotesTab::editIndicatorDialog(QJsonObject& spec, bool adding)
 {
-    const QString type = spec.value("type").toString();
+    const ta::FunctionInfo* info = ta::catalog().find(spec.value("func").toString().toStdString());
+    if (!info) return false;
+    const ta::Params current = ta::normalizedParams(*info, paramsFromJson(*info, spec.value("params").toObject()));
     QDialog dialog(this);
-    dialog.setWindowTitle((adding ? "Add " : "Edit ") + (type == "macd" ? QStringLiteral("MACD") : type.toUpper()));
+    dialog.setWindowTitle((adding ? "Add " : "Edit ") + QString::fromStdString(info->displayName()));
     auto* form = new QFormLayout(&dialog);
     form->setContentsMargins(14, 12, 14, 10);
     form->setSpacing(8);
-    QSpinBox* period = nullptr;
-    QComboBox* color = nullptr;
-    QSpinBox* fast = nullptr;
-    QSpinBox* slow = nullptr;
-    QSpinBox* signal = nullptr;
-    if (type == "macd") {
-        fast = ui::makeIntSpinBox(&dialog, 2, 200, spec.value("fast").toInt(12));
-        slow = ui::makeIntSpinBox(&dialog, 3, 500, spec.value("slow").toInt(26));
-        signal = ui::makeIntSpinBox(&dialog, 1, 200, spec.value("signal").toInt(9));
-        fast->setToolTip("Fast EMA period (bars)");
-        slow->setToolTip("Slow EMA period (bars); must be longer than the fast period");
-        signal->setToolTip("EMA period of the signal line (bars)");
-        form->addRow("Fast EMA", fast);
-        form->addRow("Slow EMA", slow);
-        form->addRow("Signal", signal);
-    } else {
-        period = ui::makeIntSpinBox(&dialog, 2, 500, spec.value("period").toInt(20));
-        period->setToolTip("Look-back in bars of the current timeframe");
-        form->addRow("Period (bars)", period);
-        color = new QComboBox(&dialog);
-        for (int i = 0; i < indicatorPalette().size(); ++i) color->addItem(swatchIcon(indicatorPalette().at(i)), indicatorPaletteNames().at(i), indicatorPalette().at(i));
-        const int current = static_cast<int>(indicatorPalette().indexOf(spec.value("color").toString().toLower()));
-        color->setCurrentIndex(current >= 0 ? current : 0);
-        form->addRow("Colour", color);
+    auto* header = new QLabel(QStringLiteral("<b>%1</b> · %2 · %3").arg(QString::fromStdString(info->name), QString::fromStdString(info->group),
+                                                                      info->overlay ? "drawn over the price" : (info->candlestick ? "marks bars where the pattern occurs" : "drawn in its own pane")), &dialog);
+    header->setWordWrap(true);
+    form->addRow(header);
+    struct Editor { const ta::ParamInfo* param; QSpinBox* integer = nullptr; QDoubleSpinBox* real = nullptr; QComboBox* choice = nullptr; };
+    std::vector<Editor> editors;
+    for (const ta::ParamInfo& p : info->params) {
+        Editor e;
+        e.param = &p;
+        const double value = current.at(p.name);
+        QString label = QString::fromStdString(p.displayName);
+        if (p.advanced) label += " (advanced)";
+        QWidget* widget = nullptr;
+        if (p.kind == ta::ParamInfo::Kind::Integer) {
+            e.integer = ui::makeIntSpinBox(&dialog, static_cast<int>(p.min), static_cast<int>(std::min(p.max, 100000.0)), static_cast<int>(std::lround(value)));
+            widget = e.integer;
+        } else if (p.kind == ta::ParamInfo::Kind::Real) {
+            e.real = new QDoubleSpinBox(&dialog);
+            e.real->setDecimals(std::max(1, std::min(p.precision, 4)));
+            e.real->setRange(p.min, std::min(p.max, 1e9));
+            e.real->setSingleStep(p.precision >= 2 ? 0.1 : 1.0);
+            e.real->setValue(value);
+            widget = e.real;
+        } else {
+            e.choice = new QComboBox(&dialog);
+            for (const auto& [v, name] : p.choices) e.choice->addItem(QString::fromStdString(name), v);
+            const int idx = e.choice->findData(static_cast<int>(value));
+            e.choice->setCurrentIndex(std::max(0, idx));
+            widget = e.choice;
+        }
+        if (!p.hint.empty()) widget->setToolTip(QString::fromStdString(p.hint));
+        form->addRow(label, widget);
+        editors.push_back(e);
+    }
+    std::vector<QComboBox*> colorBoxes;
+    const QJsonArray colors = spec.value("colors").toArray();
+    if (!info->candlestick) {
+        for (size_t k = 0; k < info->outputs.size(); ++k) {
+            auto* box = new QComboBox(&dialog);
+            for (int i = 0; i < indicatorPalette().size(); ++i) box->addItem(swatchIcon(indicatorPalette().at(i)), indicatorPaletteNames().at(i), indicatorPalette().at(i));
+            const int idx = static_cast<int>(indicatorPalette().indexOf(colors.at(static_cast<int>(k)).toString().toLower()));
+            box->setCurrentIndex(idx >= 0 ? idx : static_cast<int>(k % static_cast<size_t>(indicatorPalette().size())));
+            form->addRow(info->outputs.size() > 1 ? QStringLiteral("Colour · %1").arg(shortOutputName(*info, info->outputs[k])) : QStringLiteral("Colour"), box);
+            colorBoxes.push_back(box);
+        }
     }
     auto* note = new QLabel(&dialog);
     note->setObjectName("muted");
     note->setWordWrap(true);
-    note->setText(type == "macd" ? "Drawn in its own pane below the price: MACD line, signal line and histogram. The settings become the default for the next launch."
-                                 : "Drawn over the price. Up to three SMAs and three EMAs can be shown; the set becomes the default for the next launch.");
+    note->setText(QStringLiteral("%1. Computed with TA-Lib on the chart's bars; the settings become the default for the next launch.").arg(QString::fromStdString(info->hint)));
     form->addRow(note);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->button(QDialogButtonBox::Ok)->setText(adding ? "Add" : "Apply");
     form->addRow(buttons);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-        if (fast && slow && fast->value() >= slow->value()) {
-            note->setText("The fast period must be shorter than the slow period.");
-            return;
-        }
-        dialog.accept();
-    });
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     if (dialog.exec() != QDialog::Accepted) return false;
-    if (type == "macd") {
-        spec["fast"] = fast->value();
-        spec["slow"] = slow->value();
-        spec["signal"] = signal->value();
-    } else {
-        spec["period"] = period->value();
-        spec["color"] = color->currentData().toString();
+    QJsonObject params;
+    for (const Editor& e : editors) {
+        const QString name = QString::fromStdString(e.param->name);
+        if (e.integer) params[name] = e.integer->value();
+        else if (e.real) params[name] = e.real->value();
+        else if (e.choice) params[name] = e.choice->currentData().toInt();
     }
+    spec["params"] = params;
+    QJsonArray chosen;
+    for (QComboBox* box : colorBoxes) chosen.append(box->currentData().toString());
+    if (!chosen.isEmpty()) spec["colors"] = chosen;
     return true;
+}
+
+void QuotesTab::promptBrowseIndicators()
+{
+    QDialog dialog(this);
+    dialog.setWindowTitle("Technical indicators (TA-Lib)");
+    dialog.resize(640, 520);
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(14, 12, 14, 10);
+    layout->setSpacing(8);
+    auto* filter = new QLineEdit(&dialog);
+    filter->setPlaceholderText("Search by name or description, e.g. rsi, bollinger, engulfing…");
+    filter->setClearButtonEnabled(true);
+    layout->addWidget(filter);
+    auto* tree = new QTreeWidget(&dialog);
+    tree->setHeaderLabels({ "Indicator", "Parameters" });
+    tree->setRootIsDecorated(true);
+    tree->setUniformRowHeights(true);
+    tree->header()->setStretchLastSection(true);
+    tree->setColumnWidth(0, 360);
+    layout->addWidget(tree, 1);
+    auto* description = new QLabel(&dialog);
+    description->setObjectName("muted");
+    description->setWordWrap(true);
+    description->setMinimumHeight(36);
+    layout->addWidget(description);
+    auto* buttons = new QDialogButtonBox(&dialog);
+    QPushButton* addButton = buttons->addButton("Add…", QDialogButtonBox::AcceptRole);
+    buttons->addButton(QDialogButtonBox::Close);
+    layout->addWidget(buttons);
+    addButton->setEnabled(false);
+
+    const ta::Catalog& catalog = ta::catalog();
+    auto populate = [tree, &catalog](const QString& needle) {
+        tree->clear();
+        const QString wanted = needle.trimmed();
+        for (const std::string& group : catalog.groups) {
+            auto functions = catalog.inGroup(group);
+            std::sort(functions.begin(), functions.end(), [](const ta::FunctionInfo* a, const ta::FunctionInfo* b) { return a->name < b->name; });
+            auto* groupItem = new QTreeWidgetItem(QStringList{ QString::fromStdString(group) });
+            groupItem->setFlags(Qt::ItemIsEnabled);
+            QFont bold = groupItem->font(0);
+            bold.setBold(true);
+            groupItem->setFont(0, bold);
+            for (const ta::FunctionInfo* info : functions) {
+                const QString name = QString::fromStdString(info->name), hint = QString::fromStdString(info->hint);
+                if (!wanted.isEmpty() && !name.contains(wanted, Qt::CaseInsensitive) && !hint.contains(wanted, Qt::CaseInsensitive)) continue;
+                QStringList params;
+                for (const ta::ParamInfo& p : info->params) {
+                    if (p.advanced) continue;
+                    params << QStringLiteral("%1 %2").arg(QString::fromStdString(p.displayName)).arg(p.kind == ta::ParamInfo::Kind::Real ? QString::number(p.defaultValue) : QString::number(static_cast<int>(p.defaultValue)));
+                }
+                auto* item = new QTreeWidgetItem(groupItem, QStringList{ QString::fromStdString(info->displayName()), params.join(", ") });
+                item->setData(0, Qt::UserRole, name);
+                item->setToolTip(0, info->overlay ? "Drawn over the price" : (info->candlestick ? "Marks bars where the pattern occurs" : "Drawn in its own pane below the price"));
+            }
+            if (groupItem->childCount()) { tree->addTopLevelItem(groupItem); groupItem->setExpanded(!wanted.isEmpty() || group == "Overlap Studies" || group == "Momentum Indicators"); }
+            else delete groupItem;
+        }
+    };
+    populate(QString());
+    auto selectedFunction = [tree]() -> QString {
+        QTreeWidgetItem* item = tree->currentItem();
+        return item ? item->data(0, Qt::UserRole).toString() : QString();
+    };
+    connect(filter, &QLineEdit::textChanged, &dialog, [populate](const QString& text) { populate(text); });
+    connect(tree, &QTreeWidget::currentItemChanged, &dialog, [&, selectedFunction](QTreeWidgetItem*, QTreeWidgetItem*) {
+        const QString func = selectedFunction();
+        addButton->setEnabled(!func.isEmpty());
+        const ta::FunctionInfo* info = func.isEmpty() ? nullptr : catalog.find(func.toStdString());
+        description->setText(info ? QStringLiteral("%1 · %2 · %3 output%4 · %5").arg(QString::fromStdString(info->hint), QString::fromStdString(info->group))
+                                                                              .arg(info->outputs.size()).arg(info->outputs.size() == 1 ? "" : "s")
+                                                                              .arg(info->overlay ? "drawn over the price" : (info->candlestick ? "bar markers (bullish below, bearish above)" : "own pane"))
+                                  : QString());
+    });
+    auto addSelected = [&, selectedFunction] {
+        const QString func = selectedFunction();
+        if (!func.isEmpty()) promptAddIndicator(func);
+    };
+    connect(addButton, &QPushButton::clicked, &dialog, addSelected);
+    connect(tree, &QTreeWidget::itemActivated, &dialog, [addSelected](QTreeWidgetItem*, int) { addSelected(); });
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialog.exec();
 }
 
 QString QuotesTab::themeJson() const
@@ -1603,6 +1975,8 @@ void QuotesTab::onPageMessage(const QString& kind, const QString& payload)
         }
         // The user dragged the indicator pane's handle (or toggled expand): remember the height.
         if (obj.contains("paneHeight")) QSettings().setValue(kPaneHeightKey, std::clamp(obj.value("paneHeight").toDouble(0.24), 0.1, 0.7));
+    } else if (kind == "log") {
+        qWarning("[chart] %s", qPrintable(payload));
     } else if (kind == "menu") {
         qInfo("[chart] context menu opened on %s", qPrintable(payload));
     } else if (kind == "tool") {

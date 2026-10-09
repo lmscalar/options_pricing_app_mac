@@ -130,6 +130,14 @@ QString styleSheetFor(const Theme& t)
         QMainWindow, QWidget#root, QDialog {
             background: @window;
         }
+        QMainWindow::separator {
+            width: 6px;
+            height: 6px;
+            background: @window;
+        }
+        QMainWindow::separator:hover {
+            background: @accent;
+        }
         QWidget {
             color: @text;
             font-size: 13px;

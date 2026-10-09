@@ -18,6 +18,7 @@
 #include "../Pricing/RateCurve.h"
 
 #include <functional>
+#include <map>
 #include <set>
 #include <vector>
 
@@ -115,6 +116,9 @@ public:
                          std::function<void(const BarSeries&)> ok, ErrorHandler err);
     /// Snapshot quotes for many tickers in one request.
     void fetchQuotes(const QStringList& tickers, std::function<void(const std::vector<Quote>&)> ok, ErrorHandler err);
+    /// Closing prices of every US stock for one session (grouped daily aggregates): ticker -> close.
+    /// Empty map when the date was not a trading day.
+    void fetchGroupedDaily(const QDate& date, std::function<void(const std::map<QString, double>&)> ok, ErrorHandler err);
     /// Downloads an image behind the API (branding icons need the bearer token).
     void fetchImage(const QString& url, std::function<void(const QImage&)> ok, ErrorHandler err);
     void fetchDividends(const QString& ticker, const QDate& valuationDate, double horizonYears,

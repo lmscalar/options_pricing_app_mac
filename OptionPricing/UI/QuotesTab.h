@@ -75,23 +75,32 @@ public:
     bool setTimeframe(const QString& label);
     bool setChartType(const QString& type);
 
-    // ---- Technical indicators ----
-    // Each indicator is a JSON object: {"type":"sma"|"ema","period":N,"color":"#rrggbb"} or
-    // {"type":"macd","fast":12,"slow":26,"signal":9}. At most three SMAs, three EMAs and one
-    // MACD; the list is saved in the preferences and restored on the next launch.
-    static constexpr int kMaxMovingAverages = 3;
+    // ---- Technical indicators (TA-Lib) ----
+    // Each indicator is a JSON object {"func":"RSI","params":{"optInTimePeriod":14},"colors":["#rrggbb",...]}
+    // naming a TA-Lib function (see Pricing/TechnicalAnalysis.h); parameters may also use the
+    // aliases period/fast/slow/signal/nbdevup/nbdevdn/matype, and the older
+    // {"type":"sma"|"ema"|"macd",...} specs are converted. Limits: kMaxIndicators in total,
+    // kMaxPerFunction copies of the same function, kMaxPanes indicators in their own panes.
+    // The list is saved in the preferences and restored on the next launch.
+    static constexpr int kMaxIndicators = 12;
+    static constexpr int kMaxPerFunction = 3;
+    static constexpr int kMaxPanes = 4;
     QJsonArray indicators() const { return m_indicators; }
     /// Replaces the whole set after validation; on failure nothing changes and `error` says why.
     bool setIndicators(const QJsonArray& indicators, QString* error = nullptr);
-    /// Adds one indicator (a colour is chosen if the spec has none); false with `error` if invalid or at the limit.
+    /// Adds one indicator (colours are chosen if the spec has none); false with `error` if invalid or at a limit.
     bool addIndicator(QJsonObject spec, QString* error = nullptr);
-    /// Removes indicators matching `type` ("sma", "ema", "macd" or "all") and, when > 0, `period`. Returns how many were removed.
-    int removeIndicators(const QString& type, int period = 0);
+    /// Removes indicators of TA-Lib function `func` ("all" = every one) and, when > 0, with that time period. Returns how many were removed.
+    int removeIndicators(const QString& func, int period = 0);
     bool volumeShown() const;
     void setVolumeShown(bool on);
-    /// Human-readable list, e.g. "SMA 20, EMA 50, MACD 12/26/9; volume on".
+    /// Human-readable list, e.g. "SMA 20, EMA 50, MACD 12/26/9, RSI 14; volume on".
     QString indicatorsSummary() const;
     static QString indicatorLabel(const QJsonObject& spec);
+    /// Resolves a spoken or typed name ("rsi", "bollinger bands", "average true range", "engulfing") to a TA-Lib function name; empty if unknown.
+    static QString resolveIndicatorName(const QString& text);
+    /// The catalogue by category for the assistant: "Momentum Indicators: RSI – Relative Strength Index (period 14); ...".
+    static QString indicatorCatalogText();
 
     /// Loads `symbol` on `timeframe` (empty = current) and reports when the bars are in.
     void loadChartThen(const QString& symbol, const QString& timeframe, std::function<void(bool ok)> done);
@@ -156,10 +165,14 @@ private:
     void loadIndicators();
     void saveIndicators() const;
     void rebuildIndicatorsMenu();
-    /// Dialog to add or edit an indicator; returns false if cancelled or invalid.
+    /// Computes every indicator with TA-Lib over the loaded bars and sends the results to the chart.
+    void pushIndicators();
+    /// Dialog to add or edit an indicator (parameters from TA-Lib's description, a colour per output); false if cancelled.
     bool editIndicatorDialog(QJsonObject& spec, bool adding);
-    void promptAddIndicator(const QString& type);
-    QString nextIndicatorColor() const;
+    void promptAddIndicator(const QString& func);
+    /// Searchable, categorised browser of the whole TA-Lib catalogue.
+    void promptBrowseIndicators();
+    QStringList unusedIndicatorColors(int count) const;
     static bool normalizeIndicator(QJsonObject& spec, QString* error);
     void pushBars();
     void pushOptions();

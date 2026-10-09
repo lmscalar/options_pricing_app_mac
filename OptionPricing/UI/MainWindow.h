@@ -20,6 +20,7 @@ class StrategyTab;
 class ScenarioTab;
 class ChainTab;
 class HeatmapTab;
+class SectorHeatmapTab;
 class QuotesTab;
 class VolatilityTab;
 class AssistantPanel;
@@ -94,10 +95,14 @@ private:
     ScenarioTab* m_scenario = nullptr;
     ChainTab* m_chain = nullptr;
     HeatmapTab* m_heatmap = nullptr;
+    SectorHeatmapTab* m_sectorHeatmap = nullptr;
     QuotesTab* m_quotes = nullptr;
     VolatilityTab* m_volatility = nullptr;
     AssistantPanel* m_assistant = nullptr;
     QDockWidget* m_assistantDock = nullptr;
+    QVBoxLayout* m_rootLayout = nullptr;   ///< central layout; its outer margin shrinks on the side the assistant dock occupies
+    /// Narrows the central margin next to a visible assistant dock so the chart and the chat sit close together.
+    void updateCentralMargins();
     QPushButton* m_themeToggle = nullptr;
     QToolButton* m_assistantToggle = nullptr;
     ui::SpinningDiamond* m_assistantBusy = nullptr;   ///< spins in the header while the assistant works

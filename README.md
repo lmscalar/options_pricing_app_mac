@@ -86,16 +86,25 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   (see below) inside a `QWebEngineView`, with timeframe buttons 1m, 2m, 3m, 5m, 15m, 1H,
   1D (one year of daily bars) and 1W (five years of weekly bars), the selected one
   highlighted in the accent colour; Candlestick, Bar,
-  Heikin-Ashi and Line styles; an **Indicators** drop-down that adds up to three SMAs
-  and three EMAs (each with its own period and colour), a MACD drawn in its own framed
-  pane below the price and volume with its own value axis (editable fast/slow/signal,
-  default 12/26/9, with signal line, histogram and zero line; the pane is a second chart
+  Heikin-Ashi and Line styles; an **Indicators** drop-down backed by the
+  [TA-Lib](https://ta-lib.org) C library (`brew install ta-lib`): every TA-Lib function
+  is listed by category (Overlap Studies, Momentum Indicators, Volume Indicators,
+  Volatility Indicators, Price Transform, Cycle Indicators, Pattern Recognition,
+  Statistic Functions) with a searchable **Browse indicators…** dialog, and each one
+  opens a parameter dialog generated from TA-Lib's own description (periods, deviations,
+  moving-average type, a colour per output). Overlap studies (SMA, EMA, Bollinger
+  Bands, SAR …) draw over the price; oscillators (MACD, RSI, Stochastics, ATR, OBV …)
+  get framed panes below the volume with their own value axis, zero line and reference
+  levels (RSI 30/70 and the like); candlestick patterns (CDLENGULFING, CDLDOJI …) mark
+  bars with green arrows for bullish and red for bearish signals. Panes are second charts
   whose time scale and crosshair are linked to the main one, so panning, zooming and
-  hovering stay in step and Save Image… includes it; drag the handle above the pane to
-  resize it, or double-click the handle / click the ⤢ button to expand and restore, and
-  the height is remembered as `quotes/paneHeight`) and the volume histogram, with each indicator's submenu offering Edit and
-  Remove, the set remembered as the default for the next launch (`quotes/indicators`);
-  a crosshair legend with OHLC, volume and every indicator's value at the hovered bar; Save
+  hovering stay in step and Save Image… includes them; drag the handle above the panes
+  to resize them, or double-click the handle / click the ⤢ button to expand and restore
+  (`quotes/paneHeight`). Up to 12 indicators, three copies of one function and four
+  panes; each indicator's submenu offers Edit and Remove, and the set is remembered as
+  the default for the next launch (`quotes/indicators`). The catalogue is read from
+  TA-Lib at runtime through `Pricing/TechnicalAnalysis.h`, which also evaluates any
+  function generically (`ta::compute`). A crosshair legend shows OHLC, volume and every indicator's value at the hovered bar; Save
   Image… (rendered by the chart library, so it works headless too) and Open Option Chain.
   Intraday bars are shown in local time. A **Draw** toolbar adds trend lines (drag, or
   click-move-click; the line extends to the right as a dashed ray) and shaded
@@ -142,6 +151,19 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   put-call parity table per expiry with the implied forward, the dividend yield that
   reconciles it, and the worst-offending strike. Double-click a cell or row to price it.
 
+- **Sector Heatmap**: a market treemap in the style of professional terminals. Some 180
+  large caps are grouped into sectors (Internet, Software, Semis, Hardware, Consumer,
+  Healthcare, Finance, Energy, Industrials, Utilities, Materials, Real Estate); every tile
+  is sized by market capitalisation and coloured on a red–green ramp by performance over
+  the selected period (Daily, 1W, 30D, 90D, YTD), with a legend giving the ramp's range.
+  A **Sectors** view collapses each sector to one cap-weighted tile; the **Watchlist**
+  universe shows the active watchlist grouped by industry instead. Prices come from the
+  Massive.com bulk snapshot, period reference closes from grouped daily aggregates (with a
+  per-ticker fallback), and market caps from ticker details, cached for two weeks in
+  `sector-heatmap-caps.json`. Hover a tile for name, cap, last and change; click to load
+  the ticker everywhere; double-click to open its option chain. The layout is a squarified
+  treemap (`Pricing/Treemap.h`, unit tested) painted natively. The assistant reads it
+  through `get_sector_heatmap`.
 - **Volatility**: realized and forecast volatility for a ticker from daily bars (Massive
   aggregates, one to ten years, or a simulated sample path). Five realized estimators
   (close-to-close, Parkinson, Garman-Klass, Rogers-Satchell, Yang-Zhang) over a short and
@@ -186,8 +208,8 @@ summary of the current tab.
 
 The model can act through tools: `show_ticker` (loads a symbol everywhere), `switch_tab`,
 `get_bars`, `draw_trend_line`, `draw_zone` (shaded support/resistance), `clear_drawings`,
-`list_drawings`, `set_timeframe`, `set_chart_type`, `add_indicator`, `remove_indicator`,
-`set_indicators`, `get_option_chain`, `get_volatility`,
+`list_drawings`, `set_timeframe`, `set_chart_type`, `list_indicators`, `add_indicator`,
+`remove_indicator`, `set_indicators`, `get_option_chain`, `get_volatility`,
 `set_market_volatility`, `load_strategy_preset`, `get_strategy`, `get_pricer`,
 `set_pricer_contract`, `get_heatmap`. "Mark support and resistance on this chart" therefore
 produces real zones and trend lines on the chart, persisted like hand-drawn ones.

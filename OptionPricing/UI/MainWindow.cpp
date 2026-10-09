@@ -4,9 +4,11 @@
 //
 
 #include "MainWindow.h"
+#include "../Pricing/TechnicalAnalysis.h"
 #include "BatchDialog.h"
 #include "ChainTab.h"
 #include "HeatmapTab.h"
+#include "SectorHeatmapTab.h"
 #include "PricerTab.h"
 #include "QuotesTab.h"
 #include "VolatilityTab.h"
@@ -58,6 +60,10 @@ void MainWindow::buildUi()
     m_heatmap = new HeatmapTab(m_state, this);
     m_quotes = new QuotesTab(m_state, this);
     m_volatility = new VolatilityTab(m_state, this);
+    m_sectorHeatmap = new SectorHeatmapTab(this);
+    m_sectorHeatmap->onTickerSelected = [this](const QString& ticker) { showTicker(ticker, false); };
+    m_sectorHeatmap->onOpenChain = [this](const QString& ticker) { showTicker(ticker, true); };
+    m_sectorHeatmap->watchlistProvider = [this] { return m_quotes->watchlist(); };
     m_chain->setStore(&m_store);
     // Every ticker entry point funnels through showTicker(): stored chains apply instantly,
     // missing or stale ones are downloaded, and all tabs follow the shared market state.
@@ -137,6 +143,7 @@ void MainWindow::buildUi()
     m_tabs->addTab(m_scenario, "Scenarios");
     m_tabs->addTab(m_chain, "Option Chain");
     m_tabs->addTab(m_heatmap, "Heatmap");
+    m_tabs->addTab(m_sectorHeatmap, "Sector Heatmap");
     m_tabs->addTab(m_volatility, "Volatility");
 
     auto* title = new QLabel("Option Pricer", this);
@@ -228,6 +235,7 @@ void MainWindow::buildUi()
     auto* root = new QVBoxLayout(central);
     root->setContentsMargins(24, 16, 24, 12);
     root->setSpacing(8);
+    m_rootLayout = root;
     root->addLayout(header);
     root->addWidget(m_subtitle);
     root->addSpacing(4);
@@ -359,6 +367,7 @@ void MainWindow::applyTheme(bool dark)
     m_heatmap->applyTheme(theme);
     m_quotes->applyTheme(theme);
     m_volatility->applyTheme(theme);
+    m_sectorHeatmap->applyTheme(theme);
     m_assistant->applyTheme(theme);
     m_assistantBusy->setColor(QColor(theme.accent3.isEmpty() ? "#22d3ee" : theme.accent3));
 
@@ -760,7 +769,8 @@ QStringList MainWindow::captureTabs(const QString& directory)
     }
     qInfo("[screenshot] window %dx%d minimumSizeHint %dx%d", width(), height(), minimumSizeHint().width(), minimumSizeHint().height());
     QStringList paths;
-    const char* names[] = { "quotes", "pricer", "strategy", "scenarios", "chain", "heatmap", "volatility" };
+    m_sectorHeatmap->loadSampleData();   // offline treemap with synthetic moves
+    const char* names[] = { "quotes", "pricer", "strategy", "scenarios", "chain", "heatmap", "sector-heatmap", "volatility" };
     for (int i = 0; i < m_tabs->count() && i < 7; ++i) {
         m_tabs->setCurrentIndex(i);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
@@ -923,7 +933,7 @@ void MainWindow::runLiveSmoke(const QString& ticker)
             const QString shotDir = QDir::tempPath() + "/optshots-live";
             QDir().mkpath(shotDir);
             m_quotes->showTicker(m_chain->ticker());
-            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_volatility, m_quotes }) {
+            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_volatility, m_sectorHeatmap, m_quotes }) {
                 m_tabs->setCurrentWidget(tab);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
@@ -931,7 +941,21 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     // Give the web view time to fetch bars and paint.
                     for (int i = 0; i < 12; ++i) QCoreApplication::processEvents(QEventLoop::AllEvents, 250);
                 }
-                const QString path = shotDir + (tab == m_heatmap ? "/heatmap.png" : (tab == m_chain ? "/chain.png" : (tab == m_strategy ? "/strategy.png" : (tab == m_volatility ? "/volatility.png" : "/quotes.png"))));
+                if (tab == m_sectorHeatmap) {
+                    // Showing the tab starts the download (snapshot, grouped closes, market caps); wait for it,
+                    // then exercise a longer period (grouped daily reference closes) and put the user's period back.
+                    auto waitFor = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
+                    waitFor(6000);
+                    qInfo("[live-smoke] sector heatmap: %s", qPrintable(m_sectorHeatmap->summaryText().left(600)));
+                    const QString userPeriod = m_sectorHeatmap->periodLabel();
+                    m_sectorHeatmap->setPeriod("1W");
+                    waitFor(5000);
+                    qInfo("[live-smoke] sector heatmap 1W: %s", qPrintable(m_sectorHeatmap->summaryText().left(600)));
+                    if (grab().save(shotDir + "/sector-heatmap-1w.png")) qInfo("[live-smoke] wrote sector-heatmap-1w.png");
+                    m_sectorHeatmap->setPeriod(userPeriod);
+                    waitFor(300);
+                }
+                const QString path = shotDir + (tab == m_heatmap ? "/heatmap.png" : (tab == m_chain ? "/chain.png" : (tab == m_strategy ? "/strategy.png" : (tab == m_volatility ? "/volatility.png" : (tab == m_sectorHeatmap ? "/sector-heatmap.png" : "/quotes.png")))));
                 if (grab().save(path)) qInfo("[live-smoke] wrote %s", qPrintable(path));
             }
             // Exercise the drawing tools through the page's mouse handlers, then export the
@@ -985,6 +1009,9 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     qInfo("[live-smoke] quote sync: chart legend: %s", qPrintable(oneLine.left(300)));
                 });
             }
+            // processEvents() returns as soon as the queue is empty, so the page never had time to
+            // answer; this really waits while keeping the event loop (and the web view) running.
+            auto waitMs = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
             // Indicators: a full set (three SMAs, an EMA and the MACD) rendered to chart-indicators.png,
             // local add/remove commands, then the user's own set is put back.
             {
@@ -992,16 +1019,24 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                 const bool userVolume = m_quotes->volumeShown();
                 QString error, feedback;
                 const bool ok = m_quotes->setIndicators(QJsonArray{ QJsonObject{ { "type", "sma" }, { "period", 20 } }, QJsonObject{ { "type", "sma" }, { "period", 50 } },
-                                                                    QJsonObject{ { "type", "ema" }, { "period", 21 } }, QJsonObject{ { "type", "macd" }, { "fast", 12 }, { "slow", 26 }, { "signal", 9 } } }, &error);
-                qInfo("[live-smoke] indicators set: %s -> %s", ok ? "ok" : qPrintable(error), qPrintable(m_quotes->indicatorsSummary()));
+                                                                    QJsonObject{ { "func", "BBANDS" }, { "params", QJsonObject{ { "period", 20 } } } },
+                                                                    QJsonObject{ { "func", "RSI" }, { "params", QJsonObject{ { "period", 14 } } } },
+                                                                    QJsonObject{ { "type", "macd" }, { "fast", 12 }, { "slow", 26 }, { "signal", 9 } },
+                                                                    QJsonObject{ { "func", "CDLENGULFING" } } }, &error);
+                qInfo("[live-smoke] indicators set: %s -> %s (TA-Lib catalogue: %zu functions in %zu categories)", ok ? "ok" : qPrintable(error), qPrintable(m_quotes->indicatorsSummary()),
+                      ta::catalog().functions.size(), ta::catalog().groups.size());
                 const bool handledAdd = handleLocalCommand("add a 200 day SMA", feedback);
                 qInfo("[live-smoke] local command (add indicator): %s -> %s", handledAdd ? "handled" : "NOT handled", qPrintable(feedback));
                 const bool handledLimit = handleLocalCommand("add the 100 day sma", feedback);
                 qInfo("[live-smoke] local command (fourth SMA, expected refusal): %s -> %s", handledLimit ? "handled" : "NOT handled", qPrintable(feedback));
                 const bool handledMacd = handleLocalCommand("show the MACD (8, 17, 9)", feedback);
                 qInfo("[live-smoke] local command (edit MACD): %s -> %s", handledMacd ? "handled" : "NOT handled", qPrintable(feedback));
+                const bool handledAtr = handleLocalCommand("add the average true range", feedback);
+                qInfo("[live-smoke] local command (ATR by description): %s -> %s", handledAtr ? "handled" : "NOT handled", qPrintable(feedback));
+                const bool handledUnknown = handleLocalCommand("add the frobnicator", feedback);
+                qInfo("[live-smoke] local command (unknown indicator, expected not handled): %s", handledUnknown ? "handled" : "not handled");
                 m_quotes->setVolumeShown(true);
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 800);
+                waitMs(800);
                 m_quotes->debugLegendText([](const QString& legend) {
                     QString oneLine = legend;
                     oneLine.replace('\n', ' ');
@@ -1010,13 +1045,13 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                 // Expand the indicator pane for the screenshot, then put the user's height back.
                 const QVariant userPaneHeight = QSettings().value("quotes/paneHeight");
                 m_quotes->debugTogglePane([](int px) { qInfo("[live-smoke] indicator pane expanded: %d px", px); });
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 600);
+                waitMs(600);
                 m_quotes->saveChartImage(shotDir + "/chart-indicators.png", [](const QString& written) {
                     qInfo("[live-smoke] indicators chart image %s", written.isEmpty() ? "FAILED" : qPrintable(written));
                 });
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 1200);
+                waitMs(1200);
                 m_quotes->debugTogglePane([](int px) { qInfo("[live-smoke] indicator pane restored: %d px", px); });
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
+                waitMs(300);
                 if (userPaneHeight.isValid()) QSettings().setValue("quotes/paneHeight", userPaneHeight);
                 else QSettings().remove("quotes/paneHeight");
                 const bool handledRemove = handleLocalCommand("remove the macd", feedback);

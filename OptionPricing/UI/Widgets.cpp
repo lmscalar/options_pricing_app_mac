@@ -67,9 +67,13 @@ Card makeCard(QWidget* parent, const QString& title, const QString& valueObjectN
     auto* layout = new QVBoxLayout(card.frame);
     layout->setContentsMargins(14, 10, 14, 12);
     layout->setSpacing(3);
+    // Centre the three lines vertically: when a layout hands the card extra height (the
+    // Volatility sidebar lets its cards fill the column) the text stays in the middle.
+    layout->addStretch(1);
     layout->addWidget(card.title);
     layout->addWidget(card.value);
     layout->addWidget(card.subtitle);
+    layout->addStretch(1);
     return card;
 }
 

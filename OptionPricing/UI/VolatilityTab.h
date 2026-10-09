@@ -57,6 +57,8 @@ private:
     void updateCards();
     void updateModelLabel();
     void updateConeTable();
+    /// Fixes the table's height to its header and rows (no inner scrolling) for the sidebar.
+    void fitConeTableHeight();
     void updateCharts();
     void updateHistoryChart();
     void updateConeChart();
