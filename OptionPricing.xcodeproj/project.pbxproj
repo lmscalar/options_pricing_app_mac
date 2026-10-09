@@ -22,6 +22,7 @@
 		F376166E307846F900F5524A /* LightweightChartsJs.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376166D307846F900F5524A /* LightweightChartsJs.cpp */; };
 		F37616713078471300F5524A /* ChartPage.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616703078471300F5524A /* ChartPage.cpp */; };
 		F37616743078478900F5524A /* QuotesTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616733078478900F5524A /* QuotesTab.cpp */; };
+		F376167A30785A2C00F5524A /* VolatilityTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376167930785A2C00F5524A /* VolatilityTab.cpp */; };
 		F3B6FB022988347000563EB6 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3B6FB012988347000563EB6 /* main.cpp */; };
 /* End PBXBuildFile section */
 
@@ -84,6 +85,9 @@
 		F37616703078471300F5524A /* ChartPage.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ChartPage.cpp; sourceTree = "<group>"; };
 		F37616723078472B00F5524A /* QuotesTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = QuotesTab.h; sourceTree = "<group>"; };
 		F37616733078478900F5524A /* QuotesTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = QuotesTab.cpp; sourceTree = "<group>"; };
+		F3761675307858C400F5524A /* Volatility.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Volatility.h; sourceTree = "<group>"; };
+		F37616783078597900F5524A /* VolatilityTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = VolatilityTab.h; sourceTree = "<group>"; };
+		F376167930785A2C00F5524A /* VolatilityTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = VolatilityTab.cpp; sourceTree = "<group>"; };
 		F3B6FAFE2988347000563EB6 /* OptionPricing */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = OptionPricing; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3B6FB012988347000563EB6 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -126,6 +130,7 @@
 				F3761631307722D000F5524A /* VolSurface.h */,
 				F37616673077EF8F00F5524A /* Activity.h */,
 				F376166B30781BB500F5524A /* ChainStrategy.h */,
+				F3761675307858C400F5524A /* Volatility.h */,
 			);
 			path = Pricing;
 			sourceTree = "<group>";
@@ -165,6 +170,8 @@
 				F37616703078471300F5524A /* ChartPage.cpp */,
 				F37616723078472B00F5524A /* QuotesTab.h */,
 				F37616733078478900F5524A /* QuotesTab.cpp */,
+				F37616783078597900F5524A /* VolatilityTab.h */,
+				F376167930785A2C00F5524A /* VolatilityTab.cpp */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -310,6 +317,7 @@
 				F37616713078471300F5524A /* ChartPage.cpp in Sources */,
 				F37616523077272300F5524A /* MainWindow.cpp in Sources */,
 				F37616363077241000F5524A /* Theme.cpp in Sources */,
+				F376167A30785A2C00F5524A /* VolatilityTab.cpp in Sources */,
 				F376163A3077246A00F5524A /* Widgets.cpp in Sources */,
 				F3761666307730A400F5524A /* MarketDataClient.cpp in Sources */,
 				F3761649307726B500F5524A /* ChainTab.cpp in Sources */,

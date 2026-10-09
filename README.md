@@ -33,6 +33,8 @@ volatility smiles from option chains and prices batches of contracts from CSV.
 | `VolSurface.h` | Chain implied vols, static-arbitrage checks, raw SVI smile fit, surface interpolation in total variance, synthetic chain generator. |
 | `Csv.h` | CSV reader/writer and parsers for option chains and batch pricing requests. |
 | `Activity.h` | Strike x expiry activity grid, most-active contract ranking, put-call parity by expiry, activity summary. |
+| `ChainStrategy.h` | Chain index, marking legs to listed quotes, chain-driven strategy presets. |
+| `Volatility.h` | Realized vol estimators (close-to-close, Parkinson, Garman-Klass, Rogers-Satchell, Yang-Zhang), rolling series, volatility cone, EWMA, GARCH(1,1) / GJR-GARCH(1,1) by quasi-maximum likelihood with variance forecasts and forecast term structure. |
 
 ## Building
 
@@ -75,7 +77,15 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   Heikin-Ashi and Line styles; optional SMA and EMA overlays with editable periods; a
   volume histogram; a crosshair legend with OHLC, volume and moving-average values; Save
   Image… (rendered by the chart library, so it works headless too) and Open Option Chain.
-  Intraday bars are shown in local time.
+  Intraday bars are shown in local time. A **Draw** toolbar adds trend lines (drag, or
+  click-move-click; the line extends to the right as a dashed ray) and shaded
+  **Support** / **Resistance** zones (drag vertically between two prices; green and red
+  fills with the price range labelled). **Edit** selects a drawing to drag its handles,
+  edges or body; Delete removes it, Undo removes the last one, Clear removes all, and Esc
+  returns to the cursor. Drawings are anchored to bar time and price, so they survive
+  scrolling, zooming and timeframe changes, are saved per symbol, and are included in
+  Save Image…. The drawing layer is the app's own canvas over the chart; Lightweight
+  Charts itself has no drawing tools.
 - **Pricer**: market and contract inputs (spot or futures, European or American, negative
   rates allowed, expiry as years or as a date with a day-count convention, cash dividends,
   rate curve), prices with intrinsic/time value or early-exercise premium, eleven Greeks,
@@ -104,6 +114,25 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   put-call parity table per expiry with the implied forward, the dividend yield that
   reconciles it, and the worst-offending strike. Double-click a cell or row to price it.
 
+- **Volatility**: realized and forecast volatility for a ticker from daily bars (Massive
+  aggregates, one to ten years, or a simulated sample path). Five realized estimators
+  (close-to-close, Parkinson, Garman-Klass, Rogers-Satchell, Yang-Zhang) over a short and
+  a long window; a volatility cone (10/20/30/60/90/120/252-day windows with the current
+  reading, its percentile rank and the historical range); RiskMetrics EWMA (λ 0.94); and a
+  GARCH(1,1) or GJR-GARCH(1,1) fit by Gaussian quasi-maximum likelihood with ω, α, β, γ,
+  persistence, half-life, log-likelihood, AIC and BIC. Charts show the rolling realized,
+  EWMA and GARCH conditional vol history, the cone with the chain's ATM implied vols
+  overlaid, and the GARCH forecast term structure against implied vols by expiry. Cards
+  compare realized, EWMA, next-day and horizon forecast, long-run and implied ATM vol with
+  the IV − RV and IV − forecast spreads. **Use Realized as σ** and **Use Forecast as σ**
+  push the chosen vol into the market inputs. The tabs are linked both ways: a chain
+  downloaded anywhere switches the Volatility tab to that ticker, and Fetch History here
+  also downloads the ticker's option chain, which in turn updates the Quotes watchlist,
+  Heatmap and Strategy tabs.
+  Controls and cards sit in a left sidebar; every pane (sidebar, history chart, cone
+  table, cone and forecast charts) and the table columns are resizable, and the layout is
+  remembered between sessions.
+
 The **File** menu saves and opens workspace files (`.optws`, JSON), imports chains,
 batch-prices a CSV and exports or copies the current tab as CSV. The **Market** menu
 fetches live data and edits the zero-rate curve.
@@ -118,6 +147,7 @@ The Option Chain tab and the Market menu pull data from the Massive.com REST API
 | Fetch Live Chain | stock snapshot, option chain snapshot (paged, filtered by expiration date) | Sets the market spot and replaces the chain with every unexpired expiry, or only the N nearest when a count is set. Each quote carries its expiration date and days to expiry (DTE); the expiry selector, smile title, fit summary and CSV export show them, and double-clicking a strike puts that calendar date into the Pricer. |
 | Quotes watchlist | `/v2/snapshot/locale/us/markets/stocks/tickers?tickers=…` | One bulk request per refresh; last price is the latest minute bar close, with change and percent change versus the previous close. |
 | Quotes chart | `/v2/aggs/ticker/{T}/range/{mult}/{timespan}/{from}/{to}` (paged) | Minute, hour, day or week bars for the selected timeframe. |
+| Volatility history | same aggregates endpoint, daily bars | One to ten years of OHLC for the realized-vol estimators and the GARCH fit. |
 | Treasury Curve | `/fed/v1/treasury-yields` (latest row) | Loads the zero-rate curve and enables it. Bond-equivalent yields are converted to continuous compounding. |
 | Dividends | `/v3/reference/dividends` | Projects the latest regular cash dividend forward at its cadence for three years into the Pricer's cash-dividend schedule and zeroes the continuous yield. |
 
@@ -160,8 +190,9 @@ Notes on the data:
 OptionPricing --live-smoke AAPL
 ```
 
-downloads the chain, curve, dividends, watchlist quotes and a year of daily bars for a
-ticker, prints a summary, renders the live tabs to `$TMPDIR/optshots-live/` (plus
+downloads the chain, curve, dividends, watchlist quotes, two years of daily bars for the
+volatility tab (printing the realized, EWMA, GARCH and implied figures) and a year of
+daily bars for the chart, prints a summary, renders the live tabs to `$TMPDIR/optshots-live/` (plus
 `chart.png` exported by the chart library itself) and exits. `--window WxH` fixes the
 window size for either flag.
 
@@ -208,3 +239,8 @@ missing; values above 1 are treated as percentages. Optional `exercise` (`americ
 - Theta, charm and color are per day; the basis (365 calendar or 252 trading days) is a
   Pricer setting.
 - Probabilities and expected values are risk-neutral.
+- Realized and GARCH volatilities are annualised with 252 trading days. GARCH is fitted
+  on demeaned daily log returns with Gaussian quasi-likelihood; the leverage term γ in
+  GJR-GARCH is constrained to be non-negative and persistence to be below one. The
+  forecast term vol for a horizon is the square root of the average forecast variance over
+  that many trading days, which is the quantity comparable to an implied vol.

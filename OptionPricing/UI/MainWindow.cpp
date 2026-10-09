@@ -9,6 +9,7 @@
 #include "HeatmapTab.h"
 #include "PricerTab.h"
 #include "QuotesTab.h"
+#include "VolatilityTab.h"
 #include "RateCurveDialog.h"
 #include "ScenarioTab.h"
 #include "StrategyTab.h"
@@ -50,6 +51,14 @@ void MainWindow::buildUi()
     m_chain = new ChainTab(m_state, this);
     m_heatmap = new HeatmapTab(m_state, this);
     m_quotes = new QuotesTab(m_state, this);
+    m_volatility = new VolatilityTab(m_state, this);
+    m_volatility->onRequestChain = [this](const QString& ticker) {
+        // Same path as the Heatmap's ticker box: the Option Chain tab owns the download and
+        // every other tab follows the shared market state.
+        m_chain->setTicker(ticker);
+        m_chain->fetchLiveChain();
+        statusBar()->showMessage(QStringLiteral("Downloading %1 option chain from Massive.com…").arg(ticker), 8000);
+    };
     m_quotes->onOpenInChain = [this](const QString& ticker) {
         m_chain->setTicker(ticker);
         m_tabs->setCurrentWidget(m_chain);
@@ -97,6 +106,7 @@ void MainWindow::buildUi()
     m_tabs->addTab(m_scenario, "Scenarios");
     m_tabs->addTab(m_chain, "Option Chain");
     m_tabs->addTab(m_heatmap, "Heatmap");
+    m_tabs->addTab(m_volatility, "Volatility");
 
     auto* title = new QLabel("Option Pricer", this);
     title->setObjectName("title");
@@ -275,6 +285,7 @@ void MainWindow::applyTheme(bool dark)
     m_chain->applyTheme(theme);
     m_heatmap->applyTheme(theme);
     m_quotes->applyTheme(theme);
+    m_volatility->applyTheme(theme);
 
     QSettings settings;
     settings.setValue("appearance/darkMode", dark);
@@ -546,6 +557,7 @@ QString MainWindow::currentResultsCsv() const
     if (current == m_chain) return m_chain->resultsCsv();
     if (current == m_heatmap) return m_heatmap->resultsCsv();
     if (current == m_quotes) return m_quotes->resultsCsv();
+    if (current == m_volatility) return m_volatility->resultsCsv();
     return QString();
 }
 
@@ -595,27 +607,29 @@ QStringList MainWindow::captureTabs(const QString& directory)
     QDir().mkpath(directory);
     m_chain->generateSample();
     m_strategy->loadPreset();
+    m_volatility->loadSample();
     for (int i = 0; i < m_tabs->count(); ++i) {
         const QSize hint = m_tabs->widget(i)->minimumSizeHint();
         qInfo("[screenshot] tab %-12s minimumSizeHint %dx%d", qPrintable(m_tabs->tabText(i)), hint.width(), hint.height());
     }
     qInfo("[screenshot] window %dx%d minimumSizeHint %dx%d", width(), height(), minimumSizeHint().width(), minimumSizeHint().height());
     QStringList paths;
-    const char* names[] = { "quotes", "pricer", "strategy", "scenarios", "chain", "heatmap" };
-    for (int i = 0; i < m_tabs->count() && i < 6; ++i) {
+    const char* names[] = { "quotes", "pricer", "strategy", "scenarios", "chain", "heatmap", "volatility" };
+    for (int i = 0; i < m_tabs->count() && i < 7; ++i) {
         m_tabs->setCurrentIndex(i);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
-        if (m_tabs->widget(i) == m_chain) {
+        if (m_tabs->widget(i) == m_chain || m_tabs->widget(i) == m_volatility) {
             // Exercise the chart hover readouts so the screenshot shows them populated.
-            for (QChartView* view : m_chain->findChildren<QChartView*>()) {
+            for (QChartView* view : m_tabs->widget(i)->findChildren<QChartView*>()) {
                 for (QAbstractSeries* series : view->chart()->series()) {
                     if (auto* scatter = qobject_cast<QScatterSeries*>(series); scatter && scatter->count() > 0) {
                         emit scatter->hovered(scatter->at(scatter->count() / 2), true);
                         break;
                     }
-                    if (auto* line = qobject_cast<QLineSeries*>(series); line && line->count() > 0 && line->name() == "ATM") {
-                        emit line->hovered(line->at(0), true);
+                    if (auto* line = qobject_cast<QLineSeries*>(series); line && line->count() > 0 && (line->name() == "ATM" || m_tabs->widget(i) == m_volatility)) {
+                        emit line->hovered(line->at(line->count() / 2), true);
+                        if (m_tabs->widget(i) == m_volatility) break;
                     }
                 }
             }
@@ -651,7 +665,11 @@ void MainWindow::runLiveSmoke(const QString& ticker)
     m_tabs->setCurrentWidget(m_chain);
     m_chain->setTicker(ticker);
     auto step = std::make_shared<int>(0);
-    m_chain->onLiveOperationFinished = [this, step](bool ok, const QString& message) {
+    // The volatility tab reports through the same callback chain as the chain operations.
+    m_volatility->onFetchFinished = [this](bool ok, const QString& message) {
+        if (m_chain->onLiveOperationFinished) m_chain->onLiveOperationFinished(ok, message);
+    };
+    m_chain->onLiveOperationFinished = [this, step, ticker](bool ok, const QString& message) {
         qInfo("[live-smoke] step %d %s: %s", *step, ok ? "ok" : "FAILED", qPrintable(message));
         if (!ok) {
             QCoreApplication::exit(1);
@@ -662,7 +680,24 @@ void MainWindow::runLiveSmoke(const QString& ticker)
             m_chain->loadTreasuryCurve();
         } else if (*step == 2) {
             m_chain->loadDividends();
+        } else if (*step == 3) {
+            m_volatility->setTicker(ticker);
+            m_volatility->fetchHistory();
+        } else if (*step == 4) {
+            qInfo("[live-smoke] volatility: %s", qPrintable(m_volatility->summaryText()));
+            // Reverse cascade: a ticker entered on the Volatility tab must pull the option
+            // chain (and through it the other tabs). Two completions follow: bars and chain.
+            const QString other = ticker == "AAPL" ? QStringLiteral("MSFT") : QStringLiteral("AAPL");
+            qInfo("[live-smoke] reverse cascade: fetching %s from the Volatility tab", qPrintable(other));
+            m_volatility->setTicker(other);
+            m_volatility->fetchAll();
+        } else if (*step == 5) {
+            qInfo("[live-smoke] reverse cascade: first half done, waiting for the second");
         } else {
+            qInfo("[live-smoke] reverse cascade result: chain ticker %s (%zu quotes), state ticker %s, volatility ticker %s, quotes watchlist has it: %s",
+                  qPrintable(m_chain->ticker()), m_state.chainQuotes.size(), qPrintable(m_state.underlyingTicker), qPrintable(m_volatility->ticker()),
+                  m_quotes->hasTicker(m_state.underlyingTicker) ? "yes" : "no");
+            qInfo("[live-smoke] volatility: %s", qPrintable(m_volatility->summaryText()));
             const auto& slices = m_state.surface.slices();
             const pricing::ExpirySlice* first = slices.empty() ? nullptr : &slices.front();
             const pricing::ExpirySlice* last = slices.empty() ? nullptr : &slices.back();
@@ -711,7 +746,7 @@ void MainWindow::runLiveSmoke(const QString& ticker)
             const QString shotDir = QDir::tempPath() + "/optshots-live";
             QDir().mkpath(shotDir);
             m_quotes->showTicker(m_chain->ticker());
-            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_quotes }) {
+            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_volatility, m_quotes }) {
                 m_tabs->setCurrentWidget(tab);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
@@ -719,13 +754,21 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     // Give the web view time to fetch bars and paint.
                     for (int i = 0; i < 12; ++i) QCoreApplication::processEvents(QEventLoop::AllEvents, 250);
                 }
-                const QString path = shotDir + (tab == m_heatmap ? "/heatmap.png" : (tab == m_chain ? "/chain.png" : (tab == m_strategy ? "/strategy.png" : "/quotes.png")));
+                const QString path = shotDir + (tab == m_heatmap ? "/heatmap.png" : (tab == m_chain ? "/chain.png" : (tab == m_strategy ? "/strategy.png" : (tab == m_volatility ? "/volatility.png" : "/quotes.png"))));
                 if (grab().save(path)) qInfo("[live-smoke] wrote %s", qPrintable(path));
             }
-            // The web view cannot be captured by QWidget::grab; ask the chart library for its own image.
-            m_quotes->saveChartImage(shotDir + "/chart.png", [](const QString& written) {
-                qInfo("[live-smoke] chart image %s", written.isEmpty() ? "FAILED" : qPrintable(written));
-                QCoreApplication::exit(written.isEmpty() ? 1 : 0);
+            // Exercise the drawing tools through the page's mouse handlers, then export the
+            // chart (the web view cannot be captured by QWidget::grab; the library renders it,
+            // with the drawing overlay composited on top).
+            m_quotes->debugSimulateDrawings([this, shotDir](int count) {
+                qInfo("[live-smoke] drawings placed through the page: %d", count);
+                QTimer::singleShot(600, this, [this, shotDir] {
+                    qInfo("[live-smoke] drawings persisted for %s: %s", qPrintable(m_chain->ticker()), m_quotes->hasStoredDrawings(m_chain->ticker()) ? "yes" : "no");
+                    m_quotes->saveChartImage(shotDir + "/chart.png", [](const QString& written) {
+                        qInfo("[live-smoke] chart image %s", written.isEmpty() ? "FAILED" : qPrintable(written));
+                        QCoreApplication::exit(written.isEmpty() ? 1 : 0);
+                    });
+                });
             });
         }
     };

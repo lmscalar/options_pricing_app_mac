@@ -15,6 +15,7 @@ constexpr const char* kWatchlistKey = "quotes/watchlist";
 constexpr const char* kTimeframeKey = "quotes/timeframe";
 constexpr const char* kChartTypeKey = "quotes/chartType";
 constexpr const char* kHeaderKey = "quotes/header";       ///< column widths and sort indicator
+constexpr const char* kDrawingsPrefix = "quotes/drawings/"; ///< + symbol -> JSON array of drawings
 constexpr int kValueRole = Qt::UserRole;                   ///< numeric value used for sorting
 constexpr int kTickerRole = Qt::UserRole + 1;              ///< ticker symbol stored on the first column
 
@@ -204,14 +205,64 @@ void QuotesTab::buildUi()
     toolbarBottom->addWidget(m_emaPeriod);
     toolbarBottom->addWidget(m_volumeCheck);
     toolbarBottom->addStretch(1);
+    // Drawing tools: exclusive tool buttons plus undo / delete / clear.
+    m_drawTools = new QButtonGroup(this);
+    m_drawTools->setExclusive(true);
+    auto* drawRow = new QHBoxLayout;
+    drawRow->setSpacing(4);
+    auto* drawLabel = new QLabel("Draw", this);
+    drawLabel->setObjectName("muted");
+    drawRow->addWidget(drawLabel);
+    const char* toolLabels[] = { "Cursor", "Trend", "Support", "Resistance", "Edit" };
+    const char* toolTips[] = {
+        "Pan and zoom the chart; drawings are not editable",
+        "Drag (or click, move, click) to draw a trend line; it extends to the right as a dashed ray",
+        "Drag vertically to shade a support zone between two prices",
+        "Drag vertically to shade a resistance zone between two prices",
+        "Select drawings: drag handles or bodies to move them, press Delete to remove the selected one",
+    };
+    for (int i = 0; i < 5; ++i) {
+        auto* button = new QToolButton(this);
+        button->setText(toolLabels[i]);
+        button->setCheckable(true);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setToolTip(toolTips[i]);
+        m_drawTools->addButton(button, i);
+        drawRow->addWidget(button);
+    }
+    m_drawTools->button(0)->setChecked(true);
+    drawRow->addSpacing(8);
+    auto makeAction = [this](const char* text, const char* tip) {
+        auto* button = new QToolButton(this);
+        button->setText(text);
+        button->setToolTip(tip);
+        button->setCursor(Qt::PointingHandCursor);
+        return button;
+    };
+    m_undoDraw = makeAction("Undo", "Remove the most recent drawing");
+    m_deleteDraw = makeAction("Delete", "Remove the selected drawing (Edit tool)");
+    m_clearDraw = makeAction("Clear", "Remove every drawing on this symbol");
+    drawRow->addWidget(m_undoDraw);
+    drawRow->addWidget(m_deleteDraw);
+    drawRow->addWidget(m_clearDraw);
+    m_drawHint = new QLabel("Saved per symbol · Esc returns to the cursor", this);
+    m_drawHint->setObjectName("muted");
+    m_drawHint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    drawRow->addSpacing(8);
+    drawRow->addWidget(m_drawHint, 1);
+
     auto* toolbar = new QVBoxLayout;
     toolbar->setSpacing(6);
     toolbar->addLayout(toolbarTop);
     toolbar->addLayout(toolbarBottom);
+    toolbar->addLayout(drawRow);
 
     m_view = new QWebEngineView(this);
     m_view->setMinimumSize(420, 300);
     m_view->setContextMenuPolicy(Qt::NoContextMenu);
+    m_page = new ChartWebPage(m_view);
+    m_page->onMessage = [this](const QString& kind, const QString& payload) { onPageMessage(kind, payload); };
+    m_view->setPage(m_page);
     m_view->page()->setBackgroundColor(QColor(m_theme.window.isEmpty() ? "#0a0f1c" : m_theme.window));
     m_view->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, false);
     m_view->settings()->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
@@ -285,6 +336,13 @@ void QuotesTab::wire()
                           written.isEmpty() ? ui::StatusKind::Error : ui::StatusKind::Info);
         });
     });
+    connect(m_drawTools, &QButtonGroup::idClicked, this, [this](int id) {
+        if (id >= 0 && id < drawToolNames().size()) runJs(QStringLiteral("chartApi.setTool('%1');").arg(drawToolNames().at(id)));
+        m_view->setFocus();   // so Delete / Esc reach the page
+    });
+    connect(m_undoDraw, &QToolButton::clicked, this, [this] { runJs(QStringLiteral("chartApi.undoDrawing();")); });
+    connect(m_deleteDraw, &QToolButton::clicked, this, [this] { runJs(QStringLiteral("chartApi.deleteSelected();")); });
+    connect(m_clearDraw, &QToolButton::clicked, this, [this] { runJs(QStringLiteral("chartApi.clearDrawings();")); });
     connect(m_timeframeGroup, &QButtonGroup::idClicked, this, [this](int id) {
         m_timeframeIndex = id;
         QSettings().setValue(kTimeframeKey, id);
@@ -310,7 +368,7 @@ void QuotesTab::wire()
         pushOptions();
         for (const QString& script : m_pendingJs) m_view->page()->runJavaScript(script);
         m_pendingJs.clear();
-        if (!m_bars.bars.empty()) pushBars();
+        if (!m_bars.bars.empty()) { pushBars(); pushDrawings(); }
     });
 
     m_timer = new QTimer(this);
@@ -528,6 +586,7 @@ void QuotesTab::loadChart(const QString& ticker)
             if (symbol != m_chartTicker) return;   // user moved on
             m_bars = series;
             pushBars();
+            pushDrawings();
             const MarketDataClient::Bar& last = series.bars.back();
             ui::setStatus(m_chartStatus, QStringLiteral("%1 · %2 bars (%3) from %4 to %5 · last %6 at %7")
                                              .arg(symbol).arg(series.bars.size()).arg(tf.label)
@@ -616,6 +675,52 @@ QString QuotesTab::themeJson() const
 void QuotesTab::pushTheme()
 {
     runJs(QStringLiteral("chartApi.setTheme(%1);").arg(themeJson()));
+}
+
+const QStringList& QuotesTab::drawToolNames()
+{
+    static const QStringList names = { "cursor", "trend", "support", "resistance", "edit" };
+    return names;
+}
+
+void QuotesTab::pushDrawings()
+{
+    if (m_chartTicker.isEmpty()) return;
+    auto it = m_drawings.find(m_chartTicker);
+    if (it == m_drawings.end()) {
+        const QString stored = QSettings().value(kDrawingsPrefix + m_chartTicker).toString();
+        it = m_drawings.emplace(m_chartTicker, stored.isEmpty() ? QStringLiteral("[]") : stored).first;
+    }
+    runJs(QStringLiteral("chartApi.setDrawings(%1);").arg(it->second));
+}
+
+void QuotesTab::onPageMessage(const QString& kind, const QString& payload)
+{
+    if (kind == "drawings") {
+        const QJsonObject obj = QJsonDocument::fromJson(payload.toUtf8()).object();
+        const QString symbol = obj.value("symbol").toString();
+        if (symbol.isEmpty()) return;
+        const QString items = QString::fromUtf8(QJsonDocument(obj.value("items").toArray()).toJson(QJsonDocument::Compact));
+        m_drawings[symbol] = items;
+        QSettings settings;
+        if (items == "[]") settings.remove(kDrawingsPrefix + symbol);
+        else settings.setValue(kDrawingsPrefix + symbol, items);
+    } else if (kind == "tool") {
+        // The page returns to the cursor after a drawing is placed or on Esc; mirror it.
+        const int id = static_cast<int>(drawToolNames().indexOf(payload));
+        if (QAbstractButton* button = id >= 0 ? m_drawTools->button(id) : nullptr) button->setChecked(true);
+    }
+}
+
+void QuotesTab::debugSimulateDrawings(std::function<void(int)> done)
+{
+    if (!m_pageReady) { done(0); return; }
+    m_view->page()->runJavaScript(QStringLiteral("chartApi.simulateDrawings()"), [done](const QVariant& result) { done(result.toInt()); });
+}
+
+bool QuotesTab::hasStoredDrawings(const QString& symbol) const
+{
+    return QSettings().contains(kDrawingsPrefix + symbol.trimmed().toUpper());
 }
 
 void QuotesTab::runJs(const QString& script)

@@ -11,6 +11,7 @@
 #pragma once
 
 #include "QtHeaders.h"
+#include "ChartPage.h"
 #include "MarketDataClient.h"
 #include "MarketState.h"
 #include "Theme.h"
@@ -28,6 +29,7 @@ public:
     /// Adds the ticker to the watchlist if needed, selects it and loads its chart.
     void showTicker(const QString& ticker);
     void refreshQuotes();
+    bool hasTicker(const QString& ticker) const { return m_watchlist.contains(ticker.trimmed().toUpper()); }
     void applyTheme(const Theme& theme);
     QString resultsCsv() const;
 
@@ -36,6 +38,11 @@ public:
     void saveChartImage(const QString& path, std::function<void(const QString& written)> done);
 
     std::function<void(const QString& ticker)> onOpenInChain;
+
+    /// Test hooks for the live smoke: draws sample annotations through the page's mouse
+    /// handlers and reports how many drawings exist; checks the per-symbol persistence.
+    void debugSimulateDrawings(std::function<void(int count)> done);
+    bool hasStoredDrawings(const QString& symbol) const;
 
 private:
     struct Timeframe {
@@ -59,6 +66,10 @@ private:
     void pushBars();
     void pushOptions();
     void pushTheme();
+    /// Sends the stored drawings (trend lines, support/resistance zones) for the charted symbol.
+    void pushDrawings();
+    void onPageMessage(const QString& kind, const QString& payload);
+    static const QStringList& drawToolNames();
     void runJs(const QString& script);
     QString themeJson() const;
     QString selectedTicker() const;
@@ -107,5 +118,14 @@ private:
     QPushButton* m_openChain = nullptr;
     QPushButton* m_saveImage = nullptr;
     QWebEngineView* m_view = nullptr;
+    ChartWebPage* m_page = nullptr;
     QLabel* m_chartStatus = nullptr;
+
+    // Drawing tools
+    QButtonGroup* m_drawTools = nullptr;       ///< ids follow drawToolNames(): cursor, trend, support, resistance, edit
+    QToolButton* m_undoDraw = nullptr;
+    QToolButton* m_deleteDraw = nullptr;
+    QToolButton* m_clearDraw = nullptr;
+    QLabel* m_drawHint = nullptr;
+    std::map<QString, QString> m_drawings;     ///< symbol -> JSON array of drawings (mirrors QSettings)
 };
