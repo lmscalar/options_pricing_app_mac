@@ -62,6 +62,8 @@ public:
     /// Adds a drawing from a JSON spec (see chartApi.addDrawing) and persists it.
     void addDrawing(const QJsonObject& spec);
     void clearDrawings();
+    /// Reloads the bars into the chart and restores autoscale, default zoom and the cursor tool.
+    void resetChart();
     /// JSON array of the charted symbol's drawings (from the persisted copy).
     QString drawingsJson() const;
     /// Renders the chart (with drawings) to an image asynchronously; null image on failure.
@@ -69,6 +71,10 @@ public:
     /// Plain-text description of the chart for the assistant: symbol, timeframe, indicator
     /// settings, drawings, and the most recent bars as CSV.
     QString contextSummary(int maxBars = 80) const;
+
+    /// Test hooks: the watchlist row's displayed Last / change / percent, and the chart legend text.
+    QString debugRowText(const QString& symbol) const;
+    void debugLegendText(std::function<void(const QString&)> done);
 
     /// Test hooks for the live smoke: draws sample annotations through the page's mouse
     /// handlers and reports how many drawings exist; checks the per-symbol persistence.
@@ -104,6 +110,10 @@ private:
     void pushBars();
     void pushOptions();
     void pushTheme();
+    /// Shows the app-wide ticker's row with the headline's figures and sends the live price to the chart.
+    void syncActiveQuote();
+    void pushLive();
+    void pinPreviousCloseFromBars();
     /// Sends the stored drawings (trend lines, support/resistance zones) for the charted symbol.
     void pushDrawings();
     void onPageMessage(const QString& kind, const QString& payload);
@@ -157,8 +167,11 @@ private:
     QCheckBox* m_emaCheck = nullptr;
     QSpinBox* m_emaPeriod = nullptr;
     QCheckBox* m_volumeCheck = nullptr;
+    QCheckBox* m_priceLineCheck = nullptr;
     QPushButton* m_openChain = nullptr;
     QPushButton* m_saveImage = nullptr;
+    QPushButton* m_resetChart = nullptr;
+    int m_loadSequence = 0;            ///< increments per loadChart(); stale responses are dropped
     QWebEngineView* m_view = nullptr;
     ChartWebPage* m_page = nullptr;
     QLabel* m_chartStatus = nullptr;

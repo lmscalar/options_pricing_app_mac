@@ -35,6 +35,29 @@ public:
         return data(kValueRole).toDouble() < other.data(kValueRole).toDouble();
     }
 };
+/// Bars are stamped at the start of their window in New York time; daily bars therefore
+/// carry a session date that must be read in that zone, not in the local one.
+const QTimeZone& exchangeZone()
+{
+    static const QTimeZone zone("America/New_York");
+    return zone;
+}
+
+QDate sessionDate(qint64 timeMs)
+{
+    return QDateTime::fromMSecsSinceEpoch(timeMs, exchangeZone()).date();
+}
+
+QDate exchangeToday()
+{
+    return QDateTime::currentDateTime().toTimeZone(exchangeZone()).date();
+}
+
+/// Human label for a bar: the session date for daily/weekly bars, local wall-clock time for intraday ones.
+QString barLabel(qint64 timeMs, bool intraday)
+{
+    return intraday ? QDateTime::fromMSecsSinceEpoch(timeMs).toString("yyyy-MM-dd HH:mm") : sessionDate(timeMs).toString(Qt::ISODate);
+}
 } // namespace
 
 const std::vector<QuotesTab::Timeframe>& QuotesTab::timeframes()
@@ -68,6 +91,8 @@ QuotesTab::QuotesTab(MarketState& state, QWidget* parent)
             addTicker(symbol);
         }
         if (!m_state.companyName.isEmpty() && !symbol.isEmpty()) m_names[symbol] = m_state.companyName;
+        // Keep the active ticker's row and the chart's live readout in step with the headline.
+        syncActiveQuote();
     });
     QTimer::singleShot(400, this, [this] { refreshQuotes(); });
 }
@@ -184,6 +209,7 @@ void QuotesTab::buildUi()
     m_volumeCheck->setChecked(true);
     m_openChain = ui::makeButton(this, "Open Option Chain", "secondary", "Fetch this ticker's option chain on the Option Chain tab");
     m_saveImage = ui::makeButton(this, "Save Image…", "secondary", "Save the chart as a PNG image");
+    m_resetChart = ui::makeButton(this, "Reset", "secondary", "Reset the chart view: reload the bars, restore autoscale and the default zoom, return to the cursor tool (drawings are kept)");
     for (QSpinBox* box : { m_smaPeriod, m_emaPeriod }) {
         box->setMaximumWidth(72);
         box->setToolTip("Period in bars");
@@ -204,6 +230,10 @@ void QuotesTab::buildUi()
     toolbarBottom->addWidget(m_emaCheck);
     toolbarBottom->addWidget(m_emaPeriod);
     toolbarBottom->addWidget(m_volumeCheck);
+    m_priceLineCheck = new QCheckBox("Price line", this);
+    m_priceLineCheck->setChecked(QSettings().value("quotes/priceLine", true).toBool());
+    m_priceLineCheck->setToolTip("Horizontal line at the live price (or the last close): a chart marker, not a drawing");
+    toolbarBottom->addWidget(m_priceLineCheck);
     toolbarBottom->addStretch(1);
     // Drawing tools: exclusive tool buttons plus undo / delete / clear.
     m_drawTools = new QButtonGroup(this);
@@ -276,6 +306,7 @@ void QuotesTab::buildUi()
     auto* footer = new QHBoxLayout;
     footer->setSpacing(8);
     footer->addWidget(m_chartStatus, 1);
+    footer->addWidget(m_resetChart);
     footer->addWidget(m_saveImage);
     footer->addWidget(m_openChain);
 
@@ -334,6 +365,7 @@ void QuotesTab::wire()
     connect(m_openChain, &QPushButton::clicked, this, [this] {
         if (!m_chartTicker.isEmpty() && onOpenInChain) onOpenInChain(m_chartTicker);
     });
+    connect(m_resetChart, &QPushButton::clicked, this, [this] { resetChart(); });
     connect(m_saveImage, &QPushButton::clicked, this, [this] {
         if (m_chartTicker.isEmpty()) return;
         const QString suggested = QStringLiteral("%1_%2.png").arg(m_chartTicker, timeframes()[static_cast<size_t>(m_timeframeIndex)].label);
@@ -360,6 +392,7 @@ void QuotesTab::wire()
         QSettings().setValue(kChartTypeKey, m_chartType->currentData().toString());
         pushOptions();
     });
+    connect(m_priceLineCheck, &QCheckBox::toggled, this, [this](bool on) { QSettings().setValue("quotes/priceLine", on); pushOptions(); });
     for (QCheckBox* box : { m_smaCheck, m_emaCheck, m_volumeCheck }) {
         connect(box, &QCheckBox::toggled, this, [this](bool) { pushOptions(); });
     }
@@ -487,8 +520,19 @@ void QuotesTab::rebuildTable()
     m_updating = false;
 }
 
-void QuotesTab::fillQuoteRow(int row, const MarketDataClient::Quote& quote)
+void QuotesTab::fillQuoteRow(int row, const MarketDataClient::Quote& vendorQuote)
 {
+    // The app-wide ticker shows the same figures as the headline (parity-implied spot when
+    // enabled, one previous close); other rows show the vendor snapshot.
+    MarketDataClient::Quote quote = vendorQuote;
+    const bool shared = quote.ticker == m_state.underlyingTicker && m_state.market.spot > 0.0 && !m_state.spotSource.isEmpty();
+    if (shared) {
+        quote.last = m_state.market.spot;
+        if (m_state.previousClose > 0.0) quote.previousClose = m_state.previousClose;
+        quote.change = quote.previousClose > 0.0 ? quote.last - quote.previousClose : 0.0;
+        quote.changePercent = quote.previousClose > 0.0 ? (quote.last / quote.previousClose - 1.0) * 100.0 : 0.0;
+        if (m_state.spotAsOf.isValid()) quote.asOf = m_state.spotAsOf;
+    }
     const QColor color(changeColor(m_theme, quote.change));
     auto* last = new NumericItem(ui::number(quote.last, 2), quote.last);
     QFont f = last->font();
@@ -499,16 +543,72 @@ void QuotesTab::fillQuoteRow(int row, const MarketDataClient::Quote& quote)
     change->setForeground(QBrush(color));
     percent->setForeground(QBrush(color));
     last->setForeground(QBrush(color));
-    const QString tip = QStringLiteral("%1\nOpen %2 · High %3 · Low %4 · Volume %5\nPrevious close %6 · as of %7")
-                            .arg(m_names.count(quote.ticker) ? m_names.at(quote.ticker) : quote.ticker,
-                                 ui::number(quote.dayOpen, 2), ui::number(quote.dayHigh, 2), ui::number(quote.dayLow, 2),
-                                 QLocale(QLocale::English).toString(quote.dayVolume, 'f', 0), ui::number(quote.previousClose, 2),
-                                 quote.asOf.isValid() ? quote.asOf.toString("HH:mm") : QStringLiteral("–"));
+    QString tip = QStringLiteral("%1\nOpen %2 · High %3 · Low %4 · Volume %5\nPrevious close %6 · as of %7")
+                      .arg(m_names.count(quote.ticker) ? m_names.at(quote.ticker) : quote.ticker,
+                           ui::number(quote.dayOpen, 2), ui::number(quote.dayHigh, 2), ui::number(quote.dayLow, 2),
+                           QLocale(QLocale::English).toString(quote.dayVolume, 'f', 0), ui::number(quote.previousClose, 2),
+                           quote.asOf.isValid() ? quote.asOf.toString("HH:mm") : QStringLiteral("–"));
+    if (shared) {
+        tip += QStringLiteral("\nSynchronized with the headline: %1%2")
+                   .arg(m_state.spotSource == "option parity" ? QStringLiteral("parity-implied from options") : QStringLiteral("Massive %1").arg(m_state.spotSource),
+                        m_state.vendorSpot > 0.0 && std::fabs(m_state.vendorSpot - quote.last) > 0.005 ? QStringLiteral(" · vendor %1").arg(ui::number(m_state.vendorSpot, 2)) : QString());
+        QFont f = last->font();
+        f.setBold(true);
+        last->setFont(f);
+    }
     for (QTableWidgetItem* item : { last, change, percent }) item->setToolTip(tip);
     if (QTableWidgetItem* tickerItem = m_table->item(row, ColTicker)) tickerItem->setToolTip(tip);
     m_table->setItem(row, ColLast, last);
     m_table->setItem(row, ColChange, change);
     m_table->setItem(row, ColPercent, percent);
+}
+
+void QuotesTab::syncActiveQuote()
+{
+    const QString symbol = m_state.underlyingTicker;
+    if (symbol.isEmpty()) return;
+    const int row = rowForTicker(symbol);
+    if (row >= 0) {
+        m_updating = true;
+        m_table->setSortingEnabled(false);
+        const auto it = m_quotes.find(symbol);
+        MarketDataClient::Quote quote = it != m_quotes.end() ? it->second : MarketDataClient::Quote{};
+        quote.ticker = symbol;
+        if (quote.last <= 0.0) quote.last = m_state.vendorSpot > 0.0 ? m_state.vendorSpot : m_state.market.spot;
+        if (quote.previousClose <= 0.0) quote.previousClose = m_state.previousClose;
+        fillQuoteRow(row, quote);
+        m_table->setSortingEnabled(true);
+        m_updating = false;
+    }
+    if (symbol == m_chartTicker) pushLive();
+}
+
+void QuotesTab::pushLive()
+{
+    if (m_chartTicker.isEmpty()) return;
+    QJsonObject live;
+    if (m_chartTicker == m_state.underlyingTicker && m_state.market.spot > 0.0 && !m_state.spotSource.isEmpty()) {
+        live["price"] = m_state.market.spot;
+        if (m_state.previousClose > 0.0) live["previousClose"] = m_state.previousClose;
+        live["source"] = m_state.spotSource == "option parity" ? QStringLiteral("parity-implied") : m_state.spotSource;
+        if (m_state.spotAsOf.isValid()) live["asOf"] = m_state.spotAsOf.toString("HH:mm");
+        else if (m_state.spotTime.isValid()) live["asOf"] = m_state.spotTime.toString("HH:mm");
+    }
+    runJs(QStringLiteral("chartApi.setLive(%1);").arg(live.isEmpty() ? QStringLiteral("null") : QString::fromUtf8(QJsonDocument(live).toJson(QJsonDocument::Compact))));
+}
+
+void QuotesTab::pinPreviousCloseFromBars()
+{
+    // Daily bars give the last completed session's close directly; that is the correct
+    // basis for today's change, whatever the vendor's prevDay says around the overnight roll.
+    const Timeframe& tf = timeframes()[static_cast<size_t>(m_timeframeIndex)];
+    if (QString(tf.timespan) != "day" || m_bars.bars.size() < 2 || m_chartTicker != m_state.underlyingTicker) return;
+    const QDate today = exchangeToday();
+    const auto& bars = m_bars.bars;
+    const QDate lastDate = sessionDate(bars.back().timeMs);
+    // Today's (partial) bar is never the previous close; the bar before it is.
+    const double previousClose = lastDate < today ? bars.back().close : bars[bars.size() - 2].close;
+    if (m_state.setPreviousCloseFromBars(m_chartTicker, previousClose)) m_state.notify();
 }
 
 QString QuotesTab::selectedTicker() const
@@ -528,6 +628,11 @@ void QuotesTab::refreshQuotes()
     }
     m_client.fetchQuotes(m_watchlist, [this](const std::vector<MarketDataClient::Quote>& quotes) {
         if (m_store) m_store->putQuotes(quotes);
+        // The active ticker's vendor quote also feeds the shared state (headline, chain, chart).
+        bool stateChanged = false;
+        for (const MarketDataClient::Quote& q : quotes) {
+            if (q.ticker == m_state.underlyingTicker) stateChanged = m_state.updateVendorQuote(q.ticker, q.last, q.previousClose, q.asOf, "last minute bar") || stateChanged;
+        }
         QDateTime newest;
         for (const MarketDataClient::Quote& q : quotes) {
             m_quotes[q.ticker] = q;
@@ -550,6 +655,7 @@ void QuotesTab::refreshQuotes()
             status += QStringLiteral(" · vendor data as of %1 (%2 min delayed)").arg(newest.toString("HH:mm")).arg(std::max<qint64>(0, delay));
         }
         setStatus(status, ui::StatusKind::Info);
+        if (stateChanged) m_state.notify();
         if (m_chartTicker.isEmpty() && m_table->rowCount() > 0 && m_table->currentRow() < 0) {
             // Initial selection: chart the first row but do not cascade it to the other tabs,
             // which may hold a workspace the user opened; only user clicks cascade.
@@ -610,21 +716,24 @@ void QuotesTab::loadChart(const QString& ticker)
     const Timeframe& tf = timeframes()[static_cast<size_t>(m_timeframeIndex)];
     const QDate today = QDate::currentDate();
     m_loadingChart = true;
+    const int sequence = ++m_loadSequence;   // responses arriving out of order are ignored
     ui::setStatus(m_chartStatus, QStringLiteral("Loading %1 %2 bars…").arg(symbol, tf.label), ui::StatusKind::Info);
     m_client.fetchAggregates(symbol, tf.multiplier, tf.timespan, today.addDays(-tf.lookbackDays), today,
-        [this, symbol, tf](const MarketDataClient::BarSeries& series) {
+        [this, symbol, tf, sequence](const MarketDataClient::BarSeries& series) {
+            if (sequence != m_loadSequence) return;   // a newer load (symbol or timeframe) superseded this one
             m_loadingChart = false;
             if (symbol != m_chartTicker) return;   // user moved on
             m_bars = series;
             pushBars();
             pushDrawings();
+            pinPreviousCloseFromBars();
+            pushLive();
             if (m_chartLoaded) { auto cb = std::move(m_chartLoaded); m_chartLoaded = nullptr; cb(true); }
             const MarketDataClient::Bar& last = series.bars.back();
             ui::setStatus(m_chartStatus, QStringLiteral("%1 · %2 bars (%3) from %4 to %5 · last %6 at %7")
                                              .arg(symbol).arg(series.bars.size()).arg(tf.label)
-                                             .arg(QDateTime::fromMSecsSinceEpoch(series.bars.front().timeMs).toString("yyyy-MM-dd"),
-                                                  QDateTime::fromMSecsSinceEpoch(last.timeMs).toString("yyyy-MM-dd"),
-                                                  ui::number(last.close, 2), QDateTime::fromMSecsSinceEpoch(last.timeMs).toString("yyyy-MM-dd HH:mm")),
+                                             .arg(barLabel(series.bars.front().timeMs, false), barLabel(last.timeMs, false),
+                                                  ui::number(last.close, 2), barLabel(last.timeMs, tf.intraday)),
                           ui::StatusKind::Info);
             if (!m_names.count(symbol)) {
                 m_client.fetchTickerDetails(symbol, [this, symbol](const MarketDataClient::TickerDetails& details) {
@@ -636,7 +745,8 @@ void QuotesTab::loadChart(const QString& ticker)
                 }, [](const QString&) {});
             }
         },
-        [this, symbol](const QString& message) {
+        [this, symbol, sequence](const QString& message) {
+            if (sequence != m_loadSequence) return;
             m_loadingChart = false;
             if (symbol == m_chartTicker) ui::setStatus(m_chartStatus, message, ui::StatusKind::Error);
             if (m_chartLoaded) { auto cb = std::move(m_chartLoaded); m_chartLoaded = nullptr; cb(false); }
@@ -698,6 +808,18 @@ void QuotesTab::loadChartThen(const QString& rawSymbol, const QString& timeframe
     if (symbol == m_chartTicker && (reload || m_bars.bars.empty()) && !m_loadingChart) loadChart(symbol);
 }
 
+void QuotesTab::resetChart()
+{
+    if (m_chartTicker.isEmpty()) return;
+    // Re-send the bars the tab holds (so the chart matches the status line), then reset the view.
+    pushBars();
+    pushDrawings();
+    pushLive();
+    runJs(QStringLiteral("chartApi.reset();"));
+    if (QAbstractButton* cursor = m_drawTools->button(0)) cursor->setChecked(true);
+    ui::setStatus(m_chartStatus, QStringLiteral("%1 chart reset: bars reloaded, autoscale and default zoom restored.").arg(m_chartTicker), ui::StatusKind::Info);
+}
+
 void QuotesTab::addDrawing(const QJsonObject& spec)
 {
     runJs(QStringLiteral("chartApi.addDrawing(%1);").arg(QString::fromUtf8(QJsonDocument(spec).toJson(QJsonDocument::Compact))));
@@ -755,14 +877,14 @@ QString QuotesTab::contextSummary(int maxBars) const
     }
     double hi = 0.0, lo = 1e300;
     for (const MarketDataClient::Bar& b : bars) { hi = std::max(hi, b.high); lo = std::min(lo, b.low); }
-    s << bars.size() << " bars from " << QDateTime::fromMSecsSinceEpoch(bars.front().timeMs).toString("yyyy-MM-dd HH:mm") << " to "
-      << QDateTime::fromMSecsSinceEpoch(bars.back().timeMs).toString("yyyy-MM-dd HH:mm") << "; range low " << ui::number(lo, 2) << " high " << ui::number(hi, 2)
+    s << bars.size() << " bars from " << barLabel(bars.front().timeMs, tf.intraday) << " to "
+      << barLabel(bars.back().timeMs, tf.intraday) << "; range low " << ui::number(lo, 2) << " high " << ui::number(hi, 2)
       << "; last close " << ui::number(bars.back().close, 2) << ".\n";
     const size_t count = std::min(bars.size(), static_cast<size_t>(std::max(10, maxBars)));
     s << "Most recent " << count << " bars (time,open,high,low,close,volume):\n";
     for (size_t i = bars.size() - count; i < bars.size(); ++i) {
         const MarketDataClient::Bar& b = bars[i];
-        s << QDateTime::fromMSecsSinceEpoch(b.timeMs).toString(tf.intraday ? "yyyy-MM-dd HH:mm" : "yyyy-MM-dd") << "," << ui::number(b.open, 2) << "," << ui::number(b.high, 2)
+        s << barLabel(b.timeMs, tf.intraday) << "," << ui::number(b.open, 2) << "," << ui::number(b.high, 2)
           << "," << ui::number(b.low, 2) << "," << ui::number(b.close, 2) << "," << QString::number(b.volume, 'f', 0) << "\n";
     }
     return out;
@@ -788,9 +910,12 @@ void QuotesTab::pushBars()
     meta["timeframe"] = tf.label;
     meta["intraday"] = tf.intraday;
     const auto quote = m_quotes.find(m_chartTicker);
-    if (quote != m_quotes.end() && quote->second.previousClose > 0.0 && tf.intraday) meta["previousClose"] = quote->second.previousClose;
+    if (m_chartTicker == m_state.underlyingTicker && m_state.previousClose > 0.0) meta["previousClose"] = m_state.previousClose;
+    else if (quote != m_quotes.end() && quote->second.previousClose > 0.0) meta["previousClose"] = quote->second.previousClose;
     if (!m_bars.bars.empty()) {
-        meta["asOf"] = QStringLiteral("as of %1").arg(QDateTime::fromMSecsSinceEpoch(m_bars.bars.back().timeMs).toString("yyyy-MM-dd HH:mm"));
+        const QDate last = sessionDate(m_bars.bars.back().timeMs);
+        meta["asOf"] = tf.intraday ? QStringLiteral("as of %1").arg(barLabel(m_bars.bars.back().timeMs, true))
+                                   : QStringLiteral("%1 %2").arg(last == exchangeToday() ? "today's session, " : "session ", barLabel(m_bars.bars.back().timeMs, false));
     }
     QJsonObject payload;
     payload["bars"] = bars;
@@ -811,6 +936,7 @@ void QuotesTab::pushOptions()
     opts["sma"] = sma;
     opts["ema"] = ema;
     opts["volume"] = m_volumeCheck->isChecked();
+    opts["priceLine"] = m_priceLineCheck->isChecked();
     runJs(QStringLiteral("chartApi.setOptions(%1);").arg(QString::fromUtf8(QJsonDocument(opts).toJson(QJsonDocument::Compact))));
 }
 
@@ -863,11 +989,39 @@ void QuotesTab::onPageMessage(const QString& kind, const QString& payload)
         QSettings settings;
         if (items == "[]") settings.remove(kDrawingsPrefix + symbol);
         else settings.setValue(kDrawingsPrefix + symbol, items);
+    } else if (kind == "options") {
+        // The page toggled an option from its menu; mirror it without re-sending.
+        const QJsonObject obj = QJsonDocument::fromJson(payload.toUtf8()).object();
+        if (obj.contains("priceLine")) {
+            const QSignalBlocker blocker(m_priceLineCheck);
+            m_priceLineCheck->setChecked(obj.value("priceLine").toBool(true));
+            QSettings().setValue("quotes/priceLine", m_priceLineCheck->isChecked());
+        }
+    } else if (kind == "menu") {
+        qInfo("[chart] context menu opened on %s", qPrintable(payload));
     } else if (kind == "tool") {
         // The page returns to the cursor after a drawing is placed or on Esc; mirror it.
         const int id = static_cast<int>(drawToolNames().indexOf(payload));
         if (QAbstractButton* button = id >= 0 ? m_drawTools->button(id) : nullptr) button->setChecked(true);
     }
+}
+
+QString QuotesTab::debugRowText(const QString& symbol) const
+{
+    const int row = rowForTicker(symbol.trimmed().toUpper());
+    if (row < 0) return QStringLiteral("(not in watchlist)");
+    QStringList parts;
+    for (int col : { ColLast, ColChange, ColPercent }) {
+        const QTableWidgetItem* item = m_table->item(row, col);
+        parts << (item ? item->text() : QStringLiteral("?"));
+    }
+    return parts.join(' ');
+}
+
+void QuotesTab::debugLegendText(std::function<void(const QString&)> done)
+{
+    if (!m_pageReady) { done(QString()); return; }
+    m_view->page()->runJavaScript(QStringLiteral("document.getElementById('legend').innerText"), [done](const QVariant& result) { done(result.toString()); });
 }
 
 void QuotesTab::debugStashDrawings(std::function<void(int)> done)
@@ -955,7 +1109,7 @@ QString QuotesTab::resultsCsv() const
         s << "\nticker,timeframe,time,open,high,low,close,volume\n";
         const Timeframe& tf = timeframes()[static_cast<size_t>(m_timeframeIndex)];
         for (const MarketDataClient::Bar& b : m_bars.bars) {
-            s << m_chartTicker << "," << tf.label << "," << QDateTime::fromMSecsSinceEpoch(b.timeMs).toString(Qt::ISODate) << ","
+            s << m_chartTicker << "," << tf.label << "," << (tf.intraday ? QDateTime::fromMSecsSinceEpoch(b.timeMs).toString(Qt::ISODate) : barLabel(b.timeMs, false)) << ","
               << b.open << "," << b.high << "," << b.low << "," << b.close << "," << b.volume << "\n";
         }
     }

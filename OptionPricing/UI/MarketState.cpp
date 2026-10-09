@@ -4,6 +4,57 @@
 //
 
 #include "MarketState.h"
+#include "../Pricing/Activity.h"
+
+#include <cmath>
+
+void MarketState::applySpotPolicy()
+{
+    pricing::ActivityMarket am;
+    am.model = market.model;
+    am.spot = vendorSpot > 0.0 ? vendorSpot : market.spot;
+    am.dividendYield = market.dividendYield;
+    am.rateFor = [this](double t) { return rateFor(t); };
+    const pricing::ImpliedSpotEstimate estimate = pricing::impliedSpotFromParity(chainQuotes, am, am.spot, market.dividends);
+    impliedSpot = estimate.valid ? estimate.spot : 0.0;
+    impliedSpotNote = estimate.valid
+        ? QStringLiteral("parity-implied from %1 options (%2 DTE, %3 strike pairs, ±%4)")
+              .arg(estimate.expiry.expiryDate.empty() ? QStringLiteral("nearest") : QString::fromStdString(estimate.expiry.expiryDate))
+              .arg(estimate.expiry.daysToExpiry).arg(estimate.pairs).arg(QString::number(estimate.dispersion, 'f', 2))
+        : QString();
+    if (useImpliedSpot && estimate.valid) {
+        market.spot = estimate.spot;
+        spotSource = "option parity";
+    } else if (vendorSpot > 0.0) {
+        market.spot = vendorSpot;
+        spotSource = vendorSource;
+    }
+}
+
+bool MarketState::updateVendorQuote(const QString& ticker, double last, double previousClose, const QDateTime& asOf, const QString& source)
+{
+    if (ticker.trimmed().toUpper() != underlyingTicker || underlyingTicker.isEmpty() || !(last > 0.0)) return false;
+    // Never move backwards: the chain's spot timer and the watchlist refresh both deliver
+    // the same vendor snapshot; keep whichever is newer.
+    if (asOf.isValid() && spotAsOf.isValid() && asOf < spotAsOf) return false;
+    const bool changed = std::fabs(vendorSpot - last) > 1e-9 || (previousClose > 0.0 && std::fabs(this->previousClose - previousClose) > 1e-9) || asOf != spotAsOf;
+    vendorSpot = last;
+    if (previousClose > 0.0 && !m_previousCloseFromBars) this->previousClose = previousClose;
+    vendorSource = source;
+    spotAsOf = asOf;
+    spotTime = QDateTime::currentDateTime();
+    applySpotPolicy();
+    return changed;
+}
+
+bool MarketState::setPreviousCloseFromBars(const QString& ticker, double close)
+{
+    if (ticker.trimmed().toUpper() != underlyingTicker || !(close > 0.0)) return false;
+    m_previousCloseFromBars = true;
+    if (std::fabs(previousClose - close) < 1e-9) return false;
+    previousClose = close;
+    return true;
+}
 
 QJsonObject MarketState::toJson() const
 {

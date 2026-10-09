@@ -14,8 +14,8 @@ const char* const kControllerJs = R"js(
 (function () {
   const state = {
     chart: null, main: null, volume: null, sma: null, ema: null,
-    bars: [], meta: {}, theme: null,
-    options: { type: 'candles', sma: { on: true, period: 20 }, ema: { on: true, period: 50 }, volume: true },
+    bars: [], meta: {}, theme: null, live: null, liveLine: null, liveLineSeries: null,
+    options: { type: 'candles', sma: { on: true, period: 20 }, ema: { on: true, period: 50 }, volume: true, priceLine: true },
   };
   const container = document.getElementById('chart');
   const legend = document.getElementById('legend');
@@ -72,7 +72,10 @@ const char* const kControllerJs = R"js(
       rightPriceScale: { borderColor: theme.border, scaleMargins: { top: 0.08, bottom: 0.25 } },
       timeScale: { borderColor: theme.border, timeVisible: !!intraday, secondsVisible: false, rightOffset: 4 },
       crosshair: { mode: 0, vertLine: { color: theme.crosshair, labelBackgroundColor: theme.accent }, horzLine: { color: theme.crosshair, labelBackgroundColor: theme.accent } },
-      handleScroll: true, handleScale: true,
+      handleScroll: true,
+      // Zoom/pan the time axis freely, but keep the price axis on autoscale: dragging it
+      // used to leave the chart squashed with a negative price range. Double-click resets.
+      handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: { time: true, price: false }, axisDoubleClickReset: { time: true, price: true } },
     };
   }
 
@@ -104,15 +107,15 @@ const char* const kControllerJs = R"js(
 
     const data = bars.map(b => ({ time: toTime(b.t, intraday), open: b.o, high: b.h, low: b.l, close: b.c }));
     if (opts.type === 'bars') {
-      state.main = state.chart.addBarSeries({ upColor: theme.up, downColor: theme.down, thinBars: false });
+      state.main = state.chart.addBarSeries({ upColor: theme.up, downColor: theme.down, thinBars: false, priceLineVisible: seriesLineVisible() });
       state.main.setData(data);
     } else if (opts.type === 'line') {
-      state.main = state.chart.addLineSeries({ color: theme.accent, lineWidth: 2 });
+      state.main = state.chart.addLineSeries({ color: theme.accent, lineWidth: 2, priceLineVisible: seriesLineVisible() });
       state.main.setData(bars.map(b => ({ time: toTime(b.t, intraday), value: b.c })));
     } else {
       state.main = state.chart.addCandlestickSeries({
         upColor: theme.up, downColor: theme.down, borderUpColor: theme.up, borderDownColor: theme.down,
-        wickUpColor: theme.up, wickDownColor: theme.down,
+        wickUpColor: theme.up, wickDownColor: theme.down, priceLineVisible: seriesLineVisible(),
       });
       state.main.setData(data);
     }
@@ -129,9 +132,32 @@ const char* const kControllerJs = R"js(
       state.ema = state.chart.addLineSeries({ color: theme.accent3, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
       state.ema.setData(ema(bars, opts.ema.period).map(p => ({ time: toTime(p.t, intraday), value: p.value })));
     }
+    applyLiveLine();
     if (fit) state.chart.timeScale().fitContent();
     updateLegend(null);
     redraw();
+  }
+
+  function resetView() {
+    if (!state.chart) return;
+    state.chart.priceScale('right').applyOptions({ autoScale: true });
+    try { state.chart.priceScale('vol').applyOptions({ autoScale: true }); } catch (e) {}
+    state.chart.timeScale().resetTimeScale();
+    render(true);
+    setTool('cursor');
+  }
+
+  // Exactly one horizontal price line: the live quote when there is one, otherwise the
+  // series' own last-close line; none at all when the user switches price lines off.
+  function seriesLineVisible() { return state.options.priceLine !== false && !(state.live && state.live.price); }
+  function applyLiveLine() {
+    if (state.liveLine && state.liveLineSeries) { try { state.liveLineSeries.removePriceLine(state.liveLine); } catch (e) {} }
+    state.liveLine = null; state.liveLineSeries = null;
+    if (!state.main) return;
+    state.main.applyOptions({ priceLineVisible: seriesLineVisible() });
+    if (state.options.priceLine === false || !state.live || !state.live.price || !state.bars.length) return;
+    state.liveLine = state.main.createPriceLine({ price: state.live.price, color: state.theme.accent2, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: 'live' });
+    state.liveLineSeries = state.main;
   }
 
   function fmt(v, digits) { return (v === undefined || v === null || isNaN(v)) ? '–' : Number(v).toFixed(digits === undefined ? 2 : digits); }
@@ -144,13 +170,22 @@ const char* const kControllerJs = R"js(
     let bar = source[source.length - 1];
     if (param && param.time !== undefined && state.main) {
       const d = param.seriesData.get(state.main);
-      if (d && d.open !== undefined) bar = { o: d.open, h: d.high, l: d.low, c: d.close, v: bar.v };
-      else if (d && d.value !== undefined) bar = { o: d.value, h: d.value, l: d.value, c: d.value, v: bar.v };
+      const hovered = source.find(b => { const tt = toTime(b.t, !!state.meta.intraday); return typeof tt === 'object' ? (tt.year === param.time.year && tt.month === param.time.month && tt.day === param.time.day) : tt === param.time; });
+      if (d && d.open !== undefined) bar = { t: hovered ? hovered.t : bar.t, o: d.open, h: d.high, l: d.low, c: d.close, v: bar.v };
+      else if (d && d.value !== undefined) bar = { t: hovered ? hovered.t : bar.t, o: d.value, h: d.value, l: d.value, c: d.value, v: bar.v };
       if (state.volume) { const vd = param.seriesData.get(state.volume); if (vd) bar.v = vd.value; }
     }
-    const first = state.bars[0];
-    const change = bar.c - (state.meta.previousClose || first.o);
-    const pct = (state.meta.previousClose || first.o) ? change / (state.meta.previousClose || first.o) * 100 : 0;
+    // Change basis: while hovering, the hovered bar versus the bar before it; otherwise the
+    // last bar versus the session's previous close (never the first bar of the series).
+    let basis = 0;
+    if (param && param.time !== undefined && state.main) {
+      const idx = source.findIndex(b => b.t === bar.t);
+      basis = idx > 0 ? source[idx - 1].c : bar.o;
+    } else {
+      basis = state.meta.previousClose || (source.length > 1 ? source[source.length - 2].c : bar.o);
+    }
+    const change = bar.c - basis;
+    const pct = basis ? change / basis * 100 : 0;
     const color = change >= 0 ? theme.up : theme.down;
     const typeName = { candles: 'Candles', bars: 'Bars', heikin: 'Heikin-Ashi', line: 'Line' }[opts.type] || '';
     let html = '<span class="sym">' + (state.meta.symbol || '') + '</span>';
@@ -160,6 +195,15 @@ const char* const kControllerJs = R"js(
     html += '<span>C <b style="color:' + color + '">' + fmt(bar.c) + '</b></span>';
     html += '<span style="color:' + color + '">' + (change >= 0 ? '+' : '') + fmt(change) + ' (' + (change >= 0 ? '+' : '') + fmt(pct) + '%)</span>';
     html += '<span>Vol <b>' + fmtVolume(bar.v || 0) + '</b></span>';
+    if (state.live && state.live.price && !(param && param.time !== undefined)) {
+      // Live quote shared with the headline (parity-implied or vendor), with the same previous-close basis.
+      const prev = state.live.previousClose || basis;
+      const lc = state.live.price - prev, lp = prev ? lc / prev * 100 : 0;
+      const lcol = lc >= 0 ? theme.up : theme.down;
+      html += '<span style="color:' + theme.accent2 + '">Live <b style="color:' + theme.accent2 + '">' + fmt(state.live.price) + '</b></span>';
+      html += '<span style="color:' + lcol + '">' + (lc >= 0 ? '+' : '') + fmt(lc) + ' (' + (lc >= 0 ? '+' : '') + fmt(lp) + '%)</span>';
+      html += '<span class="asof">' + (state.live.source || '') + (state.live.asOf ? ' ' + state.live.asOf : '') + '</span>';
+    }
     if (opts.sma && opts.sma.on) html += '<span style="color:' + theme.accent2 + '">SMA ' + opts.sma.period + '</span>';
     if (opts.ema && opts.ema.on) html += '<span style="color:' + theme.accent3 + '">EMA ' + opts.ema.period + '</span>';
     if (state.meta.asOf) html += '<span class="asof">' + state.meta.asOf + '</span>';
@@ -300,8 +344,8 @@ const char* const kControllerJs = R"js(
       const d = D.items[i];
       if (d.type === 'trend') {
         const p = trendPoints(d); if (!p) continue;
-        if (Math.hypot(x - p.x1, y - p.y1) <= 8) return { d: d, part: 'a' };
-        if (Math.hypot(x - p.x2, y - p.y2) <= 8) return { d: d, part: 'b' };
+        if (Math.hypot(x - p.x1, y - p.y1) <= 9) return { d: d, part: 'a' };
+        if (Math.hypot(x - p.x2, y - p.y2) <= 9) return { d: d, part: 'b' };
       } else {
         const yT = yOfPrice(Math.max(d.lo, d.hi)), yB = yOfPrice(Math.min(d.lo, d.hi));
         if (Math.abs(y - yT) <= 6) return { d: d, part: 'hi' };
@@ -312,8 +356,8 @@ const char* const kControllerJs = R"js(
       const d = D.items[i];
       if (d.type === 'trend') {
         const p = trendPoints(d); if (!p) continue;
-        let hit = distToSegment(x, y, p.x1, p.y1, p.x2, p.y2) <= 6;
-        if (!hit && d.extend !== false) { const r = rayEnd(p, pane.w); if (r) hit = distToSegment(x, y, r.sx, r.sy, r.ex, r.ey) <= 6; }
+        let hit = distToSegment(x, y, p.x1, p.y1, p.x2, p.y2) <= 8;
+        if (!hit && d.extend !== false) { const r = rayEnd(p, pane.w); if (r) hit = distToSegment(x, y, r.sx, r.sy, r.ex, r.ey) <= 8; }
         if (hit) return { d: d, part: 'body' };
       } else {
         const yT = yOfPrice(Math.max(d.lo, d.hi)), yB = yOfPrice(Math.min(d.lo, d.hi));
@@ -413,8 +457,12 @@ const char* const kControllerJs = R"js(
   }
   function showMenu(clientX, clientY, d) {
     menuTarget = d;
-    let html = '<div class="item" data-act="delete">Delete ' + drawingLabel(d) + '</div>';
-    if (D.items.length > 1) html += '<div class="item" data-act="clear">Delete all drawings (' + D.items.length + ')</div>';
+    let html = '';
+    if (d) html += '<div class="item" data-act="delete">Delete ' + drawingLabel(d) + '</div>';
+    if (D.items.length > (d ? 1 : 0)) html += '<div class="item" data-act="clear">Delete all drawings (' + D.items.length + ')</div>';
+    if (html) html += '<div class="sep"></div>';
+    html += '<div class="item" data-act="reset">Reset chart view</div>';
+    html += '<div class="item" data-act="priceline">' + (state.options.priceLine === false ? 'Show price line' : 'Hide price line') + '</div>';
     html += '<div class="sep"></div><div class="item" data-act="cancel">Cancel</div>';
     menu.innerHTML = html;
     menu.style.display = 'block';
@@ -428,20 +476,36 @@ const char* const kControllerJs = R"js(
     const act = e.target && e.target.getAttribute ? e.target.getAttribute('data-act') : null;
     if (act === 'delete' && menuTarget) removeDrawing(menuTarget.id);
     else if (act === 'clear') { D.items = []; D.selected = null; emitDrawings(); redraw(); }
+    else if (act === 'reset') resetView();
+    else if (act === 'priceline') { state.options.priceLine = state.options.priceLine === false; applyLiveLine(); notify('options', { priceLine: state.options.priceLine }); }
     hideMenu();
   });
-  document.addEventListener('contextmenu', e => {
-    hideMenu();
-    if (!state.bars.length || !state.main) return;
+  // Right-click handling. Chromium normally dispatches `contextmenu`; some host setups only
+  // deliver the raw right-button events, so both paths lead here (de-duplicated by time).
+  let lastMenuAt = 0;
+  function openMenuAt(e) {
+    const now = Date.now();
+    if (now - lastMenuAt < 350) return true;
+    if (!state.bars.length || !state.main) return false;
     const p = pos(e), pane = paneRect();
-    if (p.x < 0 || p.y < 0 || p.x > pane.w || p.y > pane.h) return;
+    if (p.x < 0 || p.y < 0 || p.x > pane.w || p.y > pane.h) return false;
     const hit = hitTest(p.x, p.y, pane);
-    if (!hit) return;
-    e.preventDefault(); e.stopPropagation();
-    D.selected = hit.d.id; redraw();
-    showMenu(e.clientX, e.clientY, hit.d);
+    lastMenuAt = now;
+    D.selected = hit ? hit.d.id : null; redraw();
+    showMenu(e.clientX, e.clientY, hit ? hit.d : null);
+    notify('menu', hit ? drawingLabel(hit.d) : 'chart');
+    return true;
+  }
+  document.addEventListener('contextmenu', e => {
+    if (menu.contains(e.target)) { e.preventDefault(); return; }
+    hideMenu();
+    if (openMenuAt(e)) { e.preventDefault(); e.stopPropagation(); }
   }, true);
-  document.addEventListener('mousedown', e => { if (menu.style.display === 'block' && !menu.contains(e.target)) hideMenu(); }, true);
+  document.addEventListener('mousedown', e => {
+    if (menu.style.display === 'block' && !menu.contains(e.target)) hideMenu();
+    if (e.button === 2 && !menu.contains(e.target)) { if (openMenuAt(e)) { e.preventDefault(); e.stopPropagation(); } }
+  }, true);
+  document.addEventListener('auxclick', e => { if (e.button === 2 && menu.style.display !== 'block') openMenuAt(e); }, true);
   window.addEventListener('blur', hideMenu);
   window.addEventListener('keydown', e => { if (e.key === 'Escape') hideMenu(); }, true);
 
@@ -450,10 +514,14 @@ const char* const kControllerJs = R"js(
     setTheme: function (theme) { state.theme = theme; document.body.style.background = theme.bg; styleMenu(theme); if (state.chart) render(false); },
     setBars: function (payload) {
       const meta = payload.meta || {};
-      if ((meta.symbol || '') !== (state.meta.symbol || '')) { D.items = []; D.selected = null; D.pending = null; }
+      if ((meta.symbol || '') !== (state.meta.symbol || '')) { D.items = []; D.selected = null; D.pending = null; state.live = null; }
       state.bars = payload.bars || []; state.meta = meta; render(true);
     },
     setOptions: function (opts) { state.options = Object.assign(state.options, opts); if (state.chart) render(false); },
+    // Restores autoscale, the default zoom/pan and the cursor tool; bars are re-rendered.
+    reset: resetView,
+    // Live quote for the charted symbol: {price, previousClose, source, asOf} or null.
+    setLive: function (live) { state.live = live || null; if (state.chart && state.main) { applyLiveLine(); updateLegend(null); } },
     screenshot: function () {
       if (!state.chart || !state.bars.length) return '';
       const shot = state.chart.takeScreenshot();

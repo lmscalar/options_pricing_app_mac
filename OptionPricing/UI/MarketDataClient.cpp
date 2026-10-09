@@ -453,10 +453,9 @@ void MarketDataClient::fetchQuotes(const QStringList& tickers, std::function<voi
                 q.dayHigh = day["h"].toDouble();
                 q.dayLow = day["l"].toDouble();
                 q.dayVolume = day["v"].toDouble();
-                // The feed's own change figures reflect the session; fall back to our own arithmetic.
-                q.change = t.contains("todaysChange") ? t["todaysChange"].toDouble() : (q.previousClose > 0.0 ? q.last - q.previousClose : 0.0);
-                q.changePercent = t.contains("todaysChangePerc") ? t["todaysChangePerc"].toDouble()
-                                                                 : (q.previousClose > 0.0 ? (q.last / q.previousClose - 1.0) * 100.0 : 0.0);
+                // Always our own arithmetic against prevDay.c, so every display agrees on the basis.
+                q.change = q.previousClose > 0.0 ? q.last - q.previousClose : 0.0;
+                q.changePercent = q.previousClose > 0.0 ? (q.last / q.previousClose - 1.0) * 100.0 : 0.0;
                 const qint64 minuteMillis = static_cast<qint64>(minute["t"].toDouble());
                 const qint64 updatedNanos = static_cast<qint64>(t["updated"].toDouble());
                 if (minuteMillis > 0) q.asOf = QDateTime::fromMSecsSinceEpoch(minuteMillis);

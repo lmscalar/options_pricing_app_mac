@@ -1020,11 +1020,12 @@ void ChainTab::applyDownload(const QString& symbol, const MarketDataClient::Unde
         m_state.exchange.clear();
         m_state.logo = QImage();
         m_brandingRequested.clear();
+        m_state.resetPreviousCloseSource();
     }
     m_state.underlyingTicker = symbol;
     m_state.vendorSpot = snap.price;
     m_state.previousClose = snap.previousClose;
-    m_vendorSource = snap.priceSource;
+    m_state.vendorSource = snap.priceSource;
     m_state.spotAsOf = snap.asOf;
     m_state.spotTime = fetchedAt;
     m_state.chainTime = fetchedAt;
@@ -1097,7 +1098,7 @@ void ChainTab::refreshUnderlying(bool automatic)
         m_state.underlyingTicker = symbol;
         m_state.vendorSpot = snap.price;
         m_state.previousClose = snap.previousClose;
-        m_vendorSource = snap.priceSource;
+        m_state.vendorSource = snap.priceSource;
         m_state.spotAsOf = snap.asOf;
         m_state.spotTime = QDateTime::currentDateTime();
         applySpotPolicy();
@@ -1110,26 +1111,7 @@ void ChainTab::refreshUnderlying(bool automatic)
 
 void ChainTab::applySpotPolicy()
 {
-    ActivityMarket am;
-    am.model = m_state.market.model;
-    am.spot = m_state.vendorSpot > 0.0 ? m_state.vendorSpot : m_state.market.spot;
-    am.dividendYield = m_state.market.dividendYield;
-    am.rateFor = [this](double t) { return m_state.rateFor(t); };
-    const ImpliedSpotEstimate estimate = impliedSpotFromParity(m_state.chainQuotes, am, am.spot, m_state.market.dividends);
-    m_state.impliedSpot = estimate.valid ? estimate.spot : 0.0;
-    m_state.impliedSpotNote = estimate.valid
-        ? QStringLiteral("parity-implied from %1 options (%2 DTE, %3 strike pairs, ±%4)")
-              .arg(estimate.expiry.expiryDate.empty() ? QStringLiteral("nearest") : QString::fromStdString(estimate.expiry.expiryDate))
-              .arg(estimate.expiry.daysToExpiry).arg(estimate.pairs).arg(ui::number(estimate.dispersion, 2))
-        : QString();
-
-    if (m_state.useImpliedSpot && estimate.valid) {
-        m_state.market.spot = estimate.spot;
-        m_state.spotSource = "option parity";
-    } else if (m_state.vendorSpot > 0.0) {
-        m_state.market.spot = m_state.vendorSpot;
-        m_state.spotSource = m_vendorSource;
-    }
+    m_state.applySpotPolicy();
 }
 
 void ChainTab::updateSpotLabels()
@@ -1173,7 +1155,7 @@ void ChainTab::updateSpotLabels()
         tip << QStringLiteral("Derived from fresh option prices: %1.").arg(m_state.impliedSpotNote);
     }
     if (m_state.vendorSpot > 0.0) {
-        QString vendor = QStringLiteral("vendor %1 %2").arg(m_vendorSource.isEmpty() ? QStringLiteral("quote") : m_vendorSource, ui::number(m_state.vendorSpot, 2));
+        QString vendor = QStringLiteral("vendor %1 %2").arg(m_state.vendorSource.isEmpty() ? QStringLiteral("quote") : m_state.vendorSource, ui::number(m_state.vendorSpot, 2));
         if (m_state.spotAsOf.isValid()) {
             const qint64 delaySeconds = m_state.spotAsOf.secsTo(now);
             vendor += QStringLiteral(" as of %1 (%2 min delayed)").arg(m_state.spotAsOf.toString("HH:mm")).arg(std::max<qint64>(0, delaySeconds / 60));

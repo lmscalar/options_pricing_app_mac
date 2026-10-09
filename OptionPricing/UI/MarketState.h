@@ -31,6 +31,7 @@ public:
     QString exchange;                                ///< primary exchange code, if known
     QImage logo;                                     ///< company icon, null when unavailable
     QString spotSource;                              ///< "last minute bar", "day close", "option parity", ... (empty for manual spot)
+    QString vendorSource;                            ///< what the vendor price is ("last minute bar", "day close", ...)
     QDateTime spotTime;                              ///< when the live spot was fetched
     QDateTime spotAsOf;                              ///< vendor timestamp of the delayed stock price
     double vendorSpot = 0.0;                         ///< last delayed stock price from the feed (0 = none)
@@ -72,6 +73,17 @@ public:
         return cm;
     }
 
+    // ---- Underlying quote: the single source of truth every tab displays ----
+    /// Chooses market.spot: parity-implied from fresh option prices when enabled and
+    /// available, otherwise the vendor's (delayed) price. Sets spotSource / impliedSpot*.
+    void applySpotPolicy();
+    /// Applies a vendor quote (watchlist snapshot or spot timer) for `ticker`. Ignored for
+    /// other tickers. Returns true when the state changed; the caller then notifies.
+    bool updateVendorQuote(const QString& ticker, double last, double previousClose, const QDateTime& asOf, const QString& source);
+    /// Overrides the previous close with the last completed session's close from our own
+    /// daily bars (more reliable than the vendor's prevDay around the overnight roll).
+    bool setPreviousCloseFromBars(const QString& ticker, double previousClose);
+
     void subscribe(Listener listener) { m_listeners.push_back(std::move(listener)); }
 
     /// Notifies every observer. Re-entrancy is guarded so observers that write back
@@ -94,4 +106,7 @@ public:
 private:
     std::vector<Listener> m_listeners;
     bool m_notifying = false;
+    bool m_previousCloseFromBars = false;   ///< previous close pinned from daily bars for the current ticker
+public:
+    void resetPreviousCloseSource() { m_previousCloseFromBars = false; }
 };

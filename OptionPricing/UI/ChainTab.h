@@ -138,7 +138,6 @@ private:
     QCheckBox* m_useImpliedSpot = nullptr;
     QTimer* m_chainTimer = nullptr;
     QTimer* m_spotTimer = nullptr;
-    QString m_vendorSource;
     bool m_automatic = false;
     QPushButton* m_toggleCharts = nullptr;
     QSplitter* m_splitter = nullptr;

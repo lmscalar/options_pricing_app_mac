@@ -455,6 +455,16 @@ QString styleSheetFor(const Theme& t)
         QPushButton#secondary:pressed, QPushButton#themeToggle:pressed, QToolButton:pressed {
             background: @buttonPressed;
         }
+        /* The selected timeframe / drawing tool / listening state stands out in the accent colour. */
+        QToolButton:checked {
+            background: @accent;
+            color: @accentText;
+            border-color: @accentHover;
+            font-weight: 700;
+        }
+        QToolButton:checked:hover {
+            background: @accentHover;
+        }
         QToolButton#assistantToggle {
             font-weight: 600;
             padding: 6px 12px;

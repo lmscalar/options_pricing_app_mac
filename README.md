@@ -73,7 +73,8 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   restores watchlist order); widths and sort are remembered. Selecting a row loads its
   chart; the ticker from the Option Chain tab is added automatically. The chart is TradingView's open-source Lightweight Charts
   (see below) inside a `QWebEngineView`, with timeframe buttons 1m, 2m, 3m, 5m, 15m, 1H,
-  1D (one year of daily bars) and 1W (five years of weekly bars); Candlestick, Bar,
+  1D (one year of daily bars) and 1W (five years of weekly bars), the selected one
+  highlighted in the accent colour; Candlestick, Bar,
   Heikin-Ashi and Line styles; optional SMA and EMA overlays with editable periods; a
   volume histogram; a crosshair legend with OHLC, volume and moving-average values; Save
   Image… (rendered by the chart library, so it works headless too) and Open Option Chain.
@@ -82,8 +83,11 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   **Support** / **Resistance** zones (drag vertically between two prices; green and red
   fills with the price range labelled). **Edit** selects a drawing to drag its handles,
   edges or body; Delete removes it, Undo removes the last one, Clear removes all, and Esc
-  returns to the cursor. Right-clicking any drawing, in any tool mode, opens a menu to
-  delete that drawing or all of them. Drawings are anchored to bar time and price, so they survive
+  returns to the cursor. Right-clicking anywhere on the chart opens a menu: on a drawing it
+  offers to delete that drawing, and always offers Delete all drawings and Reset chart view.
+  The **Reset** button under the chart reloads the bars, restores autoscale and the default
+  zoom and returns to the cursor tool (drawings are kept); the price axis cannot be dragged
+  out of shape, and double-clicking an axis resets it. Drawings are anchored to bar time and price, so they survive
   scrolling, zooming and timeframe changes, are saved per symbol, and are included in
   Save Image…. The drawing layer is the app's own canvas over the chart; Lightweight
   Charts itself has no drawing tools.
@@ -245,6 +249,21 @@ Massive.com. Deleting the file simply forces a full reload.
   and dispersion used. Untick the box to fall back to the vendor's delayed price. A
   hand-entered spot on the Pricer tab overrides both until the next fetch.
 - True tick-level streaming would need Massive's WebSocket feeds and a real-time plan.
+- **One quote everywhere.** The shared market state holds the underlying's spot (parity
+  policy), vendor price, previous close and timestamps, and every display reads it: the
+  headline banner, the Option Chain header, the watchlist row of the app-wide ticker (which
+  shows the headline figures rather than the raw vendor snapshot, with the vendor price in
+  its tooltip) and the Quotes chart legend, which adds a "Live" readout and a dashed price
+  line at the shared spot (a single price line: the live quote when there is one, else the
+  last close; the **Price line** checkbox or the right-click menu hides it). Changes are always computed as last minus the same previous
+  close; the vendor's own change fields are not used. The watchlist refresh and the chain
+  tab's spot timer both feed the state (newest timestamp wins), and when daily bars are
+  loaded for the ticker the previous close is pinned to the last completed session's close,
+  which is more reliable than the vendor's prevDay around the overnight roll. Daily bars are
+  stamped at midnight New York time, so their session dates are read in that zone (a
+  local-time reading in a western zone would label today's partial bar as yesterday). Chart legend
+  changes for daily and weekly bars are measured against the prior bar, not the first bar
+  of the series.
 
 Notes on the data:
 

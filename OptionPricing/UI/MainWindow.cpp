@@ -905,6 +905,10 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                 });
                 QTimer::singleShot(600, this, [this, shotDir] {
                     qInfo("[live-smoke] drawings persisted for %s: %s", qPrintable(m_chain->ticker()), m_quotes->hasStoredDrawings(m_chain->ticker()) ? "yes" : "no");
+                    // Reset the view (bars re-sent, autoscale restored) before exporting; drawings must survive.
+                    m_quotes->resetChart();
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
+                    qInfo("[live-smoke] chart reset; drawings after reset: %s", qPrintable(m_quotes->drawingsJson().left(200)));
                     m_quotes->saveChartImage(shotDir + "/chart.png", [this](const QString& written) {
                         qInfo("[live-smoke] chart image %s", written.isEmpty() ? "FAILED" : qPrintable(written));
                         // Put the user's own drawings back (the test ones were only stashed over them).
@@ -927,6 +931,19 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                 qInfo("[live-smoke] local command (tab): %s -> %s (current tab %s)", handledTab ? "handled" : "NOT handled", qPrintable(feedback), qPrintable(tabNameOf(m_tabs->currentWidget())));
                 const bool handledOther = handleLocalCommand("what is the implied volatility skew here", feedback);
                 qInfo("[live-smoke] local command (free text): %s (expected not handled)", handledOther ? "handled" : "not handled");
+            }
+            // Quote synchronisation: headline, watchlist row and chart legend must agree.
+            {
+                const QString symbol = m_state.underlyingTicker;
+                const auto& bars = m_quotes->bars().bars;
+                qInfo("[live-smoke] quote sync: headline %s %.2f (%+.2f, %+.2f%%) prev close %.2f via %s; watchlist row: %s; chart bars %zu, last bar close %.2f, bar before %.2f",
+                      qPrintable(symbol), m_state.market.spot, m_state.dayChange(), m_state.dayChangePercent(), m_state.previousClose, qPrintable(m_state.spotSource),
+                      qPrintable(m_quotes->debugRowText(symbol)), bars.size(), bars.empty() ? 0.0 : bars.back().close, bars.size() > 1 ? bars[bars.size() - 2].close : 0.0);
+                m_quotes->debugLegendText([](const QString& legend) {
+                    QString oneLine = legend;
+                    oneLine.replace('\n', ' ');
+                    qInfo("[live-smoke] quote sync: chart legend: %s", qPrintable(oneLine.left(300)));
+                });
             }
             // OPTION_PRICER_AI="OpenAI/gpt-4.1-mini" or "Ollama/llama3.2:latest" selects the provider under test.
             const QString aiOverride = qEnvironmentVariable("OPTION_PRICER_AI");
