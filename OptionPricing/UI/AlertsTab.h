@@ -56,6 +56,8 @@ public:
     explicit AlertsTab(MarketState& state, QWidget* parent = nullptr);
 
     void setStore(ChainStore* store) { m_store = store; }
+    /// Opens the Add alert dialog (what the Add… button does).
+    void openAddDialog() { promptRule(-1); }
     void applyTheme(const Theme& theme);
     /// Evaluates price, percent and (via the store) IV rules against a quote snapshot.
     void evaluateQuotes(const std::vector<MarketDataClient::Quote>& quotes);

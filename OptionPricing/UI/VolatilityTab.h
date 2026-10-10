@@ -141,6 +141,9 @@ private:
     ui::Card m_cardRealized, m_cardLong, m_cardEwma, m_cardGarchNow, m_cardForecast, m_cardLongRun, m_cardImplied, m_cardPersistence, m_cardIvRank, m_cardIvPercentile;
 
     // Charts
+    ui::HoverChartView* m_historyView = nullptr;   ///< crosshair readouts: every series' value at the hovered x
+    ui::HoverChartView* m_coneView = nullptr;
+    ui::HoverChartView* m_forecastView = nullptr;
     QChart* m_historyChart = nullptr;
     QCategoryAxis* m_historyX = nullptr;   ///< x is epoch milliseconds; labels are placed at month starts
     QValueAxis* m_historyY = nullptr;

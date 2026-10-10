@@ -1029,6 +1029,15 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     qInfo("[live-smoke] alerts: %s", qPrintable(m_alerts->summaryText().left(700)));
                     qInfo("[live-smoke] alert banner visible: %s", m_alertBanner && m_alertBanner->isVisible() ? "yes" : "no");
                     if (grab().save(shotDir + "/alerts.png")) qInfo("[live-smoke] wrote alerts.png");
+                    // The Add alert dialog: capture it (indicator selector live), then dismiss it.
+                    QTimer::singleShot(600, this, [shotDir] {
+                        if (QWidget* modal = QApplication::activeModalWidget()) {
+                            if (modal->grab().save(shotDir + "/alerts-dialog.png")) qInfo("[live-smoke] wrote alerts-dialog.png");
+                            if (auto* dialog = qobject_cast<QDialog*>(modal)) dialog->reject();
+                        }
+                    });
+                    m_alerts->openAddDialog();
+                    waitFor(200);
                     m_alerts->removeRules("all");
                     if (userAlerts.isValid()) QSettings().setValue("alerts/rules", userAlerts);
                     else QSettings().remove("alerts/rules");
@@ -1105,6 +1114,16 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     for (int i = 0; i < 120 && m_volatility->backfillBusy(); ++i) waitFor(500);
                     waitFor(300);
                     qInfo("[live-smoke] iv history (%s): %s", qPrintable(m_volatility->ticker()), qPrintable(m_volatility->ivSummary()));
+                    // Crosshair readout on the history chart: synthesize a mouse move over the plot.
+                    const auto views = m_volatility->findChildren<QChartView*>();
+                    if (!views.isEmpty()) {
+                        QChartView* view = views.first();
+                        const QPoint at(static_cast<int>(view->viewport()->width() * 0.62), static_cast<int>(view->viewport()->height() * 0.5));
+                        QMouseEvent move(QEvent::MouseMove, QPointF(at), QPointF(view->viewport()->mapToGlobal(at)), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+                        QApplication::sendEvent(view->viewport(), &move);
+                        waitFor(300);
+                        if (grab().save(shotDir + "/volatility-hover.png")) qInfo("[live-smoke] wrote volatility-hover.png");
+                    }
                 }
                 if (tab == m_quotes) {
                     // Earnings overlay: the implied move cone on the chart, with a pinned date and then inferred.

@@ -4,6 +4,8 @@
 //
 
 #include "AlertsTab.h"
+
+#include <QtGui/QStandardItemModel>
 #include "Formatting.h"
 #include "SpeechDictation.h"
 #include "../Pricing/TechnicalAnalysis.h"
@@ -419,12 +421,21 @@ void AlertsTab::promptRule(int editId)
     condition->setCurrentIndex(static_cast<int>(current.condition));
     auto* threshold = ui::makeSpinBox(&dialog, -1e7, 1e7, 1.0, 2, current.threshold);
     auto* indicator = new QComboBox(&dialog);
+    indicator->setMaxVisibleItems(24);
+    indicator->setToolTip("TA-Lib indicator for the Indicator above / below conditions; choosing one switches the condition to an indicator rule");
+    auto* indicatorModel = qobject_cast<QStandardItemModel*>(indicator->model());
     for (const std::string& group : ta::catalog().groups) {
         if (group == "Pattern Recognition") continue;
+        // A category header the user cannot pick, then the functions in that category.
+        indicator->addItem(QStringLiteral("— %1 —").arg(QString::fromStdString(group)), QString());
+        if (indicatorModel) if (QStandardItem* header = indicatorModel->item(indicator->count() - 1)) { header->setEnabled(false); QFont f = header->font(); f.setBold(true); header->setFont(f); }
         for (const ta::FunctionInfo* info : ta::catalog().inGroup(group)) indicator->addItem(QString::fromStdString(info->displayName()), QString::fromStdString(info->name));
     }
     indicator->setCurrentIndex(std::max(0, indicator->findData(current.indicator.isEmpty() ? "RSI" : current.indicator)));
     auto* period = ui::makeIntSpinBox(&dialog, 1, 500, current.period);
+    auto* indicatorHint = new QLabel("Indicator and period apply to the “Indicator above / below” conditions; picking an indicator selects that condition.", &dialog);
+    indicatorHint->setObjectName("muted");
+    indicatorHint->setWordWrap(true);
     auto* repeat = new QCheckBox("Re-arm automatically when the condition clears", &dialog);
     repeat->setChecked(current.repeat);
     auto* note = new QLineEdit(current.note, &dialog);
@@ -434,17 +445,24 @@ void AlertsTab::promptRule(int editId)
     form->addRow("Threshold", threshold);
     form->addRow("Indicator", indicator);
     form->addRow("Period", period);
+    form->addRow(indicatorHint);
     form->addRow(repeat);
     form->addRow("Note", note);
+    // The indicator controls stay live for every condition (a disabled combo looked broken);
+    // choosing an indicator moves the condition onto the matching indicator rule instead.
     auto syncEnabled = [&] {
         const Condition c = static_cast<Condition>(condition->currentData().toInt());
         const bool ind = c == Condition::IndicatorAbove || c == Condition::IndicatorBelow;
-        indicator->setEnabled(ind);
-        period->setEnabled(ind);
+        indicatorHint->setVisible(!ind);
         threshold->setSuffix(c == Condition::ChangeAbove || c == Condition::ChangeBelow || c == Condition::IvAbove || c == Condition::IvBelow ? " %" : QString());
     };
     syncEnabled();
     connect(condition, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int) { syncEnabled(); });
+    connect(indicator, qOverload<int>(&QComboBox::activated), &dialog, [&](int) {
+        const Condition c = static_cast<Condition>(condition->currentData().toInt());
+        if (c == Condition::IndicatorAbove || c == Condition::IndicatorBelow) return;
+        condition->setCurrentIndex(condition->findData(static_cast<int>(isAbove(c) ? Condition::IndicatorAbove : Condition::IndicatorBelow)));
+    });
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->button(QDialogButtonBox::Ok)->setText(editing ? "Apply" : "Add");
     form->addRow(buttons);

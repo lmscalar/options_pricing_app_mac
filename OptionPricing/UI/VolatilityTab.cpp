@@ -226,7 +226,8 @@ void VolatilityTab::buildUi()
     m_historyY->setLabelFormat("%.0f");
     m_historyChart->addAxis(m_historyX, Qt::AlignBottom);
     m_historyChart->addAxis(m_historyY, Qt::AlignLeft);
-    QChartView* historyView = ui::makeChartView(this, m_historyChart, 240);
+    m_historyView = ui::makeHoverChartView(this, m_historyChart, 240);
+    QChartView* historyView = m_historyView;
     m_historyReadout = readout();
 
     m_coneChart = new QChart;
@@ -239,7 +240,8 @@ void VolatilityTab::buildUi()
     m_coneY->setLabelFormat("%.0f");
     m_coneChart->addAxis(m_coneX, Qt::AlignBottom);
     m_coneChart->addAxis(m_coneY, Qt::AlignLeft);
-    QChartView* coneView = ui::makeChartView(this, m_coneChart, 220);
+    m_coneView = ui::makeHoverChartView(this, m_coneChart, 220);
+    QChartView* coneView = m_coneView;
     m_coneReadout = readout();
 
     m_forecastChart = new QChart;
@@ -252,7 +254,8 @@ void VolatilityTab::buildUi()
     m_forecastY->setLabelFormat("%.0f");
     m_forecastChart->addAxis(m_forecastX, Qt::AlignBottom);
     m_forecastChart->addAxis(m_forecastY, Qt::AlignLeft);
-    QChartView* forecastView = ui::makeChartView(this, m_forecastChart, 220);
+    m_forecastView = ui::makeHoverChartView(this, m_forecastChart, 220);
+    QChartView* forecastView = m_forecastView;
     m_forecastReadout = readout();
 
     // Small charts: never elide axis labels to "…", and keep legends compact.
@@ -731,21 +734,20 @@ void VolatilityTab::updateCharts()
 
 void VolatilityTab::showHover(QLabel* readout, const QString& text, bool state)
 {
-    const QString wanted = (state && !text.isEmpty()) ? QStringLiteral("value") : QStringLiteral("muted");
-    if (state && !text.isEmpty()) {
-        if (readout->text() != text) readout->setText(text);
-        QToolTip::showText(QCursor::pos(), text, readout);
-    } else {
-        QToolTip::hideText();
-    }
-    if (readout->objectName() != wanted) {
-        readout->setObjectName(wanted);
+    // The readout under the chart keeps the last hovered value (the crosshair box on the chart
+    // itself follows the cursor); a tooltip would vanish as soon as the cursor left the line.
+    if (!state || text.isEmpty()) return;
+    if (readout->text() != text) readout->setText(text);
+    if (readout->objectName() != QStringLiteral("value")) {
+        readout->setObjectName(QStringLiteral("value"));
         ui::restyle(readout);
     }
 }
 
 void VolatilityTab::updateHistoryChart()
 {
+    m_historyView->probe = nullptr;    // the series are about to be deleted
+    m_historyView->readout = nullptr;
     m_historyChart->removeAllSeries();
     if (m_series.empty()) {
         m_historyChart->setTitle("Realized volatility history");
@@ -755,8 +757,10 @@ void VolatilityTab::updateHistoryChart()
 
     double minVol = INFINITY, maxVol = 0.0;
     qint64 minT = std::numeric_limits<qint64>::max(), maxT = 0;
+    std::vector<std::pair<QString, std::vector<std::pair<qint64, double>>>> named;   // for the crosshair readout
     auto addLine = [&](const QString& name, const QColor& color, Qt::PenStyle style, qreal width, const std::vector<std::pair<qint64, double>>& points) {
         if (points.empty()) return;
+        named.emplace_back(name, points);
         auto* line = new QLineSeries;
         line->setName(name);
         QPen pen(color);
@@ -774,6 +778,7 @@ void VolatilityTab::updateHistoryChart()
         m_historyChart->addSeries(line);
         line->attachAxis(m_historyX);
         line->attachAxis(m_historyY);
+        if (!m_historyView->probe) m_historyView->probe = line;
         connect(line, &QLineSeries::hovered, this, [this, name](const QPointF& p, bool state) {
             const QString date = QDateTime::fromMSecsSinceEpoch(static_cast<qint64>(p.x()), QTimeZone::UTC).date().toString("yyyy-MM-dd");
             showHover(m_historyReadout, QStringLiteral("%1 · %2 · σ %3%").arg(name, date, ui::number(p.y(), 2)), state);
@@ -832,10 +837,24 @@ void VolatilityTab::updateHistoryChart()
         m_historyY->setRange(std::max(0.0, std::floor(minVol / 5.0) * 5.0 - 5.0), std::ceil(maxVol / 5.0) * 5.0 + 5.0);
     }
     styleChart(m_historyChart, m_theme);
+    // Crosshair readout: every series' value on the hovered date (nearest sample within three days).
+    m_historyView->readout = [named](double x) -> QStringList {
+        const qint64 t = static_cast<qint64>(x);
+        QStringList lines{ QDateTime::fromMSecsSinceEpoch(t, QTimeZone::UTC).date().toString("ddd d MMM yyyy") };
+        for (const auto& [name, pts] : named) {
+            auto it = std::lower_bound(pts.begin(), pts.end(), t, [](const std::pair<qint64, double>& p, qint64 v) { return p.first < v; });
+            if (it != pts.begin() && (it == pts.end() || it->first - t > t - std::prev(it)->first)) --it;
+            if (it == pts.end() || std::llabs(it->first - t) > 3LL * 86400000LL) continue;
+            lines << QStringLiteral("%1  %2%").arg(name, ui::number(it->second * 100.0, 2));
+        }
+        return lines.size() > 1 ? lines : QStringList{};
+    };
 }
 
 void VolatilityTab::updateConeChart()
 {
+    m_coneView->probe = nullptr;
+    m_coneView->readout = nullptr;
     m_coneChart->removeAllSeries();
     if (m_cone.empty()) return;
 
@@ -858,6 +877,7 @@ void VolatilityTab::updateConeChart()
         m_coneChart->addSeries(line);
         line->attachAxis(m_coneX);
         line->attachAxis(m_coneY);
+        if (!m_coneView->probe) m_coneView->probe = line;
         connect(line, &QLineSeries::hovered, this, [this, name](const QPointF& p, bool state) {
             showHover(m_coneReadout, QStringLiteral("%1 · %2-day window · σ %3%").arg(name.trimmed()).arg(qRound(p.x())).arg(ui::number(p.y(), 2)), state);
         });
@@ -926,11 +946,27 @@ void VolatilityTab::updateConeChart()
     m_coneX->setRange(0.0, std::ceil(maxWindow / 50.0) * 50.0 + 10.0);
     if (std::isfinite(minVol)) m_coneY->setRange(std::max(0.0, std::floor(minVol / 5.0) * 5.0 - 5.0), std::ceil(maxVol / 5.0) * 5.0 + 5.0);
     styleChart(m_coneChart, m_theme);
+    // Crosshair readout: the cone row whose window is nearest the hovered x.
+    const std::vector<ConeRow> cone = m_cone;
+    m_coneView->readout = [cone, implied](double x) -> QStringList {
+        const ConeRow* best = nullptr;
+        for (const ConeRow& row : cone) if (!best || std::fabs(row.window - x) < std::fabs(best->window - x)) best = &row;
+        if (!best || std::fabs(best->window - x) > 40.0) return {};
+        QStringList lines{ QStringLiteral("%1-day window").arg(best->window),
+                           QStringLiteral("Now  %1%  (%2th pctl)").arg(ui::number(best->current * 100.0, 2)).arg(qRound(best->percentile * 100.0)),
+                           QStringLiteral("Median  %1%").arg(ui::number(best->median * 100.0, 2)),
+                           QStringLiteral("p25–p75  %1% – %2%").arg(ui::number(best->p25 * 100.0, 1), ui::number(best->p75 * 100.0, 1)),
+                           QStringLiteral("p10–p90  %1% – %2%").arg(ui::number(best->p10 * 100.0, 1), ui::number(best->p90 * 100.0, 1)) };
+        for (const auto& [days, vol] : implied) if (std::fabs(days - best->window) <= std::max(3.0, best->window * 0.15)) { lines << QStringLiteral("Implied ATM  %1%  (%2d to expiry)").arg(ui::number(vol * 100.0, 2)).arg(qRound(days)); break; }
+        return lines;
+    };
     m_coneChart->legend()->setAlignment(Qt::AlignRight);   // the chart is tall and narrow: stack the legend
 }
 
 void VolatilityTab::updateForecastChart()
 {
+    m_forecastView->probe = nullptr;
+    m_forecastView->readout = nullptr;
     m_forecastChart->removeAllSeries();
     if (!m_garch.converged) return;
 
@@ -952,6 +988,7 @@ void VolatilityTab::updateForecastChart()
     m_forecastChart->addSeries(forecast);
     forecast->attachAxis(m_forecastX);
     forecast->attachAxis(m_forecastY);
+    m_forecastView->probe = forecast;
     connect(forecast, &QLineSeries::hovered, this, [this](const QPointF& p, bool state) {
         showHover(m_forecastReadout, QStringLiteral("Forecast σ %1% · %2-day average").arg(ui::number(p.y(), 2)).arg(qRound(p.x())), state);
     });
@@ -1024,6 +1061,19 @@ void VolatilityTab::updateForecastChart()
     m_forecastX->setRange(0.0, static_cast<double>(days) + 5.0);
     if (std::isfinite(minVol)) m_forecastY->setRange(std::max(0.0, std::floor(minVol / 5.0) * 5.0 - 5.0), std::ceil(maxVol / 5.0) * 5.0 + 5.0);
     styleChart(m_forecastChart, m_theme);
+    // Crosshair readout: the forecast, long-run and realized levels at the hovered horizon, plus the nearest implied expiry.
+    const double longRunVol = m_garch.unconditionalVol(), realizedNow = m_series.empty() ? NAN : m_series.back().vol;
+    const QString modelLabel = forecast->name(), rvLabel = QStringLiteral("Realized %1d").arg(m_window->value());
+    m_forecastView->readout = [term, longRunVol, realizedNow, modelLabel, rvLabel, implied](double x) -> QStringList {
+        const int day = static_cast<int>(std::lround(x));
+        if (day < 1 || static_cast<size_t>(day) > term.size()) return {};
+        QStringList lines{ QStringLiteral("Horizon %1 trading days").arg(day),
+                           QStringLiteral("%1 forecast  %2%  (average to horizon)").arg(modelLabel, ui::number(term[static_cast<size_t>(day) - 1] * 100.0, 2)),
+                           QStringLiteral("Long-run  %1%").arg(ui::number(longRunVol * 100.0, 2)) };
+        if (std::isfinite(realizedNow)) lines << QStringLiteral("%1  %2%").arg(rvLabel, ui::number(realizedNow * 100.0, 2));
+        for (const auto& [d, vol] : implied) if (std::fabs(d - day) <= std::max(3.0, day * 0.15)) { lines << QStringLiteral("Implied ATM  %1%  (%2d to expiry)").arg(ui::number(vol * 100.0, 2)).arg(qRound(d)); break; }
+        return lines;
+    };
     m_forecastChart->legend()->setAlignment(Qt::AlignRight);
 }
 
@@ -1057,6 +1107,13 @@ void VolatilityTab::applyTheme(const Theme& theme)
     // Style the charts even while they are empty: the update functions return early without
     // data, which used to leave Qt's default white chart background under the dark theme.
     for (QChart* chart : { m_historyChart, m_coneChart, m_forecastChart }) styleChart(chart, theme);
+    for (ui::HoverChartView* view : { m_historyView, m_coneView, m_forecastView }) {
+        view->lineColour = QColor(theme.textMuted);
+        view->boxBorder = QColor(theme.border);
+        view->textColour = QColor(theme.textStrong);
+        QColor bg(theme.surface); bg.setAlpha(235);
+        view->boxBackground = bg;
+    }
     updateConeTable();
     updateCharts();
 }
