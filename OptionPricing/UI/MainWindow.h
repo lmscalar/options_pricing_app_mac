@@ -117,6 +117,9 @@ private:
     /// Narrows the central margin next to a visible assistant dock so the chart and the chat sit close together.
     void updateCentralMargins();
     QPushButton* m_themeToggle = nullptr;
+    QPushButton* m_helpButton = nullptr;   ///< "How to use": the guide page for the current tab
+    /// Opens the in-app guide for the tab on screen (Help menu, header button, F1).
+    void showHelpForCurrentTab();
     QToolButton* m_assistantToggle = nullptr;
     ui::SpinningDiamond* m_assistantBusy = nullptr;   ///< spins in the header while the assistant works
     QLabel* m_subtitle = nullptr;

@@ -8,6 +8,7 @@
 #pragma once
 
 #include "QtHeaders.h"
+#include "Theme.h"
 
 #include <functional>
 
@@ -68,6 +69,9 @@ private:
     bool m_hovering = false;
 };
 HoverChartView* makeHoverChartView(QWidget* parent, QChart* chart, int minimumHeight = 260);
+
+/// Modal, scrollable rich-text help page styled for the current theme (headings in the accent colour).
+void showHelpDialog(QWidget* parent, const Theme& theme, const QString& title, const QString& html);
 
 /// Company icon scaled into a rounded square of `size` device-independent pixels.
 QPixmap roundedLogo(const QImage& image, int size, qreal devicePixelRatio);

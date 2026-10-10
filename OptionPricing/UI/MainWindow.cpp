@@ -12,6 +12,7 @@
 #include "PortfolioTab.h"
 #include "AlertsTab.h"
 #include "ScannerTab.h"
+#include "HelpContent.h"
 #include "PricerTab.h"
 #include "QuotesTab.h"
 #include "VolatilityTab.h"
@@ -187,6 +188,8 @@ void MainWindow::buildUi()
     m_subtitle->setObjectName("muted");
     m_subtitle->setWordWrap(true);
 
+    m_helpButton = ui::makeButton(this, "How to use", "secondary", "Step-by-step instructions and an explanation of the analysis on the current tab (also F1)");
+    connect(m_helpButton, &QPushButton::clicked, this, [this] { showHelpForCurrentTab(); });
     m_themeToggle = new QPushButton(this);
     m_themeToggle->setObjectName("themeToggle");
     m_themeToggle->setCheckable(true);
@@ -250,6 +253,7 @@ void MainWindow::buildUi()
     header->addWidget(m_banner, 1);
     header->addStretch(0);
     header->addSpacing(12);
+    header->addWidget(m_helpButton, 0, Qt::AlignRight);
     header->addWidget(m_themeToggle, 0, Qt::AlignRight);
     // Assistant toggle: a checkable icon button bound to the dock's view action, so the
     // dock's own close button and the menu item keep it in sync.
@@ -374,6 +378,16 @@ void MainWindow::buildMenus()
     }
 
     QMenu* help = menuBar()->addMenu("&Help");
+    QAction* guide = help->addAction("&How to Use This Tab", this, [this] { showHelpForCurrentTab(); });
+    guide->setShortcut(QKeySequence::HelpContents);
+    QMenu* guides = help->addMenu("&User Guide");
+    for (const QString& topic : help::topics()) {
+        guides->addAction(topic, this, [this, topic] {
+            const Theme theme = m_darkMode ? darkTheme() : lightTheme();
+            ui::showHelpDialog(this, theme, QStringLiteral("%1: how to use").arg(topic), help::htmlFor(topic));
+        });
+    }
+    help->addSeparator();
     help->addAction("&About Option Pricer", this, [this] { showAbout(); });
 }
 
@@ -978,6 +992,20 @@ void MainWindow::runLiveSmoke(const QString& ticker)
             const QVariant userBooks = QSettings().value("portfolio/books");
             const QVariant userActiveBook = QSettings().value("portfolio/activeBook");
             const QVariant userAlerts = QSettings().value("alerts/rules");
+            {
+                // The in-app guide: open the Pricer page (models explained), capture it, dismiss it.
+                m_tabs->setCurrentWidget(m_pricer);
+                QTimer::singleShot(600, this, [shotDir] {
+                    if (QWidget* modal = QApplication::activeModalWidget()) {
+                        if (modal->grab().save(shotDir + "/help-pricer.png")) qInfo("[live-smoke] wrote help-pricer.png");
+                        if (auto* dialog = qobject_cast<QDialog*>(modal)) dialog->reject();
+                    }
+                });
+                showHelpForCurrentTab();
+                int missing = 0;
+                for (int i = 0; i < m_tabs->count(); ++i) if (help::htmlFor(m_tabs->tabText(i)).isEmpty()) { ++missing; qInfo("[live-smoke] no guide page for tab %s", qPrintable(m_tabs->tabText(i))); }
+                qInfo("[live-smoke] guide pages: %d tab(s) without a page", missing);
+            }
             for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_volatility, m_sectorHeatmap, m_portfolio, m_alerts, m_scanner, m_quotes }) {
                 m_tabs->setCurrentWidget(tab);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
@@ -1340,6 +1368,15 @@ void MainWindow::showTicker(const QString& rawSymbol, bool switchToChainTab)
             else statusBar()->showMessage(message, 15000);
         }
     });
+}
+
+void MainWindow::showHelpForCurrentTab()
+{
+    const QString tab = m_tabs ? m_tabs->tabText(m_tabs->currentIndex()) : QString();
+    const QString html = help::htmlFor(tab);
+    const Theme theme = m_darkMode ? darkTheme() : lightTheme();
+    ui::showHelpDialog(this, theme, QStringLiteral("%1: how to use").arg(tab.isEmpty() ? QStringLiteral("Option Pricer") : tab),
+                       html.isEmpty() ? QStringLiteral("<h2>%1</h2><p>No guide page for this tab yet.</p>").arg(tab) : html);
 }
 
 void MainWindow::showAbout()

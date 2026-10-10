@@ -70,6 +70,14 @@ OptionPricing --screenshot /tmp/shots
 
 loads sample data, renders every tab to PNG, round-trips a workspace file and exits.
 
+## In-app guide
+
+The **How to use** button in the header (also Help ▸ How to Use This Tab, or F1) opens a guide
+page for the tab on screen: step-by-step instructions, what every figure means, and for the
+Pricer an explanation of the option models (Black-Scholes-Merton, Black-76, the CRR binomial
+tree, Bjerksund-Stensland, Crank-Nicolson with PSOR, Monte Carlo, the implied-vol solver) and
+of every Greek. Help ▸ User Guide lists every page.
+
 ## Tabs
 
 - **Quotes**: a watchlist and a chart. The watchlist (Ticker, Last, Price Chg., Pct

@@ -4,13 +4,13 @@
 //
 
 #include "ScannerTab.h"
+#include "HelpContent.h"
 #include "Formatting.h"
 #include "../Pricing/Activity.h"
 #include "../Pricing/IvHistory.h"
 #include "../Pricing/VolSurface.h"
 
 #include <QtCore/QElapsedTimer>
-#include <QtWidgets/QTextBrowser>
 #include <QtCore/QTextStream>
 
 #include <algorithm>
@@ -571,80 +571,7 @@ void ScannerTab::setStatus(const QString& text, ui::StatusKind kind) { ui::setSt
 
 void ScannerTab::showHelp()
 {
-    static const char* kHelp = R"html(
-<h2 style="margin-bottom:4px">Trade Ideas: how to use the scanner</h2>
-<p>The scanner looks through the option chains already held in memory and builds candidate
-trades on the listed strikes. Nothing is downloaded when you scan; it works on the chains the
-watchlist preload and the Option Chain tab have fetched.</p>
-
-<h3>Step by step</h3>
-<ol>
-<li><b>Pick a screen.</b> Each screen chooses a family of strategies and sets sensible default filters:
-  <ul>
-  <li><b>Premium selling</b>: bull put / bear call spreads, iron condors and iron butterflies, short strikes at about 30 delta. Credit trades that profit when the stock stays in a range.</li>
-  <li><b>Directional debit</b>: bull call and bear put spreads plus outright calls and puts at the money. Defined-risk bets on direction.</li>
-  <li><b>Volatility</b>: long straddles and strangles for a big move either way; calendars when near-dated vol is cheap against far-dated vol.</li>
-  <li><b>Income on shares</b>: covered calls, collars and protective puts against 100 shares.</li>
-  <li><b>All strategies</b>: every preset, best three per ticker.</li>
-  </ul></li>
-<li><b>Choose a bias</b> (Any, Bullish, Bearish, Neutral, Volatile) to keep only strategies with that view.</li>
-<li><b>Choose the universe</b>: every stored chain, the Quotes watchlist, or just the ticker on screen.</li>
-<li><b>Set the expiry window</b> in days. Strikes are placed on the listed expiry closest to the middle of the window, plus the next one inside it.</li>
-<li><b>Tighten the filters</b> if you want fewer, stronger ideas: minimum probability of profit, minimum return on risk, maximum bid-ask spread per leg, minimum open interest per leg, and <i>Defined risk only</i> to skip naked short options and share-based structures.</li>
-<li><b>Press Scan.</b> The market scan fills with one row per ticker; the ideas table lists the ranked trades.</li>
-<li><b>Click a ticker</b> in the market scan to see only its ideas; <b>All tickers</b> clears the focus. Double-click a ticker to load it on every tab.</li>
-<li><b>Act on an idea</b>: double-click it (or press <i>Open in Strategy</i>) to load its legs into the Strategy tab for the payoff chart, Greeks and what-if analysis; <i>Add to Portfolio</i> books the legs at the chain mids; <i>Export CSV</i> saves the table.</li>
-</ol>
-
-<h3>Market scan columns</h3>
-<ul>
-<li><b>ATM IV</b>: implied vol of the at-the-money straddle at the chosen expiry. <b>Far IV</b> and <b>Term</b>: the same at the next tenor and the difference; a negative term slope means near-dated vol is bid, often an event.</li>
-<li><b>Skew 25d</b>: 25-delta put vol minus 25-delta call vol. Positive means puts are expensive relative to calls.</li>
-<li><b>1 sd move</b>: the straddle price as a share of spot, the market's one-standard-deviation move to that expiry.</li>
-<li><b>P/C vol</b> and <b>P/C OI</b>: put/call ratios of volume and open interest across the chain.</li>
-<li><b>Spread</b>: median bid-ask spread near the money, when the chain carries quotes.</li>
-</ul>
-
-<h3>Ideas columns</h3>
-<ul>
-<li><b>Legs</b>: signed contracts, type and strike (+1 P 740 = buy one 740 put). <b>Net</b>: credit received (+) or debit paid (−) for the whole position.</li>
-<li><b>Max profit / Max loss</b> at the first expiry; <i>open</i> when a side is unlimited.</li>
-<li><b>PoP</b>: probability of finishing profitable at expiry under a lognormal distribution at the ATM implied vol (risk-neutral, so it is a market-implied figure, not a forecast).</li>
-<li><b>Return/risk</b>: max profit divided by max loss. Open-ended sides are measured two expected moves away.</li>
-<li><b>Exp. P&amp;L</b>: expected profit under the same distribution; close to zero for fairly priced trades.</li>
-<li><b>Breakevens</b>, <b>Delta</b> and <b>Theta/d</b> of the whole position; <b>IV</b> is the chain's ATM vol.</li>
-<li><b>Score</b>: probability of profit × return on risk (capped at 300%), discounted for wide markets. Ideas are sorted by score; sort any column by clicking its header.</li>
-</ul>
-
-<h3>Good to know</h3>
-<ul>
-<li>Legs are marked at chain mids. Outside market hours, or when the data plan carries no quotes, mids are last trades and can be stale. Contracts whose price breaks no-arbitrage bounds, legs priced far from the ATM vol, and structures that cannot lose are dropped automatically, but always check the legs on the Option Chain tab before trading.</li>
-<li>Strikes are delta-targeted: shorts near 30 delta, wings near 15 delta, snapped to the listed ladder and kept out of the money.</li>
-<li>Settings persist between sessions. The assistant can run scans too: try "scan for premium selling ideas on the watchlist" or "find bullish trades on NVDA".</li>
-</ul>
-)html";
-    QDialog dialog(this);
-    dialog.setWindowTitle("Trade Ideas: how to use");
-    dialog.resize(760, 640);
-    auto* layout = new QVBoxLayout(&dialog);
-    layout->setContentsMargins(14, 12, 14, 12);
-    auto* text = new QTextBrowser(&dialog);
-    text->setOpenExternalLinks(false);
-    text->setFrameShape(QFrame::NoFrame);
-    // Match the application theme (the global stylesheet does not cover QTextBrowser).
-    const QString surface = m_theme.surface.isEmpty() ? QStringLiteral("#0f172a") : m_theme.surface;
-    const QString strong = m_theme.textStrong.isEmpty() ? QStringLiteral("#e2e8f0") : m_theme.textStrong;
-    const QString body = m_theme.text.isEmpty() ? strong : m_theme.text;
-    const QString accent = m_theme.accent2.isEmpty() ? QStringLiteral("#f59e0b") : m_theme.accent2;
-    text->setStyleSheet(QStringLiteral("QTextBrowser { background: %1; color: %2; border: none; font-size: 13px; padding: 6px; }").arg(surface, body));
-    text->document()->setDefaultStyleSheet(QStringLiteral("h2, h3 { color: %1; } b { color: %2; } li { margin-bottom: 3px; }").arg(accent, strong));
-    text->setHtml(QString::fromUtf8(kHelp));
-    layout->addWidget(text, 1);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    layout->addWidget(buttons);
-    dialog.exec();
+    ui::showHelpDialog(this, m_theme, "Trade Ideas: how to use", help::htmlFor("Trade Ideas"));
 }
 
 // MARK: - Assistant hooks

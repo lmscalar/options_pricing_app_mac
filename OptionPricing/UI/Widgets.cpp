@@ -7,6 +7,7 @@
 
 #include <QtGui/QMouseEvent>
 #include <QtGui/QPaintEvent>
+#include <QtWidgets/QTextBrowser>
 #include <algorithm>
 
 #include <cmath>
@@ -201,6 +202,32 @@ HoverChartView* makeHoverChartView(QWidget* parent, QChart* chart, int minimumHe
     view->setBackgroundBrush(Qt::NoBrush);
     view->setFrameShape(QFrame::NoFrame);
     return view;
+}
+
+void showHelpDialog(QWidget* parent, const Theme& theme, const QString& title, const QString& html)
+{
+    QDialog dialog(parent);
+    dialog.setWindowTitle(title);
+    dialog.resize(780, 680);
+    auto* layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(14, 12, 14, 12);
+    auto* text = new QTextBrowser(&dialog);
+    text->setOpenExternalLinks(false);
+    text->setFrameShape(QFrame::NoFrame);
+    // The global stylesheet does not cover QTextBrowser: match the theme explicitly.
+    const QString surface = theme.surface.isEmpty() ? QStringLiteral("#0f172a") : theme.surface;
+    const QString strong = theme.textStrong.isEmpty() ? QStringLiteral("#e2e8f0") : theme.textStrong;
+    const QString body = theme.text.isEmpty() ? strong : theme.text;
+    const QString accent = theme.accent2.isEmpty() ? QStringLiteral("#f59e0b") : theme.accent2;
+    text->setStyleSheet(QStringLiteral("QTextBrowser { background: %1; color: %2; border: none; font-size: 13px; padding: 6px; }").arg(surface, body));
+    text->document()->setDefaultStyleSheet(QStringLiteral("h2, h3 { color: %1; } b { color: %2; } li { margin-bottom: 3px; }").arg(accent, strong));
+    text->setHtml(html);
+    layout->addWidget(text, 1);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    layout->addWidget(buttons);
+    dialog.exec();
 }
 
 QPixmap roundedLogo(const QImage& image, int size, qreal devicePixelRatio)
