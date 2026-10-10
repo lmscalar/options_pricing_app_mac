@@ -12,6 +12,7 @@
 #include "PortfolioTab.h"
 #include "AlertsTab.h"
 #include "ScannerTab.h"
+#include "OptimizerTab.h"
 #include "HelpContent.h"
 #include "PricerTab.h"
 #include "QuotesTab.h"
@@ -87,6 +88,16 @@ void MainWindow::buildUi()
         m_tabs->setCurrentWidget(m_strategy);
     };
     m_scanner->onAddToPortfolio = [this](const QString& ticker, const pricing::Position& position) {
+        m_portfolio->importStrategy(position, ticker);
+    };
+    m_optimizer = new OptimizerTab(m_state, this);
+    m_optimizer->setStore(&m_store);
+    m_optimizer->onOpenInStrategy = [this](const QString& ticker, const pricing::Position& position) {
+        if (!ticker.isEmpty() && ticker != "SAMPLE" && m_state.underlyingTicker != ticker) showTicker(ticker, false);
+        m_strategy->loadPosition(position);
+        m_tabs->setCurrentWidget(m_strategy);
+    };
+    m_optimizer->onAddToPortfolio = [this](const QString& ticker, const pricing::Position& position) {
         m_portfolio->importStrategy(position, ticker);
     };
     m_alerts->onTriggered = [this](const AlertsTab::Trigger& trigger) {
@@ -176,6 +187,7 @@ void MainWindow::buildUi()
     m_tabs->addTab(m_scenario, "Scenarios");
     m_tabs->addTab(m_chain, "Option Chain");
     m_tabs->addTab(m_scanner, "Trade Ideas");
+    m_tabs->addTab(m_optimizer, "Optimizer");
     m_tabs->addTab(m_heatmap, "Heatmap");
     m_tabs->addTab(m_sectorHeatmap, "Sector Heatmap");
     m_tabs->addTab(m_volatility, "Volatility");
@@ -419,6 +431,7 @@ void MainWindow::applyTheme(bool dark)
     m_portfolio->applyTheme(theme);
     m_alerts->applyTheme(theme);
     m_scanner->applyTheme(theme);
+    m_optimizer->applyTheme(theme);
     m_assistant->applyTheme(theme);
     m_assistantBusy->setColor(QColor(theme.accent3.isEmpty() ? "#22d3ee" : theme.accent3));
 
@@ -707,6 +720,7 @@ QString MainWindow::currentResultsCsv() const
     if (current == m_quotes) return m_quotes->resultsCsv();
     if (current == m_volatility) return m_volatility->resultsCsv();
     if (current == m_scanner) return m_scanner->resultsCsv();
+    if (current == m_optimizer) return m_optimizer->resultsCsv();
     return QString();
 }
 
@@ -824,8 +838,9 @@ QStringList MainWindow::captureTabs(const QString& directory)
     m_sectorHeatmap->loadSampleData();   // offline treemap with synthetic moves
     m_portfolio->loadSampleData(true);    // offline book with synthetic marks and history (not saved)
     m_scanner->loadSampleData();          // synthetic chains for three tickers, scanned
-    const char* names[] = { "quotes", "portfolio", "pricer", "strategy", "scenarios", "chain", "ideas", "heatmap", "sector-heatmap", "volatility", "alerts" };
-    for (int i = 0; i < m_tabs->count() && i < 8; ++i) {
+    m_optimizer->loadSampleData();        // synthetic chain, optimised for a +8% view
+    const char* names[] = { "quotes", "portfolio", "pricer", "strategy", "scenarios", "chain", "ideas", "optimizer", "heatmap", "sector-heatmap", "volatility", "alerts" };
+    for (int i = 0; i < m_tabs->count() && i < 9; ++i) {
         m_tabs->setCurrentIndex(i);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
@@ -1006,10 +1021,25 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                 for (int i = 0; i < m_tabs->count(); ++i) if (help::htmlFor(m_tabs->tabText(i)).isEmpty()) { ++missing; qInfo("[live-smoke] no guide page for tab %s", qPrintable(m_tabs->tabText(i))); }
                 qInfo("[live-smoke] guide pages: %d tab(s) without a page", missing);
             }
-            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_volatility, m_sectorHeatmap, m_portfolio, m_alerts, m_scanner, m_quotes }) {
+            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_volatility, m_sectorHeatmap, m_portfolio, m_alerts, m_scanner, m_optimizer, m_quotes }) {
                 m_tabs->setCurrentWidget(tab);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
+                if (tab == m_optimizer) {
+                    // Optimise the current chain for a +6% view, then compare the presets; log the leaders.
+                    auto waitFor = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
+                    m_optimizer->setTargetMovePercent(6.0);
+                    m_optimizer->setObjective("expected");
+                    m_optimizer->setFamily("all");
+                    m_optimizer->runOptimizer();
+                    waitFor(300);
+                    qInfo("[live-smoke] optimizer: %s", qPrintable(m_optimizer->summaryText().left(1400)));
+                    if (grab().save(shotDir + "/optimizer.png")) qInfo("[live-smoke] wrote optimizer.png");
+                    m_optimizer->comparePresets();
+                    waitFor(200);
+                    qInfo("[live-smoke] optimizer presets: %zu candidate(s); %s", m_optimizer->candidates().size(), qPrintable(m_optimizer->summaryText().section('\n', 1, 2).left(500)));
+                    continue;
+                }
                 if (tab == m_scanner) {
                     // Scan every chain in memory with the premium-selling screen, then the volatility screen on the current ticker.
                     auto waitFor = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };

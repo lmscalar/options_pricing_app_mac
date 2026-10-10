@@ -316,6 +316,49 @@ Option Chain tab have fetched.</p>
 </ul>
 )html";
 
+const char* kOptimizer = R"html(
+<h2>Optimizer: compare and optimise strategies</h2>
+<p>State a view, choose what you want to maximise, and the optimiser searches the listed strikes and
+expiries of the current ticker's option chain for the structures that do it best. Or line up every preset
+side by side on one expiry. Candidates are marked at chain mids with the chain's implied vols, so the
+numbers are what the market is offering now.</p>
+
+<h3>How to use</h3>
+<ol>
+<li><b>State your view.</b> <i>Target price</i> is where you expect the spot at the first expiry (or type the
+<i>Move</i> in percent; the two stay in step). <i>View vol</i> is how uncertain you are around that target,
+annualised; leave it at “ATM implied” to use the market's own uncertainty, lower it if you are confident.</li>
+<li><b>Expiry window</b>: the days to expiry the optimiser may use.</li>
+<li><b>Objective</b>: expected return on risk under your view (the default: expected P&amp;L per dollar of maximum loss,
+which keeps big-notional structures from winning by size alone), expected P&amp;L in dollars, P&amp;L if the spot lands exactly on the target,
+probability of profit under your view, return on risk, or the probability-weighted return on risk the Trade
+Ideas scanner uses.</li>
+<li><b>Family</b>: all strategies, vertical spreads, condors and butterflies, straddles and strangles, single options,
+calendars, share-based structures or risk reversals. <i>Max loss</i> caps the worst case per position; <i>Defined risk
+only</i> skips naked short options and share positions.</li>
+<li><b>Optimize</b> enumerates every strike combination in the family (within ±20% of spot, spreads up to six strikes
+wide, wings up to four) on every expiry in the window, evaluates each, and lists the best thirty. <b>Compare
+presets</b> instead builds one delta-targeted candidate per preset on the middle expiry.</li>
+<li><b>Select rows</b> (up to six) to overlay their payoff curves; the spot and your target are marked; hover the chart
+for every curve's P&amp;L at that spot. Double-click (or <i>Open in Strategy</i>) to work on a candidate in the Strategy
+tab; <i>Add to Portfolio</i> books it; <i>Export CSV</i> saves the table.</li>
+</ol>
+
+<h3>Understanding the analysis</h3>
+<ul>
+<li><b>PoP (mkt)</b> is the probability of profit under the market's risk-neutral distribution at the ATM implied vol;
+<b>PoP (view)</b> the same under your view. The gap between them is where your edge, if any, lives.</li>
+<li><b>Exp. P&amp;L (view)</b> integrates the expiry payoff against a lognormal centred on your target with your view vol.
+Under the market's own distribution a fairly priced trade has an expected P&amp;L near zero, so a large positive figure
+here means your view differs materially from the market's.</li>
+<li><b>P&amp;L at target</b>: the expiry payoff if the spot lands exactly on the target, the simplest “what if I am right”.</li>
+<li><b>Return/risk</b>: max profit over max loss; open-ended sides are measured two view standard deviations away.
+<b>Score</b> is market PoP × return on risk, capped at 300%.</li>
+<li>Candidates that cannot lose, have no reward, or exceed 1000% on risk are dropped as stale-mark artefacts.
+Legs are marked at mids; check them on the Option Chain tab before trading.</li>
+</ul>
+)html";
+
 const char* kHeatmap = R"html(
 <h2>Heatmap: where the chain is active</h2>
 <p>A strike × expiry grid of the loaded option chain coloured by volume or open interest, the most active
@@ -450,7 +493,7 @@ a model call.</p>
 struct Page { const char* name; const char* html; };
 const Page kPages[] = {
     { "Quotes", kQuotes }, { "Portfolio", kPortfolio }, { "Pricer", kPricer }, { "Strategy", kStrategy }, { "Scenarios", kScenarios },
-    { "Option Chain", kChain }, { "Trade Ideas", kIdeas }, { "Heatmap", kHeatmap }, { "Sector Heatmap", kSectorHeatmap },
+    { "Option Chain", kChain }, { "Trade Ideas", kIdeas }, { "Optimizer", kOptimizer }, { "Heatmap", kHeatmap }, { "Sector Heatmap", kSectorHeatmap },
     { "Volatility", kVolatility }, { "Alerts", kAlerts }, { "Assistant", kAssistant },
 };
 

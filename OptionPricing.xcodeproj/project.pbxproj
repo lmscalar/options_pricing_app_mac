@@ -34,6 +34,7 @@
 		F37616C03079B5D400F5524A /* ScannerTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616BF3079B5D400F5524A /* ScannerTab.cpp */; };
 		F37616F93079D1A100F5524A /* IvBackfill.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616F83079D1A100F5524A /* IvBackfill.cpp */; };
 		F37617103079DD6700F5524A /* HelpContent.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376170F3079DD6700F5524A /* HelpContent.cpp */; };
+		F37617293079E30300F5524A /* OptimizerTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37617283079E30300F5524A /* OptimizerTab.cpp */; };
 		F3B6FB022988347000563EB6 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3B6FB012988347000563EB6 /* main.cpp */; };
 /* End PBXBuildFile section */
 
@@ -119,6 +120,7 @@
 		F37616B830799D3100F5524A /* PortfolioTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PortfolioTab.h; sourceTree = "<group>"; };
 		F37616B8307A0000005CA120 /* IvHistory.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = IvHistory.h; sourceTree = "<group>"; };
 		F37616B930799E4600F5524A /* PortfolioTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PortfolioTab.cpp; sourceTree = "<group>"; };
+		F37616B9307A0000005CA121 /* Optimizer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Optimizer.h; sourceTree = "<group>"; };
 		F37616BB30799F6D00F5524A /* AlertsTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AlertsTab.h; sourceTree = "<group>"; };
 		F37616BC3079A01500F5524A /* AlertsTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AlertsTab.cpp; sourceTree = "<group>"; };
 		F37616BE3079B52400F5524A /* ScannerTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ScannerTab.h; sourceTree = "<group>"; };
@@ -127,6 +129,8 @@
 		F37616F83079D1A100F5524A /* IvBackfill.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = IvBackfill.cpp; sourceTree = "<group>"; };
 		F376170E3079DCD000F5524A /* HelpContent.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = HelpContent.h; sourceTree = "<group>"; };
 		F376170F3079DD6700F5524A /* HelpContent.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = HelpContent.cpp; sourceTree = "<group>"; };
+		F37617273079E27000F5524A /* OptimizerTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OptimizerTab.h; sourceTree = "<group>"; };
+		F37617283079E30300F5524A /* OptimizerTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = OptimizerTab.cpp; sourceTree = "<group>"; };
 		F3B6FAFE2988347000563EB6 /* OptionPricing */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = OptionPricing; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3B6FB012988347000563EB6 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -177,6 +181,7 @@
 				F37616B6307A0000005CA11E /* Scanner.h */,
 				F37616B7307A0000005CA11F /* Events.h */,
 				F37616B8307A0000005CA120 /* IvHistory.h */,
+				F37616B9307A0000005CA121 /* Optimizer.h */,
 			);
 			path = Pricing;
 			sourceTree = "<group>";
@@ -239,6 +244,8 @@
 				F37616F83079D1A100F5524A /* IvBackfill.cpp */,
 				F376170E3079DCD000F5524A /* HelpContent.h */,
 				F376170F3079DD6700F5524A /* HelpContent.cpp */,
+				F37617273079E27000F5524A /* OptimizerTab.h */,
+				F37617283079E30300F5524A /* OptimizerTab.cpp */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -384,6 +391,7 @@
 				F3B6FB022988347000563EB6 /* main.cpp in Sources */,
 				F376163D3077248000F5524A /* MarketState.cpp in Sources */,
 				F37616F93079D1A100F5524A /* IvBackfill.cpp in Sources */,
+				F37617293079E30300F5524A /* OptimizerTab.cpp in Sources */,
 				F376167D30786C6A00F5524A /* ChainStore.cpp in Sources */,
 				F376164F307726DE00F5524A /* BatchDialog.cpp in Sources */,
 				F37616B330798BCD00F5524A /* SectorHeatmapTab.cpp in Sources */,

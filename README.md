@@ -39,6 +39,7 @@ volatility smiles from option chains and prices batches of contracts from CSV.
 | `Scanner.h` | Chain metrics (ATM IV, term slope, skew, expected move, put/call ratios), delta-targeted strategy construction, ranked trade ideas. |
 | `Events.h` | Earnings analytics: ATM term structure in total variance, event variance isolation, skew-adjusted implied move, price cone. |
 | `IvHistory.h` | Implied-vol history: 30-day constant-maturity ATM vol samples, IV rank and percentile, implied vol from call/put closes. |
+| `Optimizer.h` | Strategy comparison and optimisation: view-based metrics (expected P&L, PoP, P&L at target), enumeration of listed strikes and expiries per family, preset comparison. |
 | `Treemap.h` | Squarified treemap layout for the sector heatmap. |
 | `TechnicalAnalysis.h` | TA-Lib catalogue wrapper and generic indicator evaluation. |
 | `Volatility.h` | Realized vol estimators (close-to-close, Parkinson, Garman-Klass, Rogers-Satchell, Yang-Zhang), rolling series, volatility cone, EWMA, GARCH(1,1) / GJR-GARCH(1,1) by quasi-maximum likelihood with variance forecasts and forecast term structure. |
@@ -166,6 +167,18 @@ of every Greek. Help ▸ User Guide lists every page.
   put-call parity table per expiry with the implied forward, the dividend yield that
   reconciles it, and the worst-offending strike. Double-click a cell or row to price it.
 
+- **Optimizer**: strategy comparison and optimisation on the current ticker's chain. State a view
+  (target price or % move at the first expiry, and the uncertainty around it, defaulting to the ATM
+  implied vol), pick an objective (expected P&L under the view, P&L at the target, probability of
+  profit under the view, return on risk, or probability-weighted return on risk) and a family
+  (vertical spreads, condors and butterflies, straddles and strangles, single options, calendars,
+  share-based structures, risk reversals, or all). **Optimize** enumerates every strike combination
+  within ±20% of spot on every expiry in the window and lists the best thirty; **Compare presets**
+  builds one delta-targeted candidate per preset on one expiry. The table shows credit or debit, max
+  profit and loss, market and view probabilities of profit, expected P&L under the view, P&L at the
+  target, return on risk, Greeks and score; selected rows overlay on a payoff chart with spot and
+  target marked and a crosshair readout. Candidates open in the Strategy tab or book into the
+  Portfolio. The assistant runs it too ("optimize for a move to 350", "compare presets").
 - **IV rank and percentile** (Volatility tab): every stored option chain writes the day's 30-day
   constant-maturity ATM implied vol into the chain store's `iv_history` table, so a history
   accumulates for every watchlist ticker as the app runs. **Backfill IV History** rebuilds about a

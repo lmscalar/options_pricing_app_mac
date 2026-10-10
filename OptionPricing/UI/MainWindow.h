@@ -24,6 +24,7 @@ class SectorHeatmapTab;
 class PortfolioTab;
 class AlertsTab;
 class ScannerTab;
+class OptimizerTab;
 class QuotesTab;
 class VolatilityTab;
 class AssistantPanel;
@@ -102,6 +103,7 @@ private:
     PortfolioTab* m_portfolio = nullptr;
     AlertsTab* m_alerts = nullptr;
     ScannerTab* m_scanner = nullptr;
+    OptimizerTab* m_optimizer = nullptr;
     QFrame* m_alertBanner = nullptr;        ///< in-app toast shown when an alert fires (top-right of the central area)
     QLabel* m_alertBannerLabel = nullptr;
     QTimer* m_alertBannerTimer = nullptr;

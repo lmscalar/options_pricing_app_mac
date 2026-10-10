@@ -14,6 +14,7 @@
 #include "HeatmapTab.h"
 #include "SectorHeatmapTab.h"
 #include "ScannerTab.h"
+#include "OptimizerTab.h"
 #include "PortfolioTab.h"
 #include "AlertsTab.h"
 #include "PricerTab.h"
@@ -195,6 +196,7 @@ QWidget* MainWindow::tabByName(const QString& name) const
     if (wanted.contains("vol")) return m_volatility;
     if (wanted.contains("sector") || wanted.contains("market map") || wanted.contains("treemap")) return m_sectorHeatmap;
     if (wanted.contains("idea") || wanted.contains("scan") || wanted.contains("screen")) return m_scanner;
+    if (wanted.contains("optim") || wanted.contains("compare")) return m_optimizer;
     if (wanted.contains("portfolio") || wanted.contains("position") || wanted.contains("book") || wanted.contains("risk")) return m_portfolio;
     if (wanted.contains("alert")) return m_alerts;
     if (wanted.contains("heat")) return m_heatmap;
@@ -253,6 +255,8 @@ void MainWindow::assistantContext(std::function<void(const QString&, const QImag
         s << m_alerts->summaryText() << "\nAlerts (CSV):\n" << clip(m_alerts->rulesCsv(), 4000);
     } else if (current == m_portfolio) {
         s << m_portfolio->summaryText() << "\nPositions (CSV):\n" << clip(m_portfolio->resultsCsv(), 6000) << "\nRisk (CSV):\n" << clip(m_portfolio->riskCsv(), 3000);
+    } else if (current == m_optimizer) {
+        s << m_optimizer->summaryText() << "\nCandidates (CSV):\n" << clip(m_optimizer->resultsCsv(), 7000);
     } else if (current == m_scanner) {
         s << m_scanner->summaryText() << "\nMarket scan (CSV):\n" << clip(m_scanner->metricsCsv(), 4000) << "\nIdeas (CSV):\n" << clip(m_scanner->resultsCsv(), 7000);
     } else if (current == m_sectorHeatmap) {
@@ -361,6 +365,14 @@ std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
                       "Earnings overlay on the Quotes chart: the option-implied earnings move (beat side and miss side, from the implied-vol term structure and skew), the report date and its source, and the ATM term structure. Optionally pins the report date or toggles the cone.",
                       schema({ { "ticker", prop("string", "Symbol (default: the charted one)") }, { "earnings_date", prop("string", "ISO date to pin as the report date; 'clear' removes the pin") },
                                { "show_cone", prop("boolean", "Show or hide the implied move cone on the chart") } }) });
+    tools.push_back({ "optimize_strategy",
+                      "Strategy optimiser on the current ticker's option chain: states a view (target price or % move at the first expiry, optional uncertainty), enumerates listed strikes and expiries for a strategy family and ranks candidates by an objective; or compares one candidate per preset. Returns the ranked table with legs, credit/debit, max profit/loss, market and view probabilities of profit, expected P&L under the view and return on risk.",
+                      schema({ { "target_price", prop("number", "Expected spot at the first expiry") }, { "target_move_percent", prop("number", "Alternative: expected move from spot, percent") },
+                               { "view_vol_percent", prop("number", "Annualised uncertainty around the target, percent (0 = ATM implied)") },
+                               { "objective", prop("string", "expected P&L | P&L at target | probability of profit | return on risk | score") },
+                               { "family", prop("string", "all | vertical spreads | condors & butterflies | straddles & strangles | single options | calendars | shares | risk reversals") },
+                               { "min_days", prop("integer", "Earliest expiry in days") }, { "max_days", prop("integer", "Latest expiry in days") },
+                               { "mode", prop("string", "optimize (default) or presets (one candidate per preset, side by side)") } }) });
     tools.push_back({ "scan_trade_ideas",
                       "Runs the Trade Ideas scanner over the option chains in memory and returns the market scan (ATM IV, term slope, skew, expected move, put/call ratios) and the ranked ideas with legs, credit/debit, max profit/loss, probability of profit and return on risk.",
                       schema({ { "screen", prop("string", "Premium selling | Directional debit | Volatility | Income on shares | All strategies (default: current)") },
@@ -580,6 +592,17 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
         if (input.contains("show_cone")) m_quotes->setEventConeShown(input.value("show_cone").toBool(true));
         m_tabs->setCurrentWidget(m_quotes);
         QTimer::singleShot(ticker.isEmpty() ? 300 : 2500, this, [this, done] { done(m_quotes->eventSummary(), false); });
+    } else if (name == "optimize_strategy") {
+        if (input.contains("target_price")) m_optimizer->setTargetPrice(input.value("target_price").toDouble());
+        else if (input.contains("target_move_percent")) m_optimizer->setTargetMovePercent(input.value("target_move_percent").toDouble());
+        if (input.contains("view_vol_percent")) m_optimizer->setViewVolPercent(input.value("view_vol_percent").toDouble());
+        if (input.contains("objective") && !m_optimizer->setObjective(input.value("objective").toString())) return fail(QStringLiteral("Unknown objective. Use one of: %1").arg(m_optimizer->objectiveNames().join("; ")));
+        if (input.contains("family") && !m_optimizer->setFamily(input.value("family").toString())) return fail(QStringLiteral("Unknown family. Use one of: %1").arg(m_optimizer->familyNames().join("; ")));
+        if (input.contains("min_days") || input.contains("max_days")) m_optimizer->setDays(input.value("min_days").toInt(0), input.value("max_days").toInt(0));
+        m_tabs->setCurrentWidget(m_optimizer);
+        if (input.value("mode").toString().toLower().startsWith("preset")) m_optimizer->comparePresets();
+        else m_optimizer->runOptimizer();
+        done(m_optimizer->summaryText() + "\n\nCandidates (CSV):\n" + clip(m_optimizer->resultsCsv(), 7000), false);
     } else if (name == "scan_trade_ideas") {
         if (input.contains("screen") && !m_scanner->setScreen(input.value("screen").toString())) return fail(QStringLiteral("Unknown screen. Use one of: %1").arg(m_scanner->screenNames().join(", ")));
         if (input.contains("bias") && !m_scanner->setBias(input.value("bias").toString())) return fail("Unknown bias. Use Any, Bullish, Bearish, Neutral or Volatile.");
@@ -720,6 +743,25 @@ bool MainWindow::handleLocalCommand(const QString& rawText, QString& feedback)
     if (lower.contains("implied") && (lower.contains("earnings move") || lower.contains("expected move") || lower.contains("event move"))) {
         m_tabs->setCurrentWidget(m_quotes);
         feedback = m_quotes->eventSummary();
+        return true;
+    }
+    // Optimizer: "optimize for a move to 350", "optimize for +8%", "best spread if NVDA goes to 260", "compare presets".
+    QRegularExpression optRe("^(?:please\\s+)?(?:optimi[sz]e|find\\s+the\\s+best(?:\\s+\\w+)?(?:\\s+strategy)?)(?:\\s+(?:a|the)\\s+(spread|condor|butterfly|straddle|strangle|calendar|covered\\s+call|collar|option)s?)?\\s+(?:for|if|when)\\s+(?:a\\s+)?(?:move\\s+(?:to|of)\\s+|(?:[A-Za-z.]{1,6}\\s+)?(?:goes|moves|rallies|drops|falls|rises)\\s+(?:to|by)\\s+)?([+-]?\\d+(?:\\.\\d+)?)(\\s*%)?$",
+                             QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = optRe.match(text); m.hasMatch()) {
+        if (!m.captured(1).isEmpty()) m_optimizer->setFamily(m.captured(1));
+        const double value = m.captured(2).toDouble();
+        if (!m.captured(3).isEmpty() || std::fabs(value) < 60.0) m_optimizer->setTargetMovePercent(lower.contains("drop") || lower.contains("fall") ? -std::fabs(value) : value);
+        else m_optimizer->setTargetPrice(value);
+        m_tabs->setCurrentWidget(m_optimizer);
+        m_optimizer->runOptimizer();
+        feedback = m_optimizer->summaryText().section('\n', 0, 3);
+        return true;
+    }
+    if (lower == "compare presets" || lower == "compare strategies" || lower == "compare the presets") {
+        m_tabs->setCurrentWidget(m_optimizer);
+        m_optimizer->comparePresets();
+        feedback = m_optimizer->summaryText().section('\n', 0, 3);
         return true;
     }
     // Trade ideas: "scan for ideas", "find premium selling ideas on the watchlist", "scan for bullish trades".
