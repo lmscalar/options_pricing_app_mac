@@ -131,7 +131,6 @@ private:
     QComboBox* m_bookBox = nullptr;
     QToolButton* m_bookMenu = nullptr;
     QAction* m_deleteBookAction = nullptr;
-    QLabel* m_bookHint = nullptr;
     QLabel* m_strategyTitle = nullptr;
     QTableWidget* m_strategyTable = nullptr;
     QLabel* m_strategyNote = nullptr;

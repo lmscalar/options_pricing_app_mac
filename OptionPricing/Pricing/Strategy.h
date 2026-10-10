@@ -316,6 +316,31 @@ inline StrategyAnalysis analyzePosition(const Position& pos, const Market& marke
     return a;
 }
 
+/// Net Greeks of a position as calendar time passes at a fixed spot.
+struct GreekTimePoint {
+    double days = 0.0;      ///< calendar days from today
+    double elapsed = 0.0;   ///< years from today
+    Greeks greeks;
+};
+
+/// `steps` points from today to just before the first expiry (the Greeks are discontinuous at
+/// expiry itself), each at `spot`. Positions with no option legs return a single point.
+inline std::vector<GreekTimePoint> greeksOverTime(const Position& pos, const Market& market, double spot, int steps = 60)
+{
+    std::vector<GreekTimePoint> out;
+    const double horizon = earliestExpiry(pos);
+    if (horizon <= 0.0 || steps < 2) {
+        out.push_back({ 0.0, 0.0, positionGreeks(pos, market, spot, 0.0) });
+        return out;
+    }
+    const double last = horizon * 0.995;
+    for (int i = 0; i < steps; ++i) {
+        const double elapsed = last * i / (steps - 1);
+        out.push_back({ elapsed * 365.0, elapsed, positionGreeks(pos, market, spot, elapsed) });
+    }
+    return out;
+}
+
 // MARK: - Presets
 
 enum class StrategyPreset {

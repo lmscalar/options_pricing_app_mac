@@ -100,9 +100,6 @@ void ScannerTab::buildUi()
     for (const Screen& s : screens()) m_screen->addItem(s.label);
     m_screen->setMinimumWidth(170);
     m_screen->setToolTip("Which family of strategies to build; also sets sensible default filters");
-    m_screenHint = new QLabel(this);
-    m_screenHint->setObjectName("muted");
-    m_screenHint->setWordWrap(true);
     m_bias = new QComboBox(this);
     for (Bias b : { Bias::Any, Bias::Bullish, Bias::Bearish, Bias::Neutral, Bias::Volatile }) m_bias->addItem(scan::biasName(b), static_cast<int>(b));
     m_bias->setToolTip("Keep only strategies with this directional view");
@@ -169,7 +166,6 @@ void ScannerTab::buildUi()
     controlsLayout->setSpacing(6);
     controlsLayout->addLayout(row1);
     controlsLayout->addLayout(row2);
-    controlsLayout->addWidget(m_screenHint);
 
     // ---- Tables ----
     auto makeTable = [this](const QStringList& headers) {
@@ -194,6 +190,7 @@ void ScannerTab::buildUi()
     for (int c = 0; c < MetricColumnCount; ++c) m_metricsTable->setColumnWidth(c, c == McTicker ? 70 : (c == McExpiry ? 150 : 82));
     m_metricsTable->horizontalHeader()->setStretchLastSection(false);
     m_ideasTable = makeTable({ "Ticker", "Strategy", "Bias", "Expiry", "Legs", "Net", "Max profit", "Max loss", "PoP", "Return/risk", "Exp. P&L", "Breakevens", "Delta", "Theta/d", "IV", "Spread", "Score", "Why" });
+    m_ideasTable->setToolTip("Double-click an idea to open it in the Strategy tab. Click a ticker in the market scan above to show only its ideas.");
     for (int c = 0; c < IdeaColumnCount; ++c) {
         int w = 82;
         if (c == IcTicker) w = 66; else if (c == IcStrategy) w = 140; else if (c == IcBias) w = 70; else if (c == IcExpiry) w = 120; else if (c == IcLegs) w = 300; else if (c == IcBreakevens) w = 130;
@@ -254,7 +251,8 @@ void ScannerTab::wire()
     connect(m_screen, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (index < 0 || index >= static_cast<int>(screens().size())) return;
         const Screen& s = screens()[static_cast<size_t>(index)];
-        m_screenHint->setText(s.hint);
+        // The screen's description lives in the combo's tooltip (and the How to use guide).
+        m_screen->setToolTip(s.hint);
         if (!m_updating) {
             m_updating = true;
             m_minPop->setValue(s.minProbability);
@@ -308,7 +306,7 @@ void ScannerTab::loadSettings()
     m_updating = true;
     const int screen = std::max(0, m_screen->findText(settings.value(kScreenKey, "Premium selling").toString()));
     m_screen->setCurrentIndex(screen);
-    m_screenHint->setText(screens()[static_cast<size_t>(screen)].hint);
+    m_screen->setToolTip(screens()[static_cast<size_t>(screen)].hint);
     m_bias->setCurrentIndex(std::max(0, m_bias->findText(settings.value(kBiasKey, "Any").toString())));
     m_universe->setCurrentIndex(std::max(0, m_universe->findData(settings.value(kUniverseKey, "all").toString())));
     m_minDays->setValue(settings.value(kMinDaysKey, 20).toInt());
@@ -321,7 +319,7 @@ void ScannerTab::loadSettings()
     m_definedRisk->setChecked(settings.value(kDefinedRiskKey, s.definedRiskOnly).toBool());
     if (settings.contains(kSplitterKey)) m_splitter->restoreState(settings.value(kSplitterKey).toByteArray());
     m_updating = false;
-    setStatus("Press Scan to build ideas from the option chains in memory.", ui::StatusKind::Info);
+    setStatus(QString(), ui::StatusKind::Info);
 }
 
 void ScannerTab::saveSettings() const
@@ -460,7 +458,7 @@ void ScannerTab::runScan()
     m_filterTicker.clear();
     fillMetrics();
     fillIdeas();
-    setStatus(QStringLiteral("Scanned %1 chain(s) in %2 ms: %3 idea(s) pass the filters%4. Double-click an idea to open it in the Strategy tab; click a ticker above to focus on it.")
+    setStatus(QStringLiteral("Scanned %1 chain(s) in %2 ms · %3 idea(s) pass the filters%4")
                   .arg(m_rows.size()).arg(timer.elapsed()).arg(m_ideas.size()).arg(skipped ? QStringLiteral(", %1 ticker(s) without a chain skipped").arg(skipped) : QString()),
               m_ideas.empty() ? ui::StatusKind::Warning : ui::StatusKind::Info);
 }

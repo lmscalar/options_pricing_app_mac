@@ -109,7 +109,6 @@ private:
 
     // Controls
     QComboBox* m_screen = nullptr;
-    QLabel* m_screenHint = nullptr;
     QComboBox* m_bias = nullptr;
     QComboBox* m_universe = nullptr;
     QSpinBox* m_minDays = nullptr;

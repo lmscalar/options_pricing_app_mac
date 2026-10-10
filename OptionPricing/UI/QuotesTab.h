@@ -21,9 +21,13 @@
 #include "Widgets.h"
 #include "../Pricing/Events.h"
 
+#include <QtCore/QPointer>
+
 #include <functional>
 #include <map>
 #include <vector>
+
+class ChartPopup;
 
 class QuotesTab : public QWidget
 {
@@ -32,6 +36,16 @@ public:
 
     /// Adds the ticker to the watchlist if needed, selects it and loads its chart.
     void showTicker(const QString& ticker);
+    /// Loads `symbol` into the chart without touching the watchlist (a row is selected only
+    /// if the symbol already has one). Used when another tab, e.g. the Sector Heatmap, picks a stock.
+    void chartSymbol(const QString& symbol);
+    /// Auto-refresh (quotes, the live price line and intraday bars on the interval).
+    bool autoRefreshEnabled() const;
+    void setAutoRefresh(bool on);
+    int refreshIntervalSeconds() const;
+    /// Keeps `popup` showing an exact copy of this chart: every script sent to the chart page
+    /// is also sent to the popup, and the current state is replayed when the popup is attached.
+    void mirrorChartTo(ChartPopup* popup);
     void refreshQuotes();
     bool hasTicker(const QString& ticker) const { return m_watchlist.contains(ticker.trimmed().toUpper()); }
     /// Shared store: refreshed quotes are written to it, and loadStoredQuotes() shows the
@@ -77,6 +91,8 @@ public:
     /// Switches the timeframe button (and reloads the chart); false if the label is unknown.
     bool setTimeframe(const QString& label);
     bool setChartType(const QString& type);
+    /// Current chart type key: candles, bars, heikin or line.
+    QString chartType() const;
 
     // ---- Technical indicators (TA-Lib) ----
     // Each indicator is a JSON object {"func":"RSI","params":{"optInTimePeriod":14},"colors":["#rrggbb",...]}
@@ -235,6 +251,8 @@ private:
     MarketDataClient::BarSeries m_bars;
     bool m_pageReady = false;
     QStringList m_pendingJs;
+    QPointer<ChartPopup> m_mirror;                 ///< pop-out window showing a copy of the chart (may be null)
+    std::map<QString, QString> m_mirrorState;      ///< last chartApi.set*(…) script per command, replayed into a new mirror
     bool m_loadingChart = false;
     bool m_updating = false;
     bool m_autoSelecting = false;   ///< true while the first row is selected programmatically at start-up
@@ -286,6 +304,5 @@ private:
     QToolButton* m_undoDraw = nullptr;
     QToolButton* m_deleteDraw = nullptr;
     QToolButton* m_clearDraw = nullptr;
-    QLabel* m_drawHint = nullptr;
     std::map<QString, QString> m_drawings;     ///< symbol -> JSON array of drawings (mirrors QSettings)
 };

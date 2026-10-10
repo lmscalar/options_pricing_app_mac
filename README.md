@@ -167,6 +167,11 @@ of every Greek. Help ▸ User Guide lists every page.
   put-call parity table per expiry with the implied forward, the dividend yield that
   reconciles it, and the worst-offending strike. Double-click a cell or row to price it.
 
+- **3D volatility surface** (Option Chain tab): the fitted surface as a rotatable, zoomable 3D view
+  (strikes 70% to 130% of spot × every fitted expiry, coloured by vol, spot marked, hover readout),
+  rendered in software so it follows the theme and appears in screenshots. **Greeks over time**
+  (Strategy tab): the Greek chart switches between across-spot and a calendar view that plots any
+  Greek day by day to the first expiry at spot and at ±5% / ±10% moves.
 - **Optimizer**: strategy comparison and optimisation on the current ticker's chain. State a view
   (target price or % move at the first expiry, and the uncertainty around it, defaulting to the ATM
   implied vol), pick an objective (expected P&L under the view, P&L at the target, probability of
@@ -260,7 +265,10 @@ of every Greek. Help ▸ User Guide lists every page.
   Massive.com bulk snapshot, period reference closes from grouped daily aggregates (with a
   per-ticker fallback), and market caps from ticker details, cached for two weeks in
   `sector-heatmap-caps.json`. Hover a tile for name, cap, last and change; click to load
-  the ticker everywhere; double-click to open its option chain. The layout is a squarified
+  the ticker everywhere and open a **pop-out chart** (`UI/ChartPopup`), an exact copy of the
+  Quotes chart with its timeframe, indicators, drawings and earnings cone, kept in sync by
+  mirroring every script the Quotes tab sends to its chart page; double-click to open its
+  option chain. The layout is a squarified
   treemap (`Pricing/Treemap.h`, unit tested) painted natively. The assistant reads it
   through `get_sector_heatmap`.
 - **Volatility**: realized and forecast volatility for a ticker from daily bars (Massive

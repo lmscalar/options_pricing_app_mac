@@ -89,7 +89,6 @@ void VolatilityTab::buildUi()
     m_status->setObjectName("muted");
     m_status->setWordWrap(true);
     m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_status->setText("Fetch daily bars for a ticker, or load sample data.");
 
     m_estimator = new QComboBox(this);
     for (RealizedEstimator e : { RealizedEstimator::CloseToClose, RealizedEstimator::Parkinson, RealizedEstimator::GarmanKlass,
@@ -208,8 +207,9 @@ void VolatilityTab::buildUi()
     sidebar->setMinimumHeight(280);
 
     // ---- Charts ----
+    // Crosshair readouts: blank until the pointer is over a line (the guide explains hovering).
     auto readout = [this] {
-        auto* label = new QLabel("Hover a line for the value at that point.", this);
+        auto* label = new QLabel(this);
         label->setObjectName("muted");
         label->setFixedHeight(20);
         label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);

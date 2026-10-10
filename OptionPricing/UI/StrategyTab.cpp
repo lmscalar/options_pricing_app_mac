@@ -66,9 +66,9 @@ void StrategyTab::buildUi()
     }
     m_presets->setCurrentIndex(static_cast<int>(StrategyPreset::IronCondor));
     m_presets->setToolTip("Standard strategies built around the current spot");
+    // The preset's description is the combo's tooltip (and in the guide); it is not shown as text.
     m_presetDescription = new QLabel(this);
-    m_presetDescription->setObjectName("muted");
-    m_presetDescription->setWordWrap(true);
+    m_presetDescription->setVisible(false);
 
     m_presetMaturity = ui::makeSpinBox(this, 0.01, 10.0, 0.25, 2, 0.5, " yrs");
     m_presetMaturity->setToolTip("Expiry used for preset legs (calendars use twice this for the far leg)");
@@ -77,9 +77,10 @@ void StrategyTab::buildUi()
     m_presetExpiry->setVisible(false);
     m_strikeStep = ui::makeSpinBox(this, 0.01, 10000.0, 1.0, 2, 5.0);
     m_strikeStep->setToolTip("Strike interval used to place preset wings when no option chain is loaded");
+    // One short line on the chain driving the presets; the explanation is its tooltip.
     m_chainInfo = new QLabel(this);
     m_chainInfo->setObjectName("muted");
-    m_chainInfo->setWordWrap(true);
+    m_chainInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     m_multiplier = ui::makeSpinBox(this, 1.0, 100000.0, 1.0, 0, 100.0);
     m_multiplier->setToolTip("Contract multiplier (100 for US equity options)");
     m_loadPreset = ui::makeButton(this, "Load Preset", "primary", "Replace the legs with the selected preset");
@@ -104,7 +105,6 @@ void StrategyTab::buildUi()
     presetForm->addWidget(m_multiplier, 0, 7);
     presetForm->addWidget(m_loadPreset, 0, 8);
     presetForm->addWidget(m_chainInfo, 1, 0, 1, 9);
-    presetForm->addWidget(m_presetDescription, 2, 0, 1, 9);
     presetForm->setColumnStretch(1, 2);
     presetForm->setColumnStretch(3, 1);
 
@@ -184,21 +184,25 @@ void StrategyTab::buildUi()
     m_summaryNote->setObjectName("muted");
     m_summaryNote->setWordWrap(true);
     gGrid->addWidget(m_summaryNote, row, 0, 1, 2);
+    gGrid->setRowStretch(row + 1, 1);   // spare height (box stretched to the payoff chart) stays below the rows
     gGrid->setColumnStretch(0, 1);
     gGrid->setColumnStretch(1, 1);
 
+    // Lower area: the summary cards and Net Greeks on the left, the payoff chart on the
+    // right, the Greek chart full width underneath. The Net Greeks box takes the left
+    // column's spare height, so its bottom edge meets the payoff box's bottom edge.
     auto* summaryColumn = new QVBoxLayout;
     summaryColumn->setSpacing(12);
     summaryColumn->addLayout(cards);
-    summaryColumn->addWidget(greeksBox);
-    summaryColumn->addStretch(1);
+    summaryColumn->addWidget(greeksBox, 1);
 
     auto* chartsColumn = new QVBoxLayout;
     chartsColumn->setSpacing(12);
     buildCharts(chartsColumn);
+    chartsColumn->removeWidget(m_greekBox);
 
     auto* lower = new QHBoxLayout;
-    lower->setSpacing(16);
+    lower->setSpacing(12);
     lower->addLayout(summaryColumn, 2);
     lower->addLayout(chartsColumn, 3);
 
@@ -210,6 +214,7 @@ void StrategyTab::buildUi()
     root->addWidget(presetBox);
     root->addWidget(legsBox);
     root->addLayout(lower, 1);
+    root->addWidget(m_greekBox, 1);
 
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
@@ -266,17 +271,22 @@ void StrategyTab::buildCharts(QVBoxLayout* column)
 
     m_greekSelect = new QComboBox(this);
     m_greekSelect->addItems({ "Delta", "Gamma", "Vega", "Theta", "Rho", "Vanna", "Charm" });
-    m_greekSelect->setToolTip("Greek to plot across the underlying price");
+    m_greekSelect->setToolTip("Greek to plot");
+    m_greekMode = new QComboBox(this);
+    m_greekMode->addItem("across spot", "spot");
+    m_greekMode->addItem("over time", "time");
+    m_greekMode->setToolTip("Across spot: the Greek against the underlying price today and at the slider's date. Over time: the Greek day by day to the first expiry, at spot and at ±5% / ±10% moves");
     auto* greekRow = new QHBoxLayout;
     greekRow->addWidget(new QLabel("Greek", this));
     greekRow->addWidget(m_greekSelect);
+    greekRow->addWidget(m_greekMode);
     greekRow->addStretch(1);
 
-    auto* greekBox = new QGroupBox("Greeks across spot", this);
-    auto* greekLayout = new QVBoxLayout(greekBox);
+    m_greekBox = new QGroupBox("Greeks across spot", this);
+    auto* greekLayout = new QVBoxLayout(m_greekBox);
     greekLayout->addLayout(greekRow);
     greekLayout->addWidget(m_greekView, 1);
-    column->addWidget(greekBox, 2);
+    column->addWidget(m_greekBox, 2);
 }
 
 void StrategyTab::wire()
@@ -285,9 +295,11 @@ void StrategyTab::wire()
         const auto& presets = strategyPresets();
         if (index >= 0 && static_cast<size_t>(index) < presets.size()) {
             m_presetDescription->setText(presets[static_cast<size_t>(index)].description);
+            m_presets->setToolTip(m_presetDescription->text());
         }
     });
     m_presetDescription->setText(strategyPresets()[static_cast<size_t>(m_presets->currentIndex())].description);
+    m_presets->setToolTip(m_presetDescription->text());
 
     connect(m_loadPreset, &QPushButton::clicked, this, [this] { loadPreset(); });
     connect(m_multiplier, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) {
@@ -327,6 +339,7 @@ void StrategyTab::wire()
     connect(m_applySurface, &QPushButton::clicked, this, [this] { applySurfaceToLegs(); });
     connect(m_daysForward, &QSlider::valueChanged, this, [this](int) { updateCharts(); });
     connect(m_greekSelect, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { updateCharts(); });
+    connect(m_greekMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { updateCharts(); });
 }
 
 // MARK: - Legs table
@@ -624,17 +637,21 @@ void StrategyTab::refreshChainIndex()
     if (chain) {
         populateExpiryCombo();
         const auto expiries = m_chain.expiries();
-        m_chainInfo->setText(QStringLiteral("Driven by the %1 option chain: %2 listed expir%3 (%4 to %5), spot %6%7. Strikes, expiries, entry prices and implied vols come from the chain.")
-                                 .arg(m_chainTicker.isEmpty() ? QStringLiteral("loaded") : m_chainTicker)
-                                 .arg(expiries.size()).arg(expiries.size() == 1 ? "y" : "ies")
-                                 .arg(expiries.empty() ? QString() : QString::fromStdString(expiries.front()->key.expiryDate),
-                                      expiries.empty() ? QString() : QString::fromStdString(expiries.back()->key.expiryDate),
+        // Dated expiries show their range; a synthetic or CSV chain without dates shows only the count.
+        const QString first = expiries.empty() ? QString() : QString::fromStdString(expiries.front()->key.expiryDate);
+        const QString last = expiries.empty() ? QString() : QString::fromStdString(expiries.back()->key.expiryDate);
+        const QString range = first.isEmpty() ? QString() : QStringLiteral(" (%1 – %2)").arg(first, last);
+        m_chainInfo->setText(QStringLiteral("%1 chain · %2 expir%3%4 · spot %5%6")
+                                 .arg(m_chainTicker.isEmpty() ? QStringLiteral("Loaded") : m_chainTicker)
+                                 .arg(expiries.size()).arg(expiries.size() == 1 ? "y" : "ies", range,
                                       number(m_state.market.spot, 2),
                                       m_state.spotSource.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(m_state.spotSource)));
+        m_chainInfo->setToolTip("Presets are built from this option chain: strikes, expiries, entry prices and implied vols come from the listed contracts.");
         // Keep every leg marked to the latest chain (mids and implied vols).
         markPositionToChain(m_position, m_chain, activityMarket());
     } else {
-        m_chainInfo->setText("No option chain loaded: legs use model prices and the market volatility. Fetch a chain on the Option Chain tab to drive strategies from listed contracts.");
+        m_chainInfo->setText("No option chain · model prices at the market volatility");
+        m_chainInfo->setToolTip("Fetch a chain on the Option Chain tab to build presets from listed contracts with their mids and implied vols.");
         for (Leg& leg : m_position.legs) leg.marketPrice = 0.0;
     }
     if (wasChain != chain) {
@@ -874,8 +891,51 @@ void StrategyTab::updateCharts()
     m_payoffY->setRange(yMin, yMax);
     m_payoffY->applyNiceNumbers();
 
-    // Greek across spot
     const int greekIndex = m_greekSelect->currentIndex();
+    if (m_greekMode->currentData().toString() == "time") {
+        // Greek along the calendar to the first expiry, at spot and at four shifted spots.
+        const double shifts[] = { -0.10, -0.05, 0.0, 0.05, 0.10 };
+        const QColor colours[] = { QColor(m_theme.down), QColor(m_theme.down).lighter(140), QColor(m_theme.accent), QColor(m_theme.up).lighter(140), QColor(m_theme.up) };
+        double gMin = INFINITY, gMax = -INFINITY, maxDays = 0.0;
+        for (int i = 0; i < 5; ++i) {
+            auto* line = new QLineSeries;
+            line->setName(shifts[i] == 0.0 ? QStringLiteral("at spot %1").arg(number(market.spot, 2)) : QStringLiteral("spot %1%2%").arg(shifts[i] > 0 ? "+" : "").arg(shifts[i] * 100.0, 0, 'f', 0));
+            line->setPen(QPen(colours[i], shifts[i] == 0.0 ? 2.4 : 1.6, shifts[i] == 0.0 ? Qt::SolidLine : Qt::DashLine));
+            for (const GreekTimePoint& pt : greeksOverTime(m_position, market, market.spot * (1.0 + shifts[i]), 80)) {
+                const double v = greekValue(pt.greeks, greekIndex);
+                if (!std::isfinite(v)) continue;
+                line->append(pt.days, v);
+                gMin = std::min(gMin, v); gMax = std::max(gMax, v); maxDays = std::max(maxDays, pt.days);
+            }
+            m_greekChart->addSeries(line);
+            line->attachAxis(m_greekX);
+            line->attachAxis(m_greekY);
+        }
+        if (!std::isfinite(gMin)) { gMin = -1; gMax = 1; }
+        const double gPad = std::max((gMax - gMin) * 0.1, 1e-6);
+        auto* zero = new QLineSeries;
+        zero->append(0.0, 0.0); zero->append(std::max(maxDays, 1.0), 0.0);
+        zero->setPen(QPen(QColor(m_theme.textMuted), 1.0, Qt::DashLine));
+        m_greekChart->addSeries(zero);
+        zero->attachAxis(m_greekX);
+        zero->attachAxis(m_greekY);
+        for (QLegendMarker* marker : m_greekChart->legend()->markers(zero)) marker->setVisible(false);
+        m_greekX->setRange(0.0, std::max(maxDays, 1.0));
+        m_greekX->setTitleText("Calendar days from today");
+        m_greekX->setLabelFormat("%.0f");
+        m_greekY->setRange(gMin - gPad, gMax + gPad);
+        m_greekY->setTitleText(m_greekSelect->currentText());
+        m_greekChart->setTitle(QStringLiteral("Position %1 over time to the first expiry").arg(m_greekSelect->currentText().toLower()));
+        m_greekBox->setTitle("Greeks over time");
+        styleChart(m_payoffChart, m_theme);
+        styleChart(m_greekChart, m_theme);
+        return;
+    }
+    m_greekBox->setTitle("Greeks across spot");
+    m_greekX->setTitleText("Underlying price");
+    m_greekX->setLabelFormat("%.2f");
+
+    // Greek across spot
     auto* greekToday = new QLineSeries;
     greekToday->setName(QStringLiteral("%1 today").arg(m_greekSelect->currentText()));
     greekToday->setPen(QPen(QColor(m_theme.accent), 2.0));
@@ -1013,4 +1073,25 @@ QString StrategyTab::resultsCsv() const
         s << m_analysis.spots[i] << "," << m_analysis.pnlAtHorizon[i] << "," << m_analysis.pnlToday[i] << "\n";
     }
     return out;
+}
+
+// MARK: - Greek chart mode (assistant and tests)
+
+bool StrategyTab::setGreekMode(const QString& mode)
+{
+    const QString wanted = mode.trimmed().toLower();
+    const int index = wanted.contains("time") || wanted.contains("calendar") || wanted.contains("day") ? 1 : (wanted.contains("spot") || wanted.contains("price") ? 0 : -1);
+    if (index < 0) return false;
+    m_greekMode->setCurrentIndex(index);
+    return true;
+}
+
+QString StrategyTab::greekMode() const { return m_greekMode->currentData().toString(); }
+
+bool StrategyTab::setGreek(const QString& name)
+{
+    const int index = m_greekSelect->findText(name.trimmed(), Qt::MatchFixedString);
+    if (index < 0) return false;
+    m_greekSelect->setCurrentIndex(index);
+    return true;
 }

@@ -55,7 +55,11 @@ Card makeCard(QWidget* parent, const QString& title, const QString& valueObjectN
     card.frame->setObjectName("card");
     card.frame->setAttribute(Qt::WA_StyledBackground, true);
 
-    card.title = new QLabel(title, card.frame);
+    // Headings are upper-case Latin so cards read the same on every tab; Greek letters
+    // (σ, λ) keep their case.
+    QString heading;
+    for (const QChar ch : title) heading += ch.unicode() < 128 ? ch.toUpper() : ch;
+    card.title = new QLabel(heading, card.frame);
     card.title->setObjectName("cardTitle");
     card.title->setAlignment(Qt::AlignCenter);
 
@@ -66,19 +70,27 @@ Card makeCard(QWidget* parent, const QString& title, const QString& valueObjectN
 
     card.subtitle = new QLabel(QString(), card.frame);
     card.subtitle->setObjectName("cardSubtitle");
-    card.subtitle->setAlignment(Qt::AlignCenter);
+    card.subtitle->setAlignment(Qt::AlignHCenter | Qt::AlignTop);
     card.subtitle->setWordWrap(true);
+    // Exactly two lines, whatever the text: every card in a row (and every row) then has
+    // the same height, so bottom edges line up.
+    card.subtitle->setFixedHeight(card.subtitle->fontMetrics().lineSpacing() * 2 + 2);
+    card.subtitle->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
 
+    // The heading band spans the card's full width; the value and subtitle sit centred
+    // in the body below it (vertically centred when a layout hands the card extra height).
     auto* layout = new QVBoxLayout(card.frame);
-    layout->setContentsMargins(14, 10, 14, 12);
-    layout->setSpacing(3);
-    // Centre the three lines vertically: when a layout hands the card extra height (the
-    // Volatility sidebar lets its cards fill the column) the text stays in the middle.
-    layout->addStretch(1);
+    layout->setContentsMargins(0, 0, 0, 10);
+    layout->setSpacing(0);
     layout->addWidget(card.title);
-    layout->addWidget(card.value);
-    layout->addWidget(card.subtitle);
-    layout->addStretch(1);
+    auto* body = new QVBoxLayout;
+    body->setContentsMargins(14, 8, 14, 0);
+    body->setSpacing(3);
+    body->addStretch(1);
+    body->addWidget(card.value);
+    body->addWidget(card.subtitle);
+    body->addStretch(1);
+    layout->addLayout(body, 1);
     return card;
 }
 

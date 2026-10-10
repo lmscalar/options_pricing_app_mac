@@ -803,12 +803,14 @@ void SectorHeatmapTab::relayout()
     const size_t shown = list.empty() ? 0 : (focused ? list.front().tiles.size() : m_stocks.size());
     m_view->setGroups(std::move(list), sectorsOnly);
     if (focused) {
-        m_summary->setText(QStringLiteral("%1 · %2 stocks · size: market cap · colour: %3 change · click a tile to load it, Reset for all sectors")
+        m_summary->setText(QStringLiteral("%1 · %2 stocks · %3 change")
                                .arg(m_focusSector).arg(shown).arg(periods()[static_cast<size_t>(m_periodIndex)].label));
+        m_summary->setToolTip("Tile size is market cap and colour is the period change. Click a tile to load it; Reset returns to all sectors.");
     } else {
-        m_summary->setText(QStringLiteral("%1 stocks · %2 sectors · size: market cap · colour: %3 change%4")
-                               .arg(m_stocks.size()).arg(order.size()).arg(periods()[static_cast<size_t>(m_periodIndex)].label)
-                               .arg(m_sectorsView ? " · click a sector to expand it" : ""));
+        m_summary->setText(QStringLiteral("%1 stocks · %2 sectors · %3 change")
+                               .arg(m_stocks.size()).arg(order.size()).arg(periods()[static_cast<size_t>(m_periodIndex)].label));
+        m_summary->setToolTip(m_sectorsView ? "Tile size is market cap and colour is the period change. Click a sector to expand it."
+                                            : "Tile size is market cap and colour is the period change.");
     }
 }
 

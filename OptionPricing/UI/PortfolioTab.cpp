@@ -186,15 +186,12 @@ void PortfolioTab::buildUi()
     bookMenu->addAction("Rename strategy…", this, [this] { promptRenameBook(); });
     m_deleteBookAction = bookMenu->addAction("Delete strategy", this, [this] { promptDeleteBook(); });
     m_bookMenu->setMenu(bookMenu);
-    m_bookHint = new QLabel(this);
-    m_bookHint->setObjectName("muted");
-    m_bookHint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto* bookRow = new QHBoxLayout;
     bookRow->setSpacing(8);
     bookRow->addWidget(bookLabel);
     bookRow->addWidget(m_bookBox);
     bookRow->addWidget(m_bookMenu);
-    bookRow->addWidget(m_bookHint, 1);
+    bookRow->addStretch(1);
 
     auto* positionsPane = new QFrame(this);
     positionsPane->setObjectName("pane");
@@ -344,7 +341,6 @@ void PortfolioTab::buildUi()
     const QJsonObject overrides = QJsonDocument::fromJson(settings.value(kFxOverridesKey).toByteArray()).object();
     for (auto it = overrides.begin(); it != overrides.end(); ++it) if (it.value().toDouble() > 0.0) m_fxOverrides[it.key()] = it.value().toDouble();
     updateCurrencyHeaders();
-    setStatus("Add positions, import the Strategy legs or a CSV, then Refresh marks.", ui::StatusKind::Info);
 }
 
 void PortfolioTab::wire()
@@ -523,9 +519,10 @@ void PortfolioTab::refreshBookCombo()
     m_bookBox->setCurrentIndex(std::max(0, m_bookBox->findData(m_activeBook)));
     m_updatingBooks = false;
     m_deleteBookAction->setEnabled(m_activeBook != kAllBooks && m_books.size() > 1);
-    m_bookHint->setText(m_activeBook == kAllBooks ? QStringLiteral("Global portfolio: %1 strateg%2 together · new positions go to “%3” unless a strategy is chosen in the dialog")
-                                                         .arg(m_books.size()).arg(m_books.size() == 1 ? "y" : "ies", targetBook())
-                                                   : QStringLiteral("Showing one strategy · pick “%1” for the whole book").arg(kAllBooks));
+    // The book selector explains itself in its tooltip rather than in a line of text.
+    m_bookBox->setToolTip(m_activeBook == kAllBooks ? QStringLiteral("Global portfolio: %1 strateg%2 together. New positions go to “%3” unless a strategy is chosen in the dialog.")
+                                                           .arg(m_books.size()).arg(m_books.size() == 1 ? "y" : "ies", targetBook())
+                                                     : QStringLiteral("Showing one strategy. Pick “%1” for the whole book.").arg(kAllBooks));
     m_strategyTitle->setVisible(m_activeBook == kAllBooks);
     m_strategyTable->setVisible(m_activeBook == kAllBooks);
     m_strategyNote->setVisible(m_activeBook == kAllBooks);

@@ -184,21 +184,24 @@ QString styleSheetFor(const Theme& t)
             background: @surface;
             border: 1px solid @border;
             border-radius: 8px;
-            margin-top: 12px;
-            padding: 12px 10px 8px 10px;
+            margin-top: 13px;
+            padding: 16px 10px 8px 10px;
         }
+        /* Panel headings everywhere share one look: a small bordered tab sitting on the
+           panel's top edge (group boxes) or a bordered band above the content (section
+           titles), so a heading never floats loose over a border line. */
         QGroupBox::title {
             subcontrol-origin: margin;
             subcontrol-position: top left;
             left: 10px;
-            padding: 0 6px;
-            background: @surface;
-            border-radius: 4px;
+            padding: 3px 9px;
+            background: @surfaceAlt;
+            border: 1px solid @border;
+            border-radius: 6px;
             color: @accent2;
             font-size: 11px;
             font-weight: 700;
             letter-spacing: 1px;
-            text-transform: uppercase;
         }
         QDoubleSpinBox, QSpinBox, QComboBox, QDateEdit, QLineEdit {
             background: @surface;
@@ -320,11 +323,17 @@ QString styleSheetFor(const Theme& t)
             border: 1px solid @border;
             border-radius: 10px;
         }
+        /* Card heading: a bordered band across the top of the card, matching the panel headings. */
         QLabel#cardTitle {
             font-size: 11px;
             font-weight: 700;
             color: @accent3;
             letter-spacing: 1px;
+            background: @surface;
+            border-bottom: 1px solid @border;
+            border-top-left-radius: 9px;
+            border-top-right-radius: 9px;
+            padding: 5px 10px;
         }
         QFrame#tickerBanner {
             background: @surface;
@@ -421,9 +430,21 @@ QString styleSheetFor(const Theme& t)
         QLabel#spotUp { color: @up; }
         QLabel#spotDown { color: @down; }
         QLabel#spotFlat { color: @accent; }
+        /* A card's value keeps the big-value size whatever colour it takes, so coloured
+           (signed) cards are exactly as tall as neutral ones. */
+        QFrame#card QLabel#spotUp, QFrame#card QLabel#spotDown, QFrame#card QLabel#spotFlat,
+        QFrame#card QLabel#profitValue, QFrame#card QLabel#lossValue {
+            font-family: "Menlo", "SF Mono", monospace;
+            font-size: 22px;
+            font-weight: 700;
+        }
         QLabel#columnHeader {
             font-weight: 700;
             color: @textMuted;
+            background: @surfaceAlt;
+            border: 1px solid @border;
+            border-radius: 6px;
+            padding: 3px 9px;
         }
         QLabel#rowLabel {
             color: @text;
@@ -439,9 +460,13 @@ QString styleSheetFor(const Theme& t)
         QLabel#alertBannerText { color: @textStrong; font-size: 12px; }
         QLabel#sectionTitle {
             color: @accent2;
-            font-weight: 600;
-            font-size: 12px;
-            letter-spacing: 0.3px;
+            font-weight: 700;
+            font-size: 11px;
+            letter-spacing: 1px;
+            background: @surfaceAlt;
+            border: 1px solid @border;
+            border-radius: 6px;
+            padding: 3px 9px;
         }
         QLabel#value {
             font-family: "Menlo", "SF Mono", monospace;

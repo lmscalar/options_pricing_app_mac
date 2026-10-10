@@ -27,6 +27,7 @@ class ScannerTab;
 class OptimizerTab;
 class QuotesTab;
 class VolatilityTab;
+class ChartPopup;
 class AssistantPanel;
 class QDockWidget;
 
@@ -80,6 +81,9 @@ private:
     /// present (refreshing stale ones in the background) or downloads it, then every tab
     /// follows through the shared market state.
     void showTicker(const QString& symbol, bool switchToChainTab);
+    /// Shows `symbol` in the Quotes chart and opens the pop-out chart window with a copy of it
+    /// (used when a stock is picked on the Sector Heatmap).
+    void showChartPopup(const QString& symbol);
     void importChain();
     void batchPrice();
     void exportResults();
@@ -100,6 +104,7 @@ private:
     ChainTab* m_chain = nullptr;
     HeatmapTab* m_heatmap = nullptr;
     SectorHeatmapTab* m_sectorHeatmap = nullptr;
+    ChartPopup* m_chartPopup = nullptr;        ///< pop-out copy of the Quotes chart, created on first use
     PortfolioTab* m_portfolio = nullptr;
     AlertsTab* m_alerts = nullptr;
     ScannerTab* m_scanner = nullptr;
@@ -124,7 +129,6 @@ private:
     void showHelpForCurrentTab();
     QToolButton* m_assistantToggle = nullptr;
     ui::SpinningDiamond* m_assistantBusy = nullptr;   ///< spins in the header while the assistant works
-    QLabel* m_subtitle = nullptr;
 
     // Quote banner in the header: ticker, price, daily change, provenance
     QFrame* m_banner = nullptr;

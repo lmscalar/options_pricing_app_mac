@@ -35,6 +35,8 @@
 		F37616F93079D1A100F5524A /* IvBackfill.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616F83079D1A100F5524A /* IvBackfill.cpp */; };
 		F37617103079DD6700F5524A /* HelpContent.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376170F3079DD6700F5524A /* HelpContent.cpp */; };
 		F37617293079E30300F5524A /* OptimizerTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37617283079E30300F5524A /* OptimizerTab.cpp */; };
+		F376172E307A6DB400F5524A /* SurfaceView.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376172D307A6DB400F5524A /* SurfaceView.cpp */; };
+		F3761731307A79FF00F5524A /* ChartPopup.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3761730307A79FF00F5524A /* ChartPopup.cpp */; };
 		F3B6FB022988347000563EB6 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3B6FB012988347000563EB6 /* main.cpp */; };
 /* End PBXBuildFile section */
 
@@ -131,6 +133,10 @@
 		F376170F3079DD6700F5524A /* HelpContent.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = HelpContent.cpp; sourceTree = "<group>"; };
 		F37617273079E27000F5524A /* OptimizerTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OptimizerTab.h; sourceTree = "<group>"; };
 		F37617283079E30300F5524A /* OptimizerTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = OptimizerTab.cpp; sourceTree = "<group>"; };
+		F376172C307A6D6E00F5524A /* SurfaceView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SurfaceView.h; sourceTree = "<group>"; };
+		F376172D307A6DB400F5524A /* SurfaceView.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = SurfaceView.cpp; sourceTree = "<group>"; };
+		F376172F307A79F200F5524A /* ChartPopup.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ChartPopup.h; sourceTree = "<group>"; };
+		F3761730307A79FF00F5524A /* ChartPopup.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ChartPopup.cpp; sourceTree = "<group>"; };
 		F3B6FAFE2988347000563EB6 /* OptionPricing */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = OptionPricing; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3B6FB012988347000563EB6 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -246,6 +252,10 @@
 				F376170F3079DD6700F5524A /* HelpContent.cpp */,
 				F37617273079E27000F5524A /* OptimizerTab.h */,
 				F37617283079E30300F5524A /* OptimizerTab.cpp */,
+				F376172C307A6D6E00F5524A /* SurfaceView.h */,
+				F376172D307A6DB400F5524A /* SurfaceView.cpp */,
+				F376172F307A79F200F5524A /* ChartPopup.h */,
+				F3761730307A79FF00F5524A /* ChartPopup.cpp */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -380,6 +390,7 @@
 			files = (
 				F376166E307846F900F5524A /* LightweightChartsJs.cpp in Sources */,
 				F376164C307726C700F5524A /* RateCurveDialog.cpp in Sources */,
+				F376172E307A6DB400F5524A /* SurfaceView.cpp in Sources */,
 				F37616433077260600F5524A /* StrategyTab.cpp in Sources */,
 				F37616463077263B00F5524A /* ScenarioTab.cpp in Sources */,
 				F37617103079DD6700F5524A /* HelpContent.cpp in Sources */,
@@ -395,6 +406,7 @@
 				F376167D30786C6A00F5524A /* ChainStore.cpp in Sources */,
 				F376164F307726DE00F5524A /* BatchDialog.cpp in Sources */,
 				F37616B330798BCD00F5524A /* SectorHeatmapTab.cpp in Sources */,
+				F3761731307A79FF00F5524A /* ChartPopup.cpp in Sources */,
 				F37616713078471300F5524A /* ChartPage.cpp in Sources */,
 				F37616523077272300F5524A /* MainWindow.cpp in Sources */,
 				F37616363077241000F5524A /* Theme.cpp in Sources */,

@@ -248,7 +248,7 @@ void MainWindow::assistantContext(std::function<void(const QString&, const QImag
     } else if (current == m_volatility) {
         s << "Volatility tab. " << m_volatility->summaryText() << "\n" << clip(m_volatility->resultsCsv(), 5000);
     } else if (current == m_chain) {
-        s << chainSummary(30) << "\nVisible slice (CSV):\n" << clip(m_chain->resultsCsv(), 7000);
+        s << chainSummary(30) << "\n" << m_chain->surfaceSummary() << "\nVisible slice (CSV):\n" << clip(m_chain->resultsCsv(), 7000);
     } else if (current == m_heatmap) {
         s << chainSummary(12) << "\nHeatmap tab (CSV):\n" << clip(m_heatmap->resultsCsv(), 7000);
     } else if (current == m_alerts) {
@@ -743,6 +743,17 @@ bool MainWindow::handleLocalCommand(const QString& rawText, QString& feedback)
     if (lower.contains("implied") && (lower.contains("earnings move") || lower.contains("expected move") || lower.contains("event move"))) {
         m_tabs->setCurrentWidget(m_quotes);
         feedback = m_quotes->eventSummary();
+        return true;
+    }
+    // Greek chart: "show delta over time", "show gamma across spot", "greeks over time".
+    QRegularExpression greekRe("^(?:please\\s+)?(?:show|plot|chart)\\s+(?:the\\s+)?(delta|gamma|vega|theta|rho|vanna|charm|greeks?)\\s+(over\\s+time|across\\s+time|through\\s+time|across\\s+spot|versus\\s+spot|against\\s+spot|across\\s+price)$",
+                               QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = greekRe.match(text); m.hasMatch()) {
+        const QString greek = m.captured(1).toLower();
+        if (!greek.startsWith("greek")) m_strategy->setGreek(greek.left(1).toUpper() + greek.mid(1));
+        m_strategy->setGreekMode(m.captured(2).toLower().contains("time") ? "time" : "spot");
+        m_tabs->setCurrentWidget(m_strategy);
+        feedback = QStringLiteral("Strategy tab: %1 %2.").arg(greek.startsWith("greek") ? QStringLiteral("Greeks") : greek, m_strategy->greekMode() == "time" ? QStringLiteral("over time to the first expiry at spot and ±5% / ±10%") : QStringLiteral("across the underlying price"));
         return true;
     }
     // Optimizer: "optimize for a move to 350", "optimize for +8%", "best spread if NVDA goes to 260", "compare presets".

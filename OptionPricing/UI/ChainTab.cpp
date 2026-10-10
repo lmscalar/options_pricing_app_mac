@@ -44,60 +44,63 @@ void ChainTab::buildUi()
     m_treasury = ui::makeButton(this, "Treasury Curve", "secondary", "Load the latest US Treasury yields into the rate curve and enable it");
     m_dividends = ui::makeButton(this, "Dividends", "secondary", "Project the ticker's regular cash dividends into the Pricer's dividend schedule");
     m_setKey = ui::makeButton(this, "Set Key…", "secondary", "Enter a Massive.com API key");
+    // Kept for the assistant / tests; the key state is shown on the Set Key button (refreshKeyStatus).
     m_keyStatus = new QLabel(this);
-    m_keyStatus->setObjectName("muted");
-    m_keyStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_keyStatus->setMinimumWidth(120);
-    m_keyStatus->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_keyStatus->setVisible(false);
+    // Progress / error line. It sits in the slack of the first toolbar row, shows text
+    // only while a download runs or after a failure, and is blank otherwise: the result
+    // of each operation goes to the window status bar and the provenance tooltip on the
+    // table title (see provenanceText).
     m_liveStatus = new QLabel(this);
     m_liveStatus->setObjectName("muted");
-    // One line: long messages are elided, the full text is the tooltip (see setLiveBusy / finishLive).
     m_liveStatus->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_liveStatus->setMinimumWidth(40);
 
-    auto* liveBox = new QGroupBox("Live Data (Massive.com)", this);
-    auto* live = new QGridLayout(liveBox);
-    live->setHorizontalSpacing(12);
-    live->setVerticalSpacing(8);
-    live->addWidget(new QLabel("Ticker", liveBox), 0, 0);
-    live->addWidget(m_ticker, 0, 1);
-    live->addWidget(new QLabel("Expiries", liveBox), 0, 2);
-    live->addWidget(m_expiryCount, 0, 3);
-    live->addWidget(m_fetch, 0, 4);
-    live->addWidget(m_treasury, 0, 5);
-    live->addWidget(m_dividends, 0, 6);
-    live->addWidget(m_keyStatus, 0, 7, Qt::AlignRight);
-    live->addWidget(m_setKey, 0, 8);
-    m_autoRefresh = new QCheckBox("Auto-refresh", liveBox);
+    m_autoRefresh = new QCheckBox("Auto-refresh", this);
     m_autoRefresh->setToolTip("Re-download the chain and the underlying price on the intervals to the right while this stays checked");
-    m_chainInterval = ui::makeIntSpinBox(liveBox, 30, 3600, 120);
+    m_chainInterval = ui::makeIntSpinBox(this, 30, 3600, 120);
+    m_chainInterval->setPrefix("chain ");
     m_chainInterval->setSuffix(" s");
     m_chainInterval->setToolTip("Seconds between chain downloads (a full chain is about a dozen requests)");
-    m_spotInterval = ui::makeIntSpinBox(liveBox, 15, 3600, 60);
+    m_spotInterval = ui::makeIntSpinBox(this, 15, 3600, 60);
+    m_spotInterval->setPrefix("spot ");
     m_spotInterval->setSuffix(" s");
     m_spotInterval->setToolTip("Seconds between underlying price checks. The vendor stock feed itself may be delayed; see the spot label.");
-    m_useImpliedSpot = new QCheckBox("Underlying from option parity (near real-time)", liveBox);
+    m_useImpliedSpot = new QCheckBox("Spot from parity", this);
     m_useImpliedSpot->setChecked(true);
     m_useImpliedSpot->setToolTip("Option trades are disseminated with far less delay than the stock quote on delayed plans. "
-                                 "When checked, the spot is implied from put-call parity on the nearest liquid expiry; "
+                                 "When checked, the spot is implied from put-call parity on the nearest liquid expiry (near real-time); "
                                  "otherwise the vendor's delayed stock price is used.");
-    live->addWidget(m_autoRefresh, 1, 0, 1, 2);
-    live->addWidget(new QLabel("chain every", liveBox), 1, 2, Qt::AlignRight);
-    live->addWidget(m_chainInterval, 1, 3);
-    live->addWidget(new QLabel("spot every", liveBox), 1, 4, Qt::AlignRight);
-    live->addWidget(m_spotInterval, 1, 5);
-    live->addWidget(m_useImpliedSpot, 1, 6, 1, 3);
-    live->addWidget(m_liveStatus, 2, 0, 1, 9);
-    live->setColumnStretch(7, 1);
+
+    // Toolbar row 1: live data. Labels are kept to the two inputs that need them.
+    auto* liveRow = new QHBoxLayout;
+    liveRow->setContentsMargins(0, 0, 0, 0);
+    liveRow->setSpacing(8);
+    liveRow->addWidget(new QLabel("Ticker", this));
+    liveRow->addWidget(m_ticker);
+    liveRow->addWidget(new QLabel("Expiries", this));
+    liveRow->addWidget(m_expiryCount);
+    liveRow->addWidget(m_fetch);
+    liveRow->addWidget(m_treasury);
+    liveRow->addWidget(m_dividends);
+    liveRow->addSpacing(8);
+    liveRow->addWidget(m_autoRefresh);
+    liveRow->addWidget(m_chainInterval);
+    liveRow->addWidget(m_spotInterval);
+    liveRow->addWidget(m_useImpliedSpot);
+    liveRow->addWidget(m_liveStatus, 1);
+    liveRow->addWidget(m_setKey);
 
     m_chainTimer = new QTimer(this);
     m_spotTimer = new QTimer(this);
 
-    // File / sample row
+    // File / sample controls
     m_import = ui::makeButton(this, "Import CSV…", "secondary",
                               "Load a chain with columns: strike, type, bid, ask (or mid/last) and an expiration date, or expiry in years or days");
-    m_sample = ui::makeButton(this, "Generate Sample Chain", "secondary", "Create a synthetic chain with skew and smile for exploration");
+    m_sample = ui::makeButton(this, "Sample Chain", "secondary", "Create a synthetic chain with skew and smile for exploration");
     m_clear = ui::makeButton(this, "Clear", "secondary", "Remove the loaded chain");
     m_defaultMaturity = ui::makeSpinBox(this, 0.001, 20.0, 0.25, 3, 0.25, " yrs");
+    m_defaultMaturity->setPrefix("CSV ");
     m_defaultMaturity->setToolTip("Expiry assumed for imported CSV rows that do not carry one");
     m_expiry = new QComboBox(this);
     m_expiry->setToolTip("Expiry slice to display");
@@ -109,49 +112,56 @@ void ChainTab::buildUi()
     m_useAtm = ui::makeButton(this, "Use ATM Vol as σ", "secondary", "Copy this expiry's at-the-money fitted volatility into the market inputs");
     m_useAtm->setEnabled(false);
 
+    // Provenance ("Implying from spot …", "Chain for X downloaded …") is not shown as
+    // text; the two labels are kept as the source for the table-title tooltip.
     m_marketInfo = new QLabel(this);
-    m_marketInfo->setObjectName("muted");
-    m_marketInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_marketInfo->setVisible(false);
     m_summary = new QLabel(this);
-    m_summary->setObjectName("muted");
-    m_summary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_summary->setVisible(false);
 
-    auto* controlsBox = new QGroupBox("Chain", this);
-    auto* controls = new QGridLayout(controlsBox);
-    controls->setHorizontalSpacing(12);
-    controls->setVerticalSpacing(8);
-    controls->addWidget(m_import, 0, 0);
-    controls->addWidget(m_sample, 0, 1);
-    controls->addWidget(m_clear, 0, 2);
-    controls->addWidget(new QLabel("CSV expiry", controlsBox), 0, 3);
-    controls->addWidget(m_defaultMaturity, 0, 4);
-    controls->addWidget(new QLabel("Show expiry", controlsBox), 0, 5);
-    controls->addWidget(m_expiry, 0, 6);
-    controls->addWidget(m_useAtm, 0, 7);
     // Strike range filter for the table and smile chart.
-    m_strikeMode = new QComboBox(controlsBox);
+    m_strikeMode = new QComboBox(this);
     m_strikeMode->addItem("All strikes", 0);
     m_strikeMode->addItem("± % around forward", 1);
     m_strikeMode->addItem("Custom range", 2);
     m_strikeMode->setCurrentIndex(1);
     m_strikeMode->setToolTip("Which strikes to show in the table and smile chart. The SVI fit always uses every quote.");
-    m_strikePercent = ui::makeSpinBox(controlsBox, 1.0, 95.0, 5.0, 0, 20.0, " %");
+    m_strikePercent = ui::makeSpinBox(this, 1.0, 95.0, 5.0, 0, 20.0, " %");
     m_strikePercent->setToolTip("Show strikes within this percentage of the forward price");
-    m_strikeMin = ui::makeSpinBox(controlsBox, 0.0, 1'000'000.0, 1.0, 2, 0.0);
+    m_strikeMin = ui::makeSpinBox(this, 0.0, 1'000'000.0, 1.0, 2, 0.0);
     m_strikeMin->setToolTip("Lowest strike to show");
-    m_strikeMax = ui::makeSpinBox(controlsBox, 0.0, 1'000'000.0, 1.0, 2, 0.0);
+    m_strikeMax = ui::makeSpinBox(this, 0.0, 1'000'000.0, 1.0, 2, 0.0);
     m_strikeMax->setSpecialValueText("no limit");
     m_strikeMax->setToolTip("Highest strike to show (0 = no limit)");
-    m_strikeToLabel = new QLabel("to", controlsBox);
-    controls->addWidget(new QLabel("Strikes", controlsBox), 1, 0);
-    controls->addWidget(m_strikeMode, 1, 1, 1, 2);
-    controls->addWidget(m_strikePercent, 1, 3);
-    controls->addWidget(m_strikeMin, 1, 4);
-    controls->addWidget(m_strikeToLabel, 1, 5, Qt::AlignCenter);
-    controls->addWidget(m_strikeMax, 1, 6);
-    controls->addWidget(m_marketInfo, 2, 0, 1, 4);
-    controls->addWidget(m_summary, 2, 4, 1, 4);
-    controls->setColumnStretch(6, 1);
+    m_strikeToLabel = new QLabel("to", this);
+
+    // Toolbar row 2: what to show, then the file / sample actions on the right.
+    auto* chainRow = new QHBoxLayout;
+    chainRow->setContentsMargins(0, 0, 0, 0);
+    chainRow->setSpacing(8);
+    chainRow->addWidget(new QLabel("Expiry", this));
+    chainRow->addWidget(m_expiry, 1);
+    chainRow->addWidget(m_useAtm);
+    chainRow->addSpacing(8);
+    chainRow->addWidget(new QLabel("Strikes", this));
+    chainRow->addWidget(m_strikeMode);
+    chainRow->addWidget(m_strikePercent);
+    chainRow->addWidget(m_strikeMin);
+    chainRow->addWidget(m_strikeToLabel);
+    chainRow->addWidget(m_strikeMax);
+    chainRow->addStretch(1);
+    chainRow->addWidget(m_import);
+    chainRow->addWidget(m_defaultMaturity);
+    chainRow->addWidget(m_sample);
+    chainRow->addWidget(m_clear);
+
+    auto* toolbar = new QFrame(this);
+    toolbar->setObjectName("pane");
+    auto* toolbarLayout = new QVBoxLayout(toolbar);
+    toolbarLayout->setContentsMargins(10, 6, 10, 6);
+    toolbarLayout->setSpacing(6);
+    toolbarLayout->addLayout(liveRow);
+    toolbarLayout->addLayout(chainRow);
 
     // One compact line above the table: slice title · logo · price and change · provenance · Hide Charts.
     // Every text label is single-line and elides; the full provenance is in the tooltips.
@@ -229,33 +239,46 @@ void ChainTab::buildUi()
     m_termChart->addAxis(m_termY, Qt::AlignLeft);
     auto* termView = ui::makeChartView(this, m_termChart, 220);
 
+    // One line under the charts: the slice's fit summary on the left (full text in its
+    // tooltip) and a toggle that reveals the arbitrage-check list, which stays hidden
+    // until asked for so the charts keep the height.
     m_sviInfo = new QLabel(this);
     m_sviInfo->setObjectName("value");
-    m_sviInfo->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-    m_sviInfo->setWordWrap(true);
+    m_sviInfo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    m_sviInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_issues = new QPlainTextEdit(this);
     m_issues->setReadOnly(true);
     m_issues->setMinimumHeight(48);
-    m_issues->setMaximumHeight(140);
+    m_issues->setMaximumHeight(120);
     m_issues->setPlaceholderText("No arbitrage issues detected for this expiry.");
+    m_issues->setVisible(false);
+    m_issuesToggle = ui::makeButton(this, "Checks ▸", "secondary",
+                                    "Show or hide the static-arbitrage checks for this expiry (vertical, butterfly, parity and bid/ask monotonicity)");
+    m_issuesToggle->setCheckable(true);
+    m_issuesToggle->setVisible(false);
+    connect(m_issuesToggle, &QPushButton::toggled, this, [this](bool on) { m_issues->setVisible(on); });
+    auto* fitRow = new QHBoxLayout;
+    fitRow->setContentsMargins(0, 0, 0, 0);
+    fitRow->setSpacing(8);
+    fitRow->addWidget(m_sviInfo, 1);
+    fitRow->addWidget(m_issuesToggle);
 
-    auto* fitBox = new QGroupBox("Smile fit (raw SVI) && arbitrage checks", this);
-    auto* fitLayout = new QVBoxLayout(fitBox);
-    fitLayout->addWidget(m_sviInfo);
-    fitLayout->addWidget(m_issues, 1);
-
-    m_smileHover = new QLabel("Hover a point for strike, implied vol and quote details.", this);
+    m_smileHover = new QLabel(this);
     m_smileHover->setObjectName("muted");
     m_smileHover->setAlignment(Qt::AlignCenter);
-    m_smileHover->setWordWrap(true);
-    m_termHover = new QLabel("Hover a point for the expiry's ATM and wing vols.", this);
+    m_termHover = new QLabel(this);
     m_termHover->setObjectName("muted");
     m_termHover->setAlignment(Qt::AlignCenter);
-    m_termHover->setWordWrap(true);
-    // Fixed two-line height: the readout text changes on every hover, and a label that
+    m_surfaceView = new SurfaceView(this);
+    m_surfaceView->setToolTip("Drag to rotate, scroll to zoom, double-click to reset the view");
+    m_surfaceHover = new QLabel(this);
+    m_surfaceHover->setObjectName("muted");
+    m_surfaceHover->setAlignment(Qt::AlignCenter);
+    m_surfaceView->onHover = [this](const QString& text) { if (m_surfaceHover->text() != text) m_surfaceHover->setText(text); };
+    // Fixed single-line height: the readout text changes on every hover, and a label that
     // grew or shrank with it would resize the chart above and make it jitter.
-    for (QLabel* readout : { m_smileHover, m_termHover }) {
-        readout->setFixedHeight(readout->fontMetrics().lineSpacing() * 2 + 8);
+    for (QLabel* readout : { m_smileHover, m_termHover, m_surfaceHover }) {
+        readout->setFixedHeight(readout->fontMetrics().lineSpacing() + 6);
         readout->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         readout->setTextInteractionFlags(Qt::TextSelectableByMouse);
     }
@@ -269,10 +292,16 @@ void ChainTab::buildUi()
     termColumn->setSpacing(2);
     termColumn->addWidget(termView, 1);
     termColumn->addWidget(m_termHover);
+    auto* surfaceColumn = new QVBoxLayout;
+    surfaceColumn->setContentsMargins(0, 0, 0, 0);
+    surfaceColumn->setSpacing(2);
+    surfaceColumn->addWidget(m_surfaceView, 1);
+    surfaceColumn->addWidget(m_surfaceHover);
     auto* charts = new QHBoxLayout;
     charts->setSpacing(12);
     charts->addLayout(smileColumn, 1);
     charts->addLayout(termColumn, 1);
+    charts->addLayout(surfaceColumn, 1);
 
     // Vertical splitter: drag the grip between the table and the charts to show more strikes,
     // or hide the charts entirely with the toggle button.
@@ -289,9 +318,10 @@ void ChainTab::buildUi()
     auto* bottomContent = new QWidget;
     auto* bottomLayout = new QVBoxLayout(bottomContent);
     bottomLayout->setContentsMargins(0, 0, 0, 0);
-    bottomLayout->setSpacing(12);
+    bottomLayout->setSpacing(6);
     bottomLayout->addLayout(charts, 1);
-    bottomLayout->addWidget(fitBox);
+    bottomLayout->addLayout(fitRow);
+    bottomLayout->addWidget(m_issues);
     auto* bottomScroll = new QScrollArea(m_splitter);
     bottomScroll->setWidgetResizable(true);
     bottomScroll->setWidget(bottomContent);
@@ -303,18 +333,42 @@ void ChainTab::buildUi()
     m_splitter->addWidget(m_bottomPane);
     m_splitter->setCollapsible(0, false);
     m_splitter->setCollapsible(1, true);
-    m_splitter->setStretchFactor(0, 3);
-    m_splitter->setStretchFactor(1, 2);
-    m_splitter->setSizes({ 380, 480 });
+    // The charts get the larger share by default; the grip and Hide Charts adjust it.
+    m_splitter->setStretchFactor(0, 2);
+    m_splitter->setStretchFactor(1, 3);
+    m_splitter->setSizes({ 300, 580 });
+
+    // The table title's tooltip carries the provenance that used to be printed as text.
+    m_tableTitle->installEventFilter(this);
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(12, 8, 12, 10);
     root->setSpacing(8);
-    root->addWidget(liveBox);
-    root->addWidget(controlsBox);
+    root->addWidget(toolbar);
     root->addLayout(tableHeader);
     root->addWidget(m_splitter, 1);
     updateStrikeControls();
+}
+
+QString ChainTab::provenanceText() const
+{
+    QStringList lines;
+    for (const QLabel* label : { m_summary, m_marketInfo }) {
+        if (label && !label->text().isEmpty()) lines << label->text();
+    }
+    if (!m_lastLiveMessage.isEmpty()) lines << m_lastLiveMessage;
+    return lines.join("\n");
+}
+
+bool ChainTab::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_tableTitle && event->type() == QEvent::ToolTip) {
+        const QString text = provenanceText();
+        if (text.isEmpty()) QToolTip::hideText();
+        else QToolTip::showText(static_cast<QHelpEvent*>(event)->globalPos(), text, m_tableTitle);
+        return true;
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void ChainTab::wire()
@@ -477,9 +531,10 @@ void ChainTab::showSlice(int index)
     m_table->setRowCount(0);
     m_issues->clear();
     if (index < 0 || static_cast<size_t>(index) >= m_slices.size()) {
-        m_sviInfo->setText(m_state.chainQuotes.empty()
-                               ? "Fetch a live chain, import a CSV or generate a sample to see implied volatilities, a fitted smile and arbitrage checks."
-                               : "No usable quotes for this expiry.");
+        m_sviInfo->setText(m_state.chainQuotes.empty() ? QString() : QStringLiteral("No usable quotes for this expiry."));
+        m_sviInfo->setToolTip(m_sviInfo->text());
+        m_issuesToggle->setVisible(false);
+        m_issuesToggle->setChecked(false);
         m_useAtm->setEnabled(false);
         m_tableTitle->setText("Strikes");
         updateCharts(nullptr);
@@ -638,8 +693,8 @@ void ChainTab::showSlice(int index)
         ? QStringLiteral("%1 DTE · T = %2 yrs").arg(slice.daysToExpiry).arg(ui::number(slice.maturity, 4))
         : QStringLiteral("Expiry %1 · %2 DTE · T = %3 yrs").arg(QString::fromStdString(slice.expiryDate)).arg(slice.daysToExpiry).arg(ui::number(slice.maturity, 4));
     if (slice.fitted) {
-        m_sviInfo->setText(QStringLiteral("%1 · forward %2 · ATM vol %3 · fit RMSE %4 vol pts on %5 OTM quotes\n"
-                                          "SVI: a = %6, b = %7, ρ = %8, m = %9, σ = %10")
+        m_sviInfo->setText(QStringLiteral("%1 · forward %2 · ATM vol %3 · fit RMSE %4 vol pts on %5 OTM quotes · "
+                                          "SVI a = %6, b = %7, ρ = %8, m = %9, σ = %10")
                                .arg(expiryText, ui::number(slice.forward, 2), ui::percent(slice.atmVol(), 2),
                                     ui::number(slice.fitRmse * 100.0, 3))
                                .arg(slice.pointsUsed)
@@ -649,9 +704,13 @@ void ChainTab::showSlice(int index)
         m_sviInfo->setText(QStringLiteral("%1 · forward %2 · not enough solved quotes to fit a smile (need 3).")
                                .arg(expiryText, ui::number(slice.forward, 2)));
     }
+    m_sviInfo->setToolTip(m_sviInfo->text());
     QStringList issueLines;
     for (const ChainIssue& issue : slice.issues) issueLines << QString::fromStdString(issue.message);
     m_issues->setPlainText(issueLines.join("\n"));
+    m_issuesToggle->setText(issueLines.isEmpty() ? QStringLiteral("Checks: clean ▸")
+                                                 : QStringLiteral("Checks: %1 issue%2 ▸").arg(issueLines.size()).arg(issueLines.size() == 1 ? "" : "s"));
+    m_issuesToggle->setVisible(true);
 
     updateCharts(&slice);
 }
@@ -660,6 +719,13 @@ void ChainTab::updateCharts(const ExpirySlice* slice)
 {
     m_smileChart->removeAllSeries();
     m_termChart->removeAllSeries();
+    // The 3D surface: every fitted expiry across strikes from 70% to 130% of spot.
+    if (!m_state.surface.empty() && m_state.market.spot > 0.0) {
+        const pricing::SurfaceGrid grid = pricing::sampleSurface(m_state.surface, m_state.chainMarket(m_state.surface.slices().front().maturity), 0.7, 1.3, 25);
+        m_surfaceView->setGrid(grid, m_state.market.spot, QStringLiteral("%1 implied volatility surface").arg(m_state.underlyingTicker.isEmpty() ? QStringLiteral("Fitted") : m_state.underlyingTicker));
+    } else {
+        m_surfaceView->clear();
+    }
 
     if (slice) {
         auto* calls = new QScatterSeries;
@@ -889,17 +955,26 @@ QString ChainTab::ticker() const
 
 void ChainTab::refreshKeyStatus()
 {
+    // The key state is carried by the Set Key button itself: a quiet secondary button with the
+    // source in its tooltip when a key exists, a highlighted "Set API Key…" when none does.
     if (m_client.hasApiKey()) {
         const QString source = m_client.apiKeySource();
         m_keyStatus->setText(source.startsWith("environment") ? QStringLiteral("Key: environment")
                                                                 : (source.startsWith("application") ? QStringLiteral("Key: preferences") : QStringLiteral("Key: %1").arg(source)));
         m_keyStatus->setToolTip(QStringLiteral("API key source: %1").arg(source));
         m_keyStatus->setObjectName("muted");
+        m_setKey->setText("Set Key…");
+        m_setKey->setToolTip(QStringLiteral("Massive.com API key source: %1. Click to replace it.").arg(source));
+        m_setKey->setObjectName("secondary");
     } else {
         m_keyStatus->setText("No API key");
         m_keyStatus->setObjectName("warning");
+        m_setKey->setText("Set API Key…");
+        m_setKey->setToolTip("No Massive.com API key yet: enter one to download live chains and prices");
+        m_setKey->setObjectName("primary");
     }
     ui::restyle(m_keyStatus);
+    ui::restyle(m_setKey);
 }
 
 bool ChainTab::promptForApiKey()
@@ -941,14 +1016,18 @@ void ChainTab::setLiveBusy(bool busy, const QString& status)
         }
     }
     if (!busy) m_automatic = false;
-    ui::setStatus(m_liveStatus, status, ui::StatusKind::Info);
+    // Progress text shows only while an operation runs (see finishLive for the result).
+    ui::setStatus(m_liveStatus, busy ? status : QString(), ui::StatusKind::Info);
     m_liveStatus->setToolTip(status);
 }
 
 void ChainTab::finishLive(bool ok, const QString& message)
 {
     setLiveBusy(false, message);
-    ui::setStatus(m_liveStatus, message, ok ? ui::StatusKind::Info : ui::StatusKind::Error);
+    // Success is reported by the window status bar and kept in the table-title tooltip;
+    // only a failure stays on the toolbar.
+    m_lastLiveMessage = message;
+    ui::setStatus(m_liveStatus, ok ? QString() : message, ok ? ui::StatusKind::Info : ui::StatusKind::Error);
     m_liveStatus->setToolTip(message);
     if (onLiveOperationFinished) onLiveOperationFinished(ok, message);
 }
@@ -1084,8 +1163,10 @@ bool ChainTab::applyStoredChain(const QString& rawSymbol)
     const qint64 age = stored->fetchedAt.secsTo(QDateTime::currentDateTime());
     m_summary->setText(QStringLiteral("Chain for %1 from the in-memory store, downloaded %2 (%3 min ago).")
                            .arg(symbol, stored->fetchedAt.toString("HH:mm:ss")).arg(age / 60));
-    ui::setStatus(m_liveStatus, downloadSummary(symbol, download, QDate::currentDate()) + QStringLiteral(" Served from memory, fetched %1 min ago.").arg(age / 60),
-                  ui::StatusKind::Info);
+    // Served without a download: the summary goes to the provenance tooltip, the toolbar stays quiet.
+    m_lastLiveMessage = downloadSummary(symbol, download, QDate::currentDate()) + QStringLiteral(" Served from memory, fetched %1 min ago.").arg(age / 60);
+    ui::setStatus(m_liveStatus, QString(), ui::StatusKind::Info);
+    m_liveStatus->setToolTip(m_lastLiveMessage);
     return true;
 }
 
@@ -1352,6 +1433,7 @@ void ChainTab::loadDividends()
 
 void ChainTab::applyTheme(const Theme& theme)
 {
+    m_surfaceView->setTheme(theme);
     m_theme = theme;
     showSlice(m_expiry->currentIndex());
 }

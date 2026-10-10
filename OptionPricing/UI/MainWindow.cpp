@@ -7,6 +7,7 @@
 #include "../Pricing/TechnicalAnalysis.h"
 #include "BatchDialog.h"
 #include "ChainTab.h"
+#include "ChartPopup.h"
 #include "HeatmapTab.h"
 #include "SectorHeatmapTab.h"
 #include "PortfolioTab.h"
@@ -67,7 +68,12 @@ void MainWindow::buildUi()
     m_quotes = new QuotesTab(m_state, this);
     m_volatility = new VolatilityTab(m_state, this);
     m_sectorHeatmap = new SectorHeatmapTab(this);
-    m_sectorHeatmap->onTickerSelected = [this](const QString& ticker) { showTicker(ticker, false); };
+    // A click on a stock tile makes it the app-wide ticker (chain, banner, every tab) and
+    // pops out a copy of the Quotes chart for it; a double-click goes to the chain tab.
+    m_sectorHeatmap->onTickerSelected = [this](const QString& ticker) {
+        showTicker(ticker, false);
+        showChartPopup(ticker);
+    };
     m_sectorHeatmap->onOpenChain = [this](const QString& ticker) { showTicker(ticker, true); };
     m_sectorHeatmap->watchlistProvider = [this] { return m_quotes->watchlist(); };
     m_portfolio = new PortfolioTab(m_state, this);
@@ -195,11 +201,6 @@ void MainWindow::buildUi()
 
     auto* title = new QLabel("Option Pricer", this);
     title->setObjectName("title");
-    m_subtitle = new QLabel("European and American valuation with Greeks, implied volatility, strategy analysis, scenario grids and "
-                            "volatility surfaces. Black-Scholes-Merton for spot assets, Black-76 for futures.", this);
-    m_subtitle->setObjectName("muted");
-    m_subtitle->setWordWrap(true);
-
     m_helpButton = ui::makeButton(this, "How to use", "secondary", "Step-by-step instructions and an explanation of the analysis on the current tab (also F1)");
     connect(m_helpButton, &QPushButton::clicked, this, [this] { showHelpForCurrentTab(); });
     m_themeToggle = new QPushButton(this);
@@ -287,8 +288,6 @@ void MainWindow::buildUi()
     root->setSpacing(8);
     m_rootLayout = root;
     root->addLayout(header);
-    root->addWidget(m_subtitle);
-    root->addSpacing(4);
     root->addWidget(m_tabs, 1);
     setCentralWidget(central);
     buildAssistant();
@@ -1025,6 +1024,20 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                 m_tabs->setCurrentWidget(tab);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
+                if (tab == m_strategy) {
+                    // Greeks over time: switch the Greek chart to the calendar view for the screenshot, then back.
+                    auto waitFor = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
+                    const QString userMode = m_strategy->greekMode();
+                    m_strategy->setGreekMode("time");
+                    waitFor(300);
+                    const auto views = m_strategy->findChildren<QChartView*>();
+                    if (!views.isEmpty() && views.last()->grab().save(shotDir + "/strategy-greeks-time.png")) qInfo("[live-smoke] wrote strategy-greeks-time.png (greek mode %s)", qPrintable(m_strategy->greekMode()));
+                    m_strategy->setGreekMode(userMode);
+                    waitFor(200);
+                }
+                if (tab == m_chain) {
+                    qInfo("[live-smoke] vol surface 3D: %s", qPrintable(m_chain->surfaceSummary()));
+                }
                 if (tab == m_optimizer) {
                     // Optimise the current chain for a +6% view, then compare the presets; log the leaders.
                     auto waitFor = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
@@ -1162,6 +1175,54 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     waitFor(300);
                     qInfo("[live-smoke] sector heatmap focus Energy: %s (%s)", focused ? "ok" : "FAILED", qPrintable(m_sectorHeatmap->focusedSector()));
                     if (grab().save(shotDir + "/sector-heatmap-energy.png")) qInfo("[live-smoke] wrote sector-heatmap-energy.png");
+                    // Click a stock tile: the app follows the ticker and a pop-out copy of the Quotes chart opens.
+                    const QString before = m_chain->ticker();
+                    QString energyTicker;
+                    for (const SectorHeatmapTab::Stock& stock : m_sectorHeatmap->stocks()) {
+                        if (stock.sector == "Energy") { energyTicker = stock.ticker; break; }
+                    }
+                    if (!energyTicker.isEmpty() && m_sectorHeatmap->onTickerSelected) {
+                        m_sectorHeatmap->onTickerSelected(energyTicker);
+                        for (int i = 0; i < 20; ++i) QCoreApplication::processEvents(QEventLoop::AllEvents, 250);   // bars download + paint
+                        QString legend;
+                        if (m_chartPopup) m_chartPopup->legendText([&legend](const QString& text) { legend = text; });
+                        waitFor(500);
+                        qInfo("[live-smoke] sector tile click %s: popup %s, chain ticker %s, quotes chart %s, popup legend: %s",
+                              qPrintable(energyTicker), m_chartPopup && m_chartPopup->isVisible() ? "visible" : "MISSING",
+                              qPrintable(m_chain->ticker()), qPrintable(m_quotes->chartTicker()), qPrintable(legend.simplified().left(220)));
+                        if (m_chartPopup && m_chartPopup->grab().save(shotDir + "/sector-popup.png")) qInfo("[live-smoke] wrote sector-popup.png");
+                        // The pop-out's timeframe buttons drive the Quotes chart (and so the mirror); put it back after.
+                        if (m_chartPopup && m_chartPopup->onTimeframe) {
+                            const QString userTimeframe = m_quotes->timeframeLabel();
+                            m_chartPopup->onTimeframe("15m");
+                            for (int i = 0; i < 16; ++i) QCoreApplication::processEvents(QEventLoop::AllEvents, 250);
+                            qInfo("[live-smoke] popup timeframe 15m: quotes chart %s, popup buttons %s, live %s (%d s), size %dx%d",
+                                  qPrintable(m_quotes->timeframeLabel()), qPrintable(m_chartPopup->timeframe()),
+                                  m_chartPopup->liveChecked() ? "on" : "off", m_quotes->refreshIntervalSeconds(),
+                                  m_chartPopup->width(), m_chartPopup->height());
+                            if (m_chartPopup->grab().save(shotDir + "/sector-popup-15m.png")) qInfo("[live-smoke] wrote sector-popup-15m.png");
+                            m_quotes->setTimeframe(userTimeframe);
+                            waitFor(1500);
+                            // Chart type and earnings cone from the pop-out act on the Quotes chart as well.
+                            const QString userType = m_quotes->chartType();
+                            const bool userCone = m_quotes->eventConeShown();
+                            if (m_chartPopup->onChartType) m_chartPopup->onChartType("line");
+                            if (m_chartPopup->onEventCone) m_chartPopup->onEventCone(!userCone);
+                            waitFor(800);
+                            qInfo("[live-smoke] popup line + cone %s: quotes type %s / cone %s, popup type %s / cone %s",
+                                  userCone ? "off" : "on", qPrintable(m_quotes->chartType()), m_quotes->eventConeShown() ? "on" : "off",
+                                  qPrintable(m_chartPopup->chartType()), m_chartPopup->eventConeChecked() ? "on" : "off");
+                            if (m_chartPopup->grab().save(shotDir + "/sector-popup-line.png")) qInfo("[live-smoke] wrote sector-popup-line.png");
+                            m_quotes->setChartType(userType);
+                            m_quotes->setEventConeShown(userCone);
+                            waitFor(500);
+                        }
+                        if (m_chartPopup) m_chartPopup->hide();
+                        // Put the smoke ticker back so the remaining tabs see the expected chain.
+                        showTicker(before, false);
+                        m_quotes->chartSymbol(before);
+                        waitFor(1500);
+                    }
                     m_sectorHeatmap->clearFocus();
                     waitFor(200);
                 }
@@ -1355,6 +1416,40 @@ void MainWindow::runLiveSmoke(const QString& ticker)
         }
     };
     m_chain->fetchLiveChain();
+}
+
+void MainWindow::showChartPopup(const QString& rawSymbol)
+{
+    const QString symbol = rawSymbol.trimmed().toUpper();
+    if (symbol.isEmpty()) return;
+    const bool firstShow = !m_chartPopup;
+    if (!m_chartPopup) {
+        // Its own window (no parent): freely movable and resizable, remembers its geometry.
+        m_chartPopup = new ChartPopup;
+        m_chartPopup->onOpenQuotes = [this] { m_chartPopup->hide(); m_tabs->setCurrentWidget(m_quotes); raise(); activateWindow(); };
+        m_chartPopup->onOpenChain = [this] { m_chartPopup->hide(); m_tabs->setCurrentWidget(m_chain); raise(); activateWindow(); };
+        // Timeframe and Live act on the Quotes chart, which the pop-out mirrors.
+        m_chartPopup->onTimeframe = [this](const QString& label) { m_quotes->setTimeframe(label); };
+        m_chartPopup->onLiveToggled = [this](bool on) { m_quotes->setAutoRefresh(on); };
+        m_chartPopup->onChartType = [this](const QString& key) { m_quotes->setChartType(key); };
+        m_chartPopup->onEventCone = [this](bool on) { m_quotes->setEventConeShown(on); };
+        m_quotes->mirrorChartTo(m_chartPopup);
+        connect(this, &QObject::destroyed, m_chartPopup, &QObject::deleteLater);
+    }
+    QString name;
+    for (const SectorHeatmapTab::Stock& stock : m_sectorHeatmap->stocks()) {
+        if (stock.ticker == symbol) { name = stock.name; break; }
+    }
+    m_quotes->chartSymbol(symbol);   // the popup mirrors the Quotes chart
+    m_chartPopup->showSymbol(symbol, name);
+    if (firstShow && !m_chartPopup->restoredGeometry()) {
+        // First ever appearance: centred over the main window.
+        const QRect frame = frameGeometry();
+        m_chartPopup->move(frame.center() - QPoint(m_chartPopup->width() / 2, m_chartPopup->height() / 2));
+    }
+    m_chartPopup->show();
+    m_chartPopup->raise();
+    m_chartPopup->activateWindow();
 }
 
 void MainWindow::showTicker(const QString& rawSymbol, bool switchToChainTab)

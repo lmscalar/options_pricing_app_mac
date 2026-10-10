@@ -4,6 +4,7 @@
 //
 
 #include "QuotesTab.h"
+#include "ChartPopup.h"
 #include "ChartPage.h"
 #include "Formatting.h"
 #include "../Pricing/TechnicalAnalysis.h"
@@ -418,11 +419,8 @@ void QuotesTab::buildUi()
     drawRow->addWidget(m_undoDraw);
     drawRow->addWidget(m_deleteDraw);
     drawRow->addWidget(m_clearDraw);
-    m_drawHint = new QLabel("Right-click a drawing to delete it · saved per symbol · Esc returns to the cursor", this);
-    m_drawHint->setObjectName("muted");
-    m_drawHint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    drawRow->addSpacing(8);
-    drawRow->addWidget(m_drawHint, 1);
+    drawLabel->setToolTip("Drawings: right-click one to delete it · saved per symbol · Esc returns to the cursor");
+    drawRow->addStretch(1);
 
     auto* toolbar = new QVBoxLayout;
     toolbar->setSpacing(6);
@@ -537,6 +535,7 @@ void QuotesTab::wire()
     });
     connect(m_chartType, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
         QSettings().setValue(kChartTypeKey, m_chartType->currentData().toString());
+        if (m_mirror) m_mirror->setChartType(m_chartType->currentData().toString());
         pushOptions();
     });
     connect(m_priceLineCheck, &QCheckBox::toggled, this, [this](bool on) { QSettings().setValue(kPriceLineKey, on); pushOptions(); });
@@ -544,6 +543,7 @@ void QuotesTab::wire()
     connect(m_coneAction, &QAction::toggled, this, [this](bool on) {
         QSettings().setValue(kEventConeKey, on);
         if (m_coneCheck->isChecked() != on) m_coneCheck->setChecked(on);
+        if (m_mirror) m_mirror->setEventCone(on);
         pushEventCone();
     });
     connect(m_coneCheck, &QCheckBox::toggled, this, [this](bool on) { if (m_coneAction->isChecked() != on) m_coneAction->setChecked(on); });
@@ -1080,6 +1080,7 @@ void QuotesTab::updateTimers()
     m_timer->setInterval(m_refreshInterval->value() * 1000);
     if (m_autoRefresh->isChecked()) m_timer->start();
     else m_timer->stop();
+    if (m_mirror) m_mirror->setLive(m_autoRefresh->isChecked(), m_refreshInterval->value());
 }
 
 void QuotesTab::setStatus(const QString& text, ui::StatusKind kind)
@@ -1097,6 +1098,7 @@ void QuotesTab::loadChart(const QString& ticker)
     m_chartSymbol->setText(symbol);
     m_chartName->setText(m_names.count(symbol) ? m_names.at(symbol) : QString());
     const Timeframe& tf = timeframes()[static_cast<size_t>(m_timeframeIndex)];
+    if (m_mirror) m_mirror->setTimeframe(tf.label);   // the pop-out's buttons follow this chart
     const QDate today = QDate::currentDate();
     m_loadingChart = true;
     const int sequence = ++m_loadSequence;   // responses arriving out of order are ignored
@@ -2093,11 +2095,68 @@ bool QuotesTab::hasStoredDrawings(const QString& symbol) const
 
 void QuotesTab::runJs(const QString& script)
 {
+    // Remember the latest state-setting call per command so a mirror attached later can
+    // be brought up to date; tool selection is local to this view and is not mirrored.
+    static const QRegularExpression command(QStringLiteral("^chartApi\\.(set[A-Za-z]+)\\("));
+    const QRegularExpressionMatch match = command.match(script);
+    const bool isTool = match.hasMatch() && match.captured(1) == QLatin1String("setTool");
+    if (match.hasMatch() && !isTool) m_mirrorState[match.captured(1)] = script;
+    if (m_mirror && !isTool) m_mirror->runJs(script);
     if (!m_pageReady) {
         m_pendingJs << script;
         return;
     }
     m_view->page()->runJavaScript(script);
+}
+
+QString QuotesTab::chartType() const
+{
+    return m_chartType->currentData().toString();
+}
+
+bool QuotesTab::autoRefreshEnabled() const
+{
+    return m_autoRefresh->isChecked();
+}
+
+void QuotesTab::setAutoRefresh(bool on)
+{
+    if (m_autoRefresh->isChecked() != on) m_autoRefresh->setChecked(on);   // toggled() runs updateTimers
+}
+
+int QuotesTab::refreshIntervalSeconds() const
+{
+    return m_refreshInterval->value();
+}
+
+void QuotesTab::mirrorChartTo(ChartPopup* popup)
+{
+    m_mirror = popup;
+    if (!popup) return;
+    popup->setTimeframes(timeframeLabels());
+    popup->setTimeframe(timeframeLabel());
+    popup->setLive(autoRefreshEnabled(), refreshIntervalSeconds());
+    popup->setChartType(chartType());
+    popup->setEventCone(eventConeShown());
+    popup->runJs(QStringLiteral("chartApi.init(%1);").arg(themeJson()));
+    // Options and indicators first, then the data they apply to, then the overlays.
+    for (const char* name : { "setTheme", "setOptions", "setIndicators", "setBars", "setDrawings", "setLive", "setEventCone" }) {
+        const auto it = m_mirrorState.find(QString::fromLatin1(name));
+        if (it != m_mirrorState.end()) popup->runJs(it->second);
+    }
+}
+
+void QuotesTab::chartSymbol(const QString& symbol)
+{
+    const QString ticker = symbol.trimmed().toUpper();
+    if (ticker.isEmpty()) return;
+    const int row = rowForTicker(ticker);
+    if (row >= 0 && !m_table->selectionModel()->isRowSelected(row)) {
+        m_cascadeSelection = true;
+        m_table->selectRow(row);   // the selection change loads the chart
+        m_cascadeSelection = false;
+    }
+    if (ticker != m_chartTicker) loadChart(ticker);
 }
 
 void QuotesTab::saveChartImage(const QString& path, std::function<void(const QString&)> done)

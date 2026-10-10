@@ -39,6 +39,10 @@ public:
     /// Selects the preset whose name contains `name` (case-insensitive) and loads it.
     bool selectPreset(const QString& name);
     QStringList presetNames() const;
+    /// Greek chart mode: "spot" (across the underlying price) or "time" (along the calendar to the first expiry).
+    bool setGreekMode(const QString& mode);
+    QString greekMode() const;
+    bool setGreek(const QString& name);
 
     QJsonObject toJson() const;
     void fromJson(const QJsonObject& json);
@@ -120,4 +124,6 @@ private:
     QValueAxis* m_greekX = nullptr;
     QValueAxis* m_greekY = nullptr;
     QComboBox* m_greekSelect = nullptr;
+    QComboBox* m_greekMode = nullptr;      ///< across spot / across time
+    QGroupBox* m_greekBox = nullptr;
 };

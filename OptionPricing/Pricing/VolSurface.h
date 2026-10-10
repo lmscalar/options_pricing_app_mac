@@ -371,6 +371,41 @@ private:
     std::vector<ExpirySlice> m_slices;
 };
 
+/// A regular strike × expiry grid of implied vols sampled from a fitted surface (for 3D views
+/// and exports). Rows follow the fitted expiries; columns are strikes between the moneyness bounds.
+struct SurfaceGrid {
+    std::vector<double> strikes;                 ///< ascending
+    std::vector<double> days;                    ///< calendar days per row, ascending
+    std::vector<double> maturities;              ///< years per row
+    std::vector<std::vector<double>> vols;       ///< vols[row][column], decimal (0 where unavailable)
+    double minVol = 0.0, maxVol = 0.0;
+    bool empty() const { return strikes.empty() || days.empty(); }
+};
+
+/// Expiries closer than `minDays` are left out: same-week options carry little surface information and extreme vols.
+inline SurfaceGrid sampleSurface(const VolSurface& surface, const ChainMarket& market, double moneynessLow = 0.7, double moneynessHigh = 1.3, int strikeCount = 25, int minDays = 5)
+{
+    SurfaceGrid g;
+    if (surface.empty() || market.spot <= 0.0 || strikeCount < 2 || moneynessHigh <= moneynessLow) return g;
+    for (int i = 0; i < strikeCount; ++i) g.strikes.push_back(market.spot * (moneynessLow + (moneynessHigh - moneynessLow) * i / (strikeCount - 1)));
+    g.minVol = INFINITY;
+    for (const ExpirySlice& s : surface.slices()) {
+        const double days = s.daysToExpiry > 0 ? s.daysToExpiry : std::max(1.0, std::round(s.maturity * 365.0));
+        if (days < minDays && surface.slices().size() > 1) continue;
+        g.days.push_back(days);
+        g.maturities.push_back(s.maturity);
+        std::vector<double> row;
+        for (double k : g.strikes) {
+            const double v = surface.impliedVol(k, s.maturity, market);
+            row.push_back(v);
+            if (v > 0.0) { g.minVol = std::min(g.minVol, v); g.maxVol = std::max(g.maxVol, v); }
+        }
+        g.vols.push_back(std::move(row));
+    }
+    if (!std::isfinite(g.minVol)) g.minVol = 0.0;
+    return g;
+}
+
 /// Builds a synthetic chain from a smile model, useful for demonstrations and tests.
 /// Skew is expressed as vol change per unit of log-moneyness; smile as curvature.
 inline std::vector<ChainQuote> syntheticChain(const ChainMarket& market, const std::vector<double>& maturities,

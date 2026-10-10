@@ -123,7 +123,9 @@ void AlertsTab::buildUi()
     m_table->setColumnWidth(ColRepeat, 60);
     m_table->setColumnWidth(ColCreated, 130);
 
-    m_add = ui::makeButton(this, "Add…", "secondary", "Create an alert");
+    m_add = ui::makeButton(this, "Add…", "secondary",
+                           "Create an alert. You can also say or type “alert me if NVDA goes above 240”, "
+                           "“alert me when AAPL drops 3%” or “alert me when the RSI on TSLA is above 70” to the assistant.");
     m_edit = ui::makeButton(this, "Edit…", "secondary", "Edit the selected alert");
     m_remove = ui::makeButton(this, "Remove", "secondary", "Delete the selected alerts");
     m_reset = ui::makeButton(this, "Re-arm", "secondary", "Arm the selected alerts again after they fired");
@@ -152,11 +154,6 @@ void AlertsTab::buildUi()
     auto* rulesLayout = new QVBoxLayout(rulesPane);
     rulesLayout->setContentsMargins(12, 10, 12, 10);
     rulesLayout->setSpacing(8);
-    auto* hint = new QLabel("Alerts are checked on every watchlist refresh, every minute for other symbols, and when you press Check now. "
-                            "Say or type “alert me if NVDA goes above 240”, “alert me when AAPL drops 3%”, “alert me when the RSI on TSLA is above 70”.", this);
-    hint->setObjectName("muted");
-    hint->setWordWrap(true);
-    rulesLayout->addWidget(hint);
     rulesLayout->addWidget(m_table, 1);
     rulesLayout->addLayout(buttons);
 

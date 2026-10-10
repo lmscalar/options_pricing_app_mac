@@ -184,9 +184,6 @@ void OptimizerTab::buildUi()
     auto* tableHeader = new QHBoxLayout;
     tableHeader->setSpacing(8);
     tableHeader->addWidget(m_tableTitle);
-    auto* hint = new QLabel("Select up to six rows to overlay their payoffs", this);
-    hint->setObjectName("muted");
-    tableHeader->addWidget(hint);
     tableHeader->addStretch(1);
     tableHeader->addWidget(m_openStrategy);
     tableHeader->addWidget(m_addPortfolio);
@@ -283,7 +280,7 @@ void OptimizerTab::loadSettings()
     m_maxLoss->setValue(settings.value(kMaxLossKey, 0.0).toDouble());
     if (settings.contains(kSplitterKey)) m_splitter->restoreState(settings.value(kSplitterKey).toByteArray());
     m_updating = false;
-    setStatus("State your view (target price, uncertainty), choose an objective and a family, then Optimize or Compare presets.", ui::StatusKind::Info);
+    setStatus(QString(), ui::StatusKind::Info);
 }
 
 void OptimizerTab::saveSettings() const

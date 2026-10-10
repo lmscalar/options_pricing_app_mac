@@ -187,8 +187,10 @@ kind, quantity (negative = short), strike, expiry, vol, entry price.</li>
 <i>Apply Vol Surface to Legs</i> gives each leg the fitted implied vol of its strike and expiry.</li>
 <li><b>Read the cards</b>: net premium (debit or credit), max profit, max loss, breakevens, probability of profit and
 expected P&amp;L at the first expiry; the Greeks block below.</li>
-<li><b>Charts</b>: the P&amp;L chart shows the profile at expiry, today, and at the slider's future date; the Greek chart
-plots any Greek across spot.</li>
+<li><b>Charts</b>: the P&amp;L chart shows the profile at expiry, today, and at the slider's future date. The Greek chart
+plots any Greek either <i>across spot</i> (today and at the slider's date) or <i>over time</i>: day by day to the first
+expiry at the current spot and at ±5% and ±10% moves, which shows how delta drifts, gamma and theta build into expiry,
+and how a move changes that path.</li>
 <li><b>Hand-offs</b>: the Scenarios tab grids this position; the Portfolio tab's <i>Import Strategy legs</i> books it;
 the Trade Ideas tab sends candidates here.</li>
 </ol>
@@ -243,8 +245,14 @@ preloaded into memory, so switching tickers elsewhere is instant; stale chains r
 into the Pricer's schedule. Both improve implied vols and parity checks.</li>
 <li><b>Pick an expiry</b> in the selector to see its strikes: bid, ask, mid, volume, open interest, implied vol, the SVI fit
 and any arbitrage flags. <i>Use ATM Vol as σ</i> copies that expiry's at-the-money fitted vol into the market inputs.</li>
-<li><b>Charts</b>: the smile (implied vol by strike with the fit) and the term structure (ATM vol by expiry); hover for values.
-<i>Hide Charts</i> gives the table the whole tab.</li>
+<li><b>Charts</b>: the smile (implied vol by strike with the fit), the term structure (ATM vol by expiry) and the
+<b>3D surface</b> (every fitted expiry across strikes from 70% to 130% of spot, coloured by vol). Drag the surface to
+rotate, scroll to zoom, double-click to reset, hover a point for its strike, expiry and vol. <i>Hide Charts</i> gives
+the table the whole tab; the grip between table and charts resizes them.</li>
+<li><b>Fit line and Checks</b>: the line under the charts summarises the expiry's forward, ATM vol, fit error and
+SVI parameters. <i>Checks</i> shows how many arbitrage issues the expiry has and opens the list on click.</li>
+<li><b>Where the data came from</b>: hover the slice title above the table for the chain's source and age, the
+spot and rates used to imply vols, and the result of the last download.</li>
 <li><b>Double-click a contract</b> to price it on the Pricer with the chain's inputs.</li>
 </ol>
 
@@ -400,7 +408,12 @@ move that is large for that period, so a bright tile means a big move for the ho
 cap-weighted tile.</li>
 <li>Pick a <b>universe</b>: the built-in large-cap list or your watchlist (sectors come from the tickers' industry data).</li>
 <li><b>Click a sector</b> in the Sectors view to expand it and see its stocks; <i>Reset</i> returns to the full map.
-Click a stock to make it the app-wide ticker; double-click to open its option chain. <i>Refresh</i> reloads prices.</li>
+<b>Click a stock</b> to make it the app-wide ticker and open a pop-out chart window: an exact copy of the Quotes chart
+(same timeframe, indicators and drawings) so the stock's performance is visible without leaving the map. The window is
+resizable and remembers its size; its timeframe buttons (1m … 1D, 1W) switch the chart, the chart-type selector switches
+between candlesticks, bars, Heikin-Ashi and line, <i>Earnings cone</i> shows or hides the implied move cone, and <i>Live</i>
+keeps the price line and intraday bars updating on the Quotes refresh interval. All of these act on the Quotes chart too,
+so the two views always agree. Double-click a tile to open its option chain. <i>Refresh</i> reloads prices.</li>
 </ol>
 
 <h3>Understanding the analysis</h3>

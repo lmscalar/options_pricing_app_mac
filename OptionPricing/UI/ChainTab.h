@@ -12,6 +12,7 @@
 
 #include "QtHeaders.h"
 #include "ChainStore.h"
+#include "SurfaceView.h"
 #include "MarketDataClient.h"
 #include "MarketState.h"
 #include "Theme.h"
@@ -111,7 +112,8 @@ private:
     QLabel* m_marketInfo = nullptr;
     QLabel* m_summary = nullptr;
     QTableWidget* m_table = nullptr;
-    QPlainTextEdit* m_issues = nullptr;
+    QPlainTextEdit* m_issues = nullptr;      ///< arbitrage-check list, shown by m_issuesToggle
+    QPushButton* m_issuesToggle = nullptr;
     QLabel* m_sviInfo = nullptr;
     QPushButton* m_useAtm = nullptr;
 
@@ -151,6 +153,7 @@ private:
     QPushButton* m_setKey = nullptr;
     QLabel* m_liveStatus = nullptr;
     QLabel* m_keyStatus = nullptr;
+    QString m_lastLiveMessage;               ///< result of the last download, for the provenance tooltip
 
     QChart* m_smileChart = nullptr;
     QValueAxis* m_smileX = nullptr;
@@ -160,7 +163,18 @@ private:
     QValueAxis* m_termX = nullptr;
     QValueAxis* m_termY = nullptr;
     QLabel* m_termHover = nullptr;
+    SurfaceView* m_surfaceView = nullptr;   ///< 3D fitted surface: strikes × expiries × implied vol
+    QLabel* m_surfaceHover = nullptr;
 
+public:
+    /// One line about the 3D surface grid (expiries, strike range, vol range) for logs and the assistant.
+    QString surfaceSummary() const { return m_surfaceView ? m_surfaceView->summaryText() : QString(); }
+protected:
+    /// Serves the provenance tooltip on the table title.
+    bool eventFilter(QObject* watched, QEvent* event) override;
+private:
+    /// Where the chain and spot came from and the last download result, one fact per line.
+    QString provenanceText() const;
     /// Shows a chart hover readout both as a tooltip at the cursor and in the label under the chart.
     void showChartHover(QLabel* readout, const QString& text, bool state);
 };
