@@ -26,10 +26,23 @@ for the list are preloaded into memory in the background.</li>
 Quotes refresh automatically (interval and auto-refresh switch below the table).</li>
 <li><b>Pick a timeframe</b> (1m … 1H intraday, 1D one year of daily bars, 1W five years of weekly bars) and a
 chart style (candlesticks, bars, Heikin-Ashi, line).</li>
+<li><b>Layout</b> (1 to 4 charts): extra charts appear beside the main one, each with its own symbol and
+timeframe. Tick <i>Link</i> on a chart to follow the main symbol (a second timeframe of the same stock, e.g.
+1H next to 1D); <i>Main ↗</i> promotes a chart's symbol to the main chart and the whole app. Indicators, chart
+style and theme are shared; the layout and each chart's settings are remembered. Charts that share the space use a
+compact legend; on a laptop screen, <b>View ▸ Text Size ▸ Compact</b> (⌘-) shrinks every interface and chart font so
+more fits.</li>
+<li><b>Compare</b>: overlay SPY, QQQ, IWM, the app-wide ticker or any symbol as a line. With comparisons the
+price axis switches to percentage mode, so every series reads as the change from the first visible bar and the
+legend shows each symbol's move over the charted period. Lines refresh with the timeframe and live bars.</li>
 <li><b>Add indicators</b> from the <b>Indicators</b> menu, grouped by TA-Lib category. Overlap studies (moving
 averages, Bollinger Bands, SAR) draw over price; oscillators (MACD, RSI, Stochastics, ATR …) open their own
 panes below the volume; candlestick patterns mark bars with arrows. Each indicator has an Edit / Remove
-submenu; the set is remembered for the next launch. Drag the handle above the panes to resize them.</li>
+submenu; the set is remembered for the next launch. Drag the handle above the panes to resize them.
+<b>Templates</b> (in the same menu) apply a named set in one step: built-in <i>Trend following</i> (SMA 20/50/200,
+MACD), <i>Momentum</i> (RSI, Stochastic, ATR), <i>Mean reversion</i> (Bollinger, RSI, CCI), <i>Volume &amp; strength</i>
+(EMA 21, OBV, ADX) and <i>Clean chart</i>, plus any set you save with <i>Save current as…</i>. The assistant
+understands “apply the momentum template”, “compare with SPY” and “show 4 charts”.</li>
 <li><b>Draw</b> trend lines, support and resistance zones with the Draw toolbar; <i>Edit</i> moves them,
 right-click deletes one, and drawings are saved per symbol.</li>
 <li><b>Earnings cone</b> (checkbox and the <b>Earnings</b> menu): the option-implied move through the next

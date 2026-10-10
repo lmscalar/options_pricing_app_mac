@@ -84,6 +84,9 @@ private:
     /// Shows `symbol` in the Quotes chart and opens the pop-out chart window with a copy of it
     /// (used when a stock is picked on the Sector Heatmap).
     void showChartPopup(const QString& symbol);
+    /// Text size for the whole interface (View ▸ Text Size): 0.85 … 1.1, saved as ui/textScale.
+    void setTextScale(double scale);
+    void stepTextScale(int direction);
     void importChain();
     void batchPrice();
     void exportResults();
@@ -105,6 +108,7 @@ private:
     HeatmapTab* m_heatmap = nullptr;
     SectorHeatmapTab* m_sectorHeatmap = nullptr;
     ChartPopup* m_chartPopup = nullptr;        ///< pop-out copy of the Quotes chart, created on first use
+    QActionGroup* m_textSizeGroup = nullptr;   ///< View ▸ Text Size options (checked one = current scale)
     PortfolioTab* m_portfolio = nullptr;
     AlertsTab* m_alerts = nullptr;
     ScannerTab* m_scanner = nullptr;

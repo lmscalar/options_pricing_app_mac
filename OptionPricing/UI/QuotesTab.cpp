@@ -4,6 +4,7 @@
 //
 
 #include "QuotesTab.h"
+#include "ChartPane.h"
 #include "ChartPopup.h"
 #include "ChartPage.h"
 #include "Formatting.h"
@@ -28,6 +29,35 @@ constexpr const char* kVolumeKey = "quotes/volume";
 constexpr const char* kPriceLineKey = "quotes/priceLine";
 constexpr const char* kPaneHeightKey = "quotes/paneHeight";   ///< indicator pane height as a fraction of the chart
 constexpr const char* kEventConeKey = "quotes/eventCone";     ///< implied move cone shown
+constexpr const char* kCompareKey = "quotes/compare";         ///< JSON array of comparison symbols
+constexpr const char* kTemplatesKey = "quotes/indicatorTemplates";   ///< JSON object: name -> {indicators, volume}
+constexpr const char* kLayoutKey = "quotes/chartLayout";      ///< number of charts shown (1-4)
+constexpr const char* kPanesKey = "quotes/chartPanes";        ///< JSON array of secondary pane configs (see ChartPane::toJson)
+
+/// Line colours for comparison symbols, in the order they are added.
+const QStringList& comparePalette()
+{
+    static const QStringList palette = { "#f59e0b", "#a78bfa", "#34d399", "#f472b6", "#38bdf8" };
+    return palette;
+}
+
+/// Built-in indicator templates: name, TA-Lib specs (colours are assigned on apply), volume switch.
+struct BuiltinTemplate { const char* name; const char* indicators; bool volume; const char* hint; };
+const std::vector<BuiltinTemplate>& builtinTemplates()
+{
+    static const std::vector<BuiltinTemplate> templates = {
+        { "Trend following", R"([{"func":"SMA","params":{"optInTimePeriod":20}},{"func":"SMA","params":{"optInTimePeriod":50}},{"func":"SMA","params":{"optInTimePeriod":200}},{"func":"MACD","params":{"optInFastPeriod":12,"optInSlowPeriod":26,"optInSignalPeriod":9}}])", true,
+          "SMA 20 / 50 / 200 with MACD 12/26/9" },
+        { "Momentum", R"([{"func":"RSI","params":{"optInTimePeriod":14}},{"func":"STOCH","params":{}},{"func":"ATR","params":{"optInTimePeriod":14}}])", true,
+          "RSI 14, slow stochastic, ATR 14" },
+        { "Mean reversion", R"([{"func":"BBANDS","params":{"optInTimePeriod":20}},{"func":"RSI","params":{"optInTimePeriod":14}},{"func":"CCI","params":{"optInTimePeriod":20}}])", true,
+          "Bollinger 20/2 with RSI 14 and CCI 20" },
+        { "Volume & strength", R"([{"func":"EMA","params":{"optInTimePeriod":21}},{"func":"OBV","params":{}},{"func":"ADX","params":{"optInTimePeriod":14}}])", true,
+          "EMA 21, on-balance volume, ADX 14" },
+        { "Clean chart", "[]", false, "Price only, no indicators or volume" },
+    };
+    return templates;
+}
 constexpr const char* kEarningsDatesKey = "events/dates";     ///< JSON object: ticker -> ISO date pinned by the user
 /// Overlay colours handed out in order to new moving averages (first unused wins).
 const QStringList& indicatorPalette()
@@ -358,17 +388,36 @@ void QuotesTab::buildUi()
     m_openChain = ui::makeButton(this, "Open Option Chain", "secondary", "Fetch this ticker's option chain on the Option Chain tab");
     m_saveImage = ui::makeButton(this, "Save Image…", "secondary", "Save the chart as a PNG image");
     m_resetChart = ui::makeButton(this, "Reset", "secondary", "Reset the chart view: reload the bars, restore autoscale and the default zoom, return to the cursor tool (drawings are kept)");
+    // Comparison overlays: other symbols as lines on a percentage scale.
+    m_compareButton = new QToolButton(this);
+    m_compareButton->setText("Compare ▾");
+    m_compareButton->setPopupMode(QToolButton::InstantPopup);
+    m_compareButton->setCursor(Qt::PointingHandCursor);
+    m_compareButton->setToolTip("Overlay other symbols on a percentage scale to compare performance over the charted period");
+    m_compareMenu = new QMenu(this);
+    m_compareButton->setMenu(m_compareMenu);
+    // Multi-chart layout: the main chart plus up to three secondary charts.
+    m_layoutCombo = new QComboBox(this);
+    m_layoutCombo->addItem("1 chart", 1);
+    m_layoutCombo->addItem("2 charts", 2);
+    m_layoutCombo->addItem("3 charts", 3);
+    m_layoutCombo->addItem("4 charts", 4);
+    m_layoutCombo->setObjectName("chartTypeCombo");
+    m_layoutCombo->setToolTip("Show one chart, or two to four side by side: each extra chart has its own symbol (or follows the main one) and timeframe");
     // Two toolbar rows so the chart pane stays usable at laptop widths.
     auto* toolbarTop = new QHBoxLayout;
     toolbarTop->setSpacing(10);
     toolbarTop->addWidget(m_chartSymbol);
     toolbarTop->addWidget(m_chartName, 1);
     toolbarTop->addLayout(tfRow);
+    toolbarTop->addSpacing(6);
+    toolbarTop->addWidget(m_layoutCombo);
     auto* toolbarBottom = new QHBoxLayout;
     toolbarBottom->setSpacing(10);
     toolbarBottom->addWidget(m_chartType);
     toolbarBottom->addSpacing(6);
     toolbarBottom->addWidget(m_indicatorsButton);
+    toolbarBottom->addWidget(m_compareButton);
     toolbarBottom->addWidget(m_eventsButton);
     m_priceLineCheck = new QCheckBox("Price line", this);
     m_priceLineCheck->setChecked(QSettings().value(kPriceLineKey, true).toBool());
@@ -457,7 +506,13 @@ void QuotesTab::buildUi()
     chartLayout->setContentsMargins(12, 12, 12, 12);
     chartLayout->setSpacing(8);
     chartLayout->addLayout(toolbar);
-    chartLayout->addWidget(m_view, 1);
+    // The main chart and the secondary panes share a grid; applyChartLayout arranges them.
+    m_chartArea = new QWidget(chartBox);
+    m_chartGrid = new QGridLayout(m_chartArea);
+    m_chartGrid->setContentsMargins(0, 0, 0, 0);
+    m_chartGrid->setSpacing(8);
+    m_chartGrid->addWidget(m_view, 0, 0);
+    chartLayout->addWidget(m_chartArea, 1);
     chartLayout->addLayout(footer);
 
     auto* splitter = new QSplitter(Qt::Horizontal, this);
@@ -568,8 +623,14 @@ void QuotesTab::wire()
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, [this] {
         refreshQuotes();
-        // Intraday charts move; re-pull the bars with the quotes.
+        // Intraday charts move; re-pull the bars with the quotes (the main chart's reload
+        // refreshes the comparison lines and linked panes as well).
         if (!m_chartTicker.isEmpty() && timeframes()[static_cast<size_t>(m_timeframeIndex)].intraday && !m_loadingChart) loadChart(m_chartTicker);
+        for (size_t i = 0; i + 1 < static_cast<size_t>(m_layout) && i < m_panes.size(); ++i) {
+            ChartPane* pane = m_panes[i];
+            const qsizetype index = timeframeLabels().indexOf(pane->timeframe(), 0, Qt::CaseInsensitive);
+            if (index >= 0 && timeframes()[static_cast<size_t>(index)].intraday && !pane->linked()) reloadPane(pane);
+        }
     });
 
     const QSettings settings;
@@ -580,6 +641,19 @@ void QuotesTab::wire()
     loadIndicators();
     const QByteArray header = settings.value(kHeaderKey).toByteArray();
     if (!header.isEmpty()) m_table->horizontalHeader()->restoreState(header);
+    // Comparison symbols, indicator templates and the chart layout.
+    for (const QJsonValue v : QJsonDocument::fromJson(settings.value(kCompareKey).toByteArray()).array()) {
+        const QString symbol = v.toString().trimmed().toUpper();
+        if (!symbol.isEmpty() && !m_compareSymbols.contains(symbol) && m_compareSymbols.size() < kMaxCompare) m_compareSymbols << symbol;
+    }
+    rebuildCompareMenu();
+    loadTemplates();
+    m_layout = std::clamp(settings.value(kLayoutKey, 1).toInt(), 1, 4);
+    m_layoutCombo->setCurrentIndex(std::max(0, m_layoutCombo->findData(m_layout)));
+    connect(m_layoutCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
+        if (!m_updating) setChartLayout(m_layoutCombo->currentData().toInt());
+    });
+    applyChartLayout();
 }
 
 void QuotesTab::saveHeaderState() const
@@ -1099,6 +1173,10 @@ void QuotesTab::loadChart(const QString& ticker)
     m_chartName->setText(m_names.count(symbol) ? m_names.at(symbol) : QString());
     const Timeframe& tf = timeframes()[static_cast<size_t>(m_timeframeIndex)];
     if (m_mirror) m_mirror->setTimeframe(tf.label);   // the pop-out's buttons follow this chart
+    // Comparison lines are re-fetched on the new timeframe; linked panes follow the symbol.
+    m_compareBars.clear();
+    loadCompareBars();
+    reloadLinkedPanes();
     const QDate today = QDate::currentDate();
     m_loadingChart = true;
     const int sequence = ++m_loadSequence;   // responses arriving out of order are ignored
@@ -1280,17 +1358,7 @@ QString QuotesTab::contextSummary(int maxBars) const
 void QuotesTab::pushBars()
 {
     const Timeframe& tf = timeframes()[static_cast<size_t>(m_timeframeIndex)];
-    QJsonArray bars;
-    for (const MarketDataClient::Bar& b : m_bars.bars) {
-        QJsonObject o;
-        o["t"] = static_cast<double>(b.timeMs / 1000);
-        o["o"] = b.open;
-        o["h"] = b.high;
-        o["l"] = b.low;
-        o["c"] = b.close;
-        o["v"] = b.volume;
-        bars.append(o);
-    }
+    const QJsonArray bars = barsJson(m_bars);
     QJsonObject meta;
     meta["symbol"] = m_chartTicker;
     meta["name"] = m_names.count(m_chartTicker) ? m_names.at(m_chartTicker) : QString();
@@ -1309,16 +1377,423 @@ void QuotesTab::pushBars()
     payload["meta"] = meta;
     runJs(QStringLiteral("chartApi.setBars(%1);").arg(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact))));
     pushIndicators();
+    pushCompare();
 }
 
-void QuotesTab::pushOptions()
+QJsonArray QuotesTab::barsJson(const MarketDataClient::BarSeries& series)
+{
+    QJsonArray bars;
+    for (const MarketDataClient::Bar& b : series.bars) {
+        QJsonObject o;
+        o["t"] = static_cast<double>(b.timeMs / 1000);
+        o["o"] = b.open;
+        o["h"] = b.high;
+        o["l"] = b.low;
+        o["c"] = b.close;
+        o["v"] = b.volume;
+        bars.append(o);
+    }
+    return bars;
+}
+
+QJsonObject QuotesTab::optionsJson() const
 {
     QJsonObject opts;
     opts["type"] = m_chartType->currentData().toString();
     opts["volume"] = m_volumeAction->isChecked();
     opts["priceLine"] = m_priceLineCheck->isChecked();
     opts["paneHeight"] = QSettings().value(kPaneHeightKey, 0.24).toDouble();   // indicator pane, fraction of the chart height
+    return opts;
+}
+
+void QuotesTab::pushOptions()
+{
+    // Compact legends (no company name or O/H/L, smaller fonts) whenever charts share the
+    // space: the main chart in a multi-chart layout, secondary panes always.
+    QJsonObject opts = optionsJson();
+    opts["compact"] = m_layout > 1;
     runJs(QStringLiteral("chartApi.setOptions(%1);").arg(QString::fromUtf8(QJsonDocument(opts).toJson(QJsonDocument::Compact))));
+    opts["compact"] = true;
+    const QString paneScript = QStringLiteral("chartApi.setOptions(%1);").arg(QString::fromUtf8(QJsonDocument(opts).toJson(QJsonDocument::Compact)));
+    for (ChartPane* pane : m_panes) pane->runJs(paneScript);
+}
+
+// ---- Comparison overlays ---------------------------------------------------------------
+
+bool QuotesTab::addCompareSymbol(const QString& rawSymbol, QString* error)
+{
+    const QString symbol = rawSymbol.trimmed().toUpper();
+    if (symbol.isEmpty()) { if (error) *error = "Enter a symbol."; return false; }
+    if (symbol == m_chartTicker) { if (error) *error = QStringLiteral("%1 is the charted symbol.").arg(symbol); return false; }
+    if (m_compareSymbols.contains(symbol)) return true;
+    if (m_compareSymbols.size() >= kMaxCompare) { if (error) *error = QStringLiteral("At most %1 comparison symbols.").arg(kMaxCompare); return false; }
+    m_compareSymbols << symbol;
+    saveCompare();
+    rebuildCompareMenu();
+    loadCompareBars();
+    return true;
+}
+
+bool QuotesTab::removeCompareSymbol(const QString& rawSymbol)
+{
+    const QString symbol = rawSymbol.trimmed().toUpper();
+    if (!m_compareSymbols.removeAll(symbol)) return false;
+    m_compareBars.erase(symbol);
+    saveCompare();
+    rebuildCompareMenu();
+    pushCompare();
+    return true;
+}
+
+void QuotesTab::clearCompareSymbols()
+{
+    if (m_compareSymbols.isEmpty()) return;
+    m_compareSymbols.clear();
+    m_compareBars.clear();
+    saveCompare();
+    rebuildCompareMenu();
+    pushCompare();
+}
+
+void QuotesTab::saveCompare() const
+{
+    QSettings().setValue(kCompareKey, QJsonDocument(QJsonArray::fromStringList(m_compareSymbols)).toJson(QJsonDocument::Compact));
+}
+
+void QuotesTab::loadCompareBars()
+{
+    const int sequence = ++m_compareSequence;
+    if (m_compareSymbols.isEmpty() || m_chartTicker.isEmpty() || !m_client.hasApiKey()) { pushCompare(); return; }
+    const Timeframe& tf = timeframes()[static_cast<size_t>(m_timeframeIndex)];
+    const QDate today = QDate::currentDate();
+    for (const QString& symbol : m_compareSymbols) {
+        m_client.fetchAggregates(symbol, tf.multiplier, tf.timespan, today.addDays(-tf.lookbackDays), today,
+            [this, symbol, sequence](const MarketDataClient::BarSeries& series) {
+                if (sequence != m_compareSequence || !m_compareSymbols.contains(symbol)) return;   // superseded or removed
+                m_compareBars[symbol] = series;
+                pushCompare();
+            },
+            [this, symbol, sequence](const QString& message) {
+                if (sequence != m_compareSequence) return;
+                setStatus(QStringLiteral("Compare %1: %2").arg(symbol, message), ui::StatusKind::Warning);
+            });
+    }
+}
+
+void QuotesTab::pushCompare()
+{
+    QJsonArray list;
+    for (int i = 0; i < m_compareSymbols.size(); ++i) {
+        const QString& symbol = m_compareSymbols.at(i);
+        const auto it = m_compareBars.find(symbol);
+        if (it == m_compareBars.end()) continue;
+        QJsonArray points;
+        for (const MarketDataClient::Bar& b : it->second.bars) points.append(QJsonObject{ { "t", static_cast<double>(b.timeMs / 1000) }, { "c", b.close } });
+        list.append(QJsonObject{ { "symbol", symbol }, { "color", comparePalette().at(i % comparePalette().size()) }, { "points", points } });
+    }
+    runJs(QStringLiteral("chartApi.setCompare(%1);").arg(QString::fromUtf8(QJsonDocument(list).toJson(QJsonDocument::Compact))));
+}
+
+void QuotesTab::rebuildCompareMenu()
+{
+    if (!m_compareMenu) return;
+    m_compareMenu->clear();
+    m_compareMenu->addAction("Add symbol…", this, [this] {
+        bool ok = false;
+        const QString text = QInputDialog::getText(this, "Compare", "Symbol to overlay (e.g. SPY):", QLineEdit::Normal, QString(), &ok);
+        QString error;
+        if (ok && !addCompareSymbol(text, &error)) setStatus(error, ui::StatusKind::Warning);
+    });
+    // Quick picks: the broad market, plus the app-wide ticker when it is not the charted one.
+    QStringList quick = { "SPY", "QQQ", "IWM" };
+    if (!m_state.underlyingTicker.isEmpty() && m_state.underlyingTicker != m_chartTicker) quick.prepend(m_state.underlyingTicker);
+    for (const QString& symbol : quick) {
+        if (m_compareSymbols.contains(symbol) || symbol == m_chartTicker) continue;
+        m_compareMenu->addAction(QStringLiteral("Add %1").arg(symbol), this, [this, symbol] { addCompareSymbol(symbol); });
+    }
+    if (!m_compareSymbols.isEmpty()) {
+        m_compareMenu->addSeparator();
+        for (int i = 0; i < m_compareSymbols.size(); ++i) {
+            const QString symbol = m_compareSymbols.at(i);
+            QAction* action = m_compareMenu->addAction(swatchIcon(comparePalette().at(i % comparePalette().size())), QStringLiteral("Remove %1").arg(symbol), this,
+                                                       [this, symbol] { removeCompareSymbol(symbol); });
+            action->setToolTip("Remove this comparison line");
+        }
+        m_compareMenu->addSeparator();
+        m_compareMenu->addAction("Clear comparisons", this, [this] { clearCompareSymbols(); });
+    }
+    m_compareButton->setText(m_compareSymbols.isEmpty() ? QStringLiteral("Compare ▾") : QStringLiteral("Compare (%1) ▾").arg(m_compareSymbols.size()));
+    m_compareButton->setToolTip(m_compareSymbols.isEmpty()
+                                    ? QStringLiteral("Overlay other symbols on a percentage scale to compare performance over the charted period")
+                                    : QStringLiteral("Comparing with %1 (percentage scale: every line is the change from the first visible bar)").arg(m_compareSymbols.join(", ")));
+}
+
+// ---- Indicator templates ---------------------------------------------------------------
+
+void QuotesTab::loadTemplates()
+{
+    m_templates = QJsonDocument::fromJson(QSettings().value(kTemplatesKey).toByteArray()).object();
+}
+
+void QuotesTab::saveTemplates() const
+{
+    QSettings().setValue(kTemplatesKey, QJsonDocument(m_templates).toJson(QJsonDocument::Compact));
+}
+
+QStringList QuotesTab::indicatorTemplateNames() const
+{
+    QStringList names;
+    for (const BuiltinTemplate& t : builtinTemplates()) names << QString::fromLatin1(t.name);
+    QStringList saved = m_templates.keys();
+    saved.sort(Qt::CaseInsensitive);
+    names << saved;
+    return names;
+}
+
+bool QuotesTab::isBuiltinTemplate(const QString& name) const
+{
+    for (const BuiltinTemplate& t : builtinTemplates()) if (name.compare(QLatin1String(t.name), Qt::CaseInsensitive) == 0) return true;
+    return false;
+}
+
+bool QuotesTab::applyIndicatorTemplate(const QString& rawName, QString* error)
+{
+    const QString name = rawName.trimmed();
+    for (const BuiltinTemplate& t : builtinTemplates()) {
+        if (name.compare(QLatin1String(t.name), Qt::CaseInsensitive) != 0) continue;
+        if (!setIndicators(QJsonDocument::fromJson(QByteArray(t.indicators)).array(), error)) return false;
+        setVolumeShown(t.volume);
+        return true;
+    }
+    for (auto it = m_templates.constBegin(); it != m_templates.constEnd(); ++it) {
+        if (it.key().compare(name, Qt::CaseInsensitive) != 0) continue;
+        const QJsonObject saved = it.value().toObject();
+        if (!setIndicators(saved.value("indicators").toArray(), error)) return false;
+        setVolumeShown(saved.value("volume").toBool(true));
+        return true;
+    }
+    if (error) *error = QStringLiteral("No indicator template named '%1'. Available: %2").arg(name, indicatorTemplateNames().join(", "));
+    return false;
+}
+
+bool QuotesTab::saveIndicatorTemplate(const QString& rawName)
+{
+    const QString name = rawName.trimmed();
+    if (name.isEmpty() || isBuiltinTemplate(name)) return false;
+    m_templates[name] = QJsonObject{ { "indicators", m_indicators }, { "volume", m_volumeAction->isChecked() } };
+    saveTemplates();
+    rebuildIndicatorsMenu();
+    return true;
+}
+
+bool QuotesTab::deleteIndicatorTemplate(const QString& rawName)
+{
+    const QString name = rawName.trimmed();
+    if (!m_templates.contains(name)) return false;
+    m_templates.remove(name);
+    saveTemplates();
+    rebuildIndicatorsMenu();
+    return true;
+}
+
+void QuotesTab::buildTemplatesMenu(QMenu* menu)
+{
+    for (const BuiltinTemplate& t : builtinTemplates()) {
+        QAction* action = menu->addAction(QString::fromLatin1(t.name), this, [this, name = QString::fromLatin1(t.name)] {
+            QString error;
+            if (!applyIndicatorTemplate(name, &error)) setStatus(error, ui::StatusKind::Warning);
+        });
+        action->setToolTip(QString::fromLatin1(t.hint));
+    }
+    QStringList saved = m_templates.keys();
+    saved.sort(Qt::CaseInsensitive);
+    if (!saved.isEmpty()) {
+        menu->addSeparator();
+        for (const QString& name : saved) {
+            menu->addAction(name, this, [this, name] {
+                QString error;
+                if (!applyIndicatorTemplate(name, &error)) setStatus(error, ui::StatusKind::Warning);
+            });
+        }
+    }
+    menu->addSeparator();
+    menu->addAction("Save current as…", this, [this] {
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, "Save indicator template", "Template name:", QLineEdit::Normal, QString(), &ok).trimmed();
+        if (!ok || name.isEmpty()) return;
+        if (!saveIndicatorTemplate(name)) setStatus(QStringLiteral("'%1' is a built-in template; choose another name.").arg(name), ui::StatusKind::Warning);
+        else setStatus(QStringLiteral("Saved indicator template '%1'.").arg(name), ui::StatusKind::Info);
+    });
+    if (!saved.isEmpty()) {
+        QMenu* remove = menu->addMenu("Delete template");
+        for (const QString& name : saved) remove->addAction(name, this, [this, name] { deleteIndicatorTemplate(name); });
+    }
+}
+
+// ---- Multi-chart layout ----------------------------------------------------------------
+
+bool QuotesTab::setChartLayout(int charts)
+{
+    const int clamped = std::clamp(charts, 1, 4);
+    if (clamped != charts) return false;
+    if (m_layout != clamped) {
+        m_layout = clamped;
+        QSettings().setValue(kLayoutKey, m_layout);
+    }
+    m_updating = true;
+    m_layoutCombo->setCurrentIndex(std::max(0, m_layoutCombo->findData(m_layout)));
+    m_updating = false;
+    applyChartLayout();
+    return true;
+}
+
+ChartPane* QuotesTab::createPane()
+{
+    auto* pane = new ChartPane(m_chartArea);
+    pane->setTimeframes(timeframeLabels());
+    pane->runJs(QStringLiteral("chartApi.init(%1);").arg(themeJson()));
+    QJsonObject opts = optionsJson();
+    opts["compact"] = true;
+    pane->runJs(QStringLiteral("chartApi.setOptions(%1);").arg(QString::fromUtf8(QJsonDocument(opts).toJson(QJsonDocument::Compact))));
+    pane->onConfigChanged = [this, pane] {
+        if (pane->linked()) pane->setSymbol(m_chartTicker);
+        savePanes();
+        reloadPane(pane);
+    };
+    pane->onPromote = [this](const QString& symbol) { showTicker(symbol); };
+    m_panes.push_back(pane);
+    return pane;
+}
+
+void QuotesTab::loadPanes()
+{
+    // Saved configs, else sensible defaults: the same stock on an hourly chart, then the market.
+    const QJsonArray saved = QJsonDocument::fromJson(QSettings().value(kPanesKey).toByteArray()).array();
+    static const QJsonArray defaults = { QJsonObject{ { "linked", true }, { "timeframe", "1H" } },
+                                         QJsonObject{ { "symbol", "SPY" }, { "timeframe", "1D" } },
+                                         QJsonObject{ { "symbol", "QQQ" }, { "timeframe", "1D" } } };
+    for (size_t i = 0; i < m_panes.size(); ++i) {
+        const int index = static_cast<int>(i);
+        m_panes[i]->fromJson(index < saved.size() ? saved.at(index).toObject() : defaults.at(index % defaults.size()).toObject());
+        if (m_panes[i]->linked()) m_panes[i]->setSymbol(m_chartTicker);
+    }
+}
+
+void QuotesTab::savePanes() const
+{
+    QJsonArray list;
+    for (const ChartPane* pane : m_panes) list.append(pane->toJson());
+    QSettings().setValue(kPanesKey, QJsonDocument(list).toJson(QJsonDocument::Compact));
+}
+
+void QuotesTab::applyChartLayout()
+{
+    if (!m_chartGrid) return;
+    const size_t needed = static_cast<size_t>(m_layout - 1);
+    const size_t before = m_panes.size();
+    while (m_panes.size() < needed) createPane();
+    if (m_panes.size() != before) loadPanes();   // configs for the panes created just now
+    // Detach everything, then place the main chart and the visible panes.
+    while (QLayoutItem* item = m_chartGrid->takeAt(0)) delete item;
+    for (int i = 0; i < 2; ++i) { m_chartGrid->setColumnStretch(i, 0); m_chartGrid->setRowStretch(i, 0); }
+    for (size_t i = 0; i < m_panes.size(); ++i) m_panes[i]->setVisible(i < needed);
+    switch (m_layout) {
+    case 2:
+        m_chartGrid->addWidget(m_view, 0, 0);
+        m_chartGrid->addWidget(m_panes[0], 0, 1);
+        m_chartGrid->setColumnStretch(0, 1);
+        m_chartGrid->setColumnStretch(1, 1);
+        break;
+    case 3:
+        m_chartGrid->addWidget(m_view, 0, 0, 2, 1);
+        m_chartGrid->addWidget(m_panes[0], 0, 1);
+        m_chartGrid->addWidget(m_panes[1], 1, 1);
+        m_chartGrid->setColumnStretch(0, 3);
+        m_chartGrid->setColumnStretch(1, 2);
+        m_chartGrid->setRowStretch(0, 1);
+        m_chartGrid->setRowStretch(1, 1);
+        break;
+    case 4:
+        m_chartGrid->addWidget(m_view, 0, 0);
+        m_chartGrid->addWidget(m_panes[0], 0, 1);
+        m_chartGrid->addWidget(m_panes[1], 1, 0);
+        m_chartGrid->addWidget(m_panes[2], 1, 1);
+        for (int i = 0; i < 2; ++i) { m_chartGrid->setColumnStretch(i, 1); m_chartGrid->setRowStretch(i, 1); }
+        break;
+    default:
+        m_chartGrid->addWidget(m_view, 0, 0);
+        break;
+    }
+    for (size_t i = 0; i < needed; ++i) {
+        if (m_panes[i]->series().bars.empty()) reloadPane(m_panes[i]);
+    }
+    pushOptions();   // compact legend on the main chart when it shares the space
+}
+
+void QuotesTab::reloadPane(ChartPane* pane)
+{
+    if (!pane) return;
+    const QString symbol = pane->linked() ? m_chartTicker : pane->symbol();
+    const qsizetype index = timeframeLabels().indexOf(pane->timeframe(), 0, Qt::CaseInsensitive);
+    if (symbol.isEmpty() || index < 0 || !m_client.hasApiKey()) { pane->setStatus(symbol.isEmpty() ? QStringLiteral("enter a symbol") : QString()); return; }
+    const Timeframe& tf = timeframes()[static_cast<size_t>(index)];
+    const QDate today = QDate::currentDate();
+    const int sequence = pane->beginLoad();
+    pane->setStatus(QStringLiteral("loading…"));
+    QPointer<ChartPane> guard(pane);
+    m_client.fetchAggregates(symbol, tf.multiplier, tf.timespan, today.addDays(-tf.lookbackDays), today,
+        [this, guard, symbol, tf, sequence](const MarketDataClient::BarSeries& series) {
+            if (!guard || sequence != guard->loadSequence()) return;   // pane gone or a newer load superseded this one
+            guard->setSeries(series);
+            QJsonObject meta;
+            meta["symbol"] = symbol;
+            meta["name"] = m_names.count(symbol) ? m_names.at(symbol) : QString();
+            meta["timeframe"] = tf.label;
+            meta["intraday"] = tf.intraday;
+            const auto quote = m_quotes.find(symbol);
+            if (quote != m_quotes.end() && quote->second.previousClose > 0.0) meta["previousClose"] = quote->second.previousClose;
+            if (!series.bars.empty()) {
+                meta["asOf"] = tf.intraday ? QStringLiteral("as of %1").arg(barLabel(series.bars.back().timeMs, true))
+                                           : QStringLiteral("session %1").arg(barLabel(series.bars.back().timeMs, false));
+            }
+            QJsonObject payload;
+            payload["bars"] = barsJson(series);
+            payload["meta"] = meta;
+            guard->runJs(QStringLiteral("chartApi.setBars(%1);").arg(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact))));
+            guard->runJs(QStringLiteral("chartApi.setIndicators(%1);").arg(QString::fromUtf8(QJsonDocument(indicatorsPayload(series, m_indicators)).toJson(QJsonDocument::Compact))));
+            guard->setStatus(series.bars.empty() ? QStringLiteral("no bars") : QString());
+        },
+        [guard, sequence](const QString& message) {
+            if (guard && sequence == guard->loadSequence()) guard->setStatus(message);
+        });
+}
+
+void QuotesTab::reloadLinkedPanes()
+{
+    for (size_t i = 0; i + 1 < static_cast<size_t>(m_layout) && i < m_panes.size(); ++i) {
+        if (!m_panes[i]->linked()) continue;
+        m_panes[i]->setSymbol(m_chartTicker);
+        reloadPane(m_panes[i]);
+    }
+}
+
+void QuotesTab::pushPaneIndicators()
+{
+    for (ChartPane* pane : m_panes) {
+        if (pane->series().bars.empty()) continue;
+        pane->runJs(QStringLiteral("chartApi.setIndicators(%1);").arg(QString::fromUtf8(QJsonDocument(indicatorsPayload(pane->series(), m_indicators)).toJson(QJsonDocument::Compact))));
+    }
+}
+
+QString QuotesTab::paneSummary() const
+{
+    QStringList lines;
+    for (size_t i = 0; i + 1 < static_cast<size_t>(m_layout) && i < m_panes.size(); ++i) {
+        const ChartPane* pane = m_panes[i];
+        lines << QStringLiteral("chart %1: %2 %3%4, %5 bars").arg(i + 2).arg(pane->linked() ? m_chartTicker : pane->symbol(), pane->timeframe(),
+                                                                     pane->linked() ? QStringLiteral(" (linked)") : QString()).arg(pane->series().bars.size());
+    }
+    return lines.isEmpty() ? QStringLiteral("1 chart") : QStringLiteral("%1 charts · ").arg(m_layout) + lines.join(" · ");
 }
 
 // ---- Technical indicators (TA-Lib) ----------------------------------------------------
@@ -1666,19 +2141,25 @@ void QuotesTab::saveIndicators() const
 
 void QuotesTab::pushIndicators()
 {
+    runJs(QStringLiteral("chartApi.setIndicators(%1);").arg(QString::fromUtf8(QJsonDocument(indicatorsPayload(m_bars, m_indicators)).toJson(QJsonDocument::Compact))));
+    pushPaneIndicators();
+}
+
+QJsonArray QuotesTab::indicatorsPayload(const MarketDataClient::BarSeries& series, const QJsonArray& specs)
+{
     QJsonArray payload;
-    if (!m_bars.bars.empty()) {
+    if (!series.bars.empty()) {
         ta::Bars bars;
-        bars.open.reserve(m_bars.bars.size());
-        for (const MarketDataClient::Bar& b : m_bars.bars) {
+        bars.open.reserve(series.bars.size());
+        for (const MarketDataClient::Bar& b : series.bars) {
             bars.open.push_back(b.open);
             bars.high.push_back(b.high);
             bars.low.push_back(b.low);
             bars.close.push_back(b.close);
             bars.volume.push_back(b.volume);
         }
-        for (int i = 0; i < m_indicators.size(); ++i) {
-            const QJsonObject spec = m_indicators.at(i).toObject();
+        for (int i = 0; i < specs.size(); ++i) {
+            const QJsonObject spec = specs.at(i).toObject();
             const QString func = spec.value("func").toString();
             const ta::FunctionInfo* info = ta::catalog().find(func.toStdString());
             if (!info) continue;
@@ -1725,7 +2206,7 @@ void QuotesTab::pushIndicators()
             payload.append(item);
         }
     }
-    runJs(QStringLiteral("chartApi.setIndicators(%1);").arg(QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact))));
+    return payload;
 }
 
 void QuotesTab::rebuildIndicatorsMenu()
@@ -1733,6 +2214,10 @@ void QuotesTab::rebuildIndicatorsMenu()
     if (!m_indicatorsMenu) return;
     m_indicatorsMenu->clear();
     m_indicatorsMenu->addAction("Browse indicators…", this, [this] { promptBrowseIndicators(); });
+    // Named indicator sets: built-in and saved; apply one or save the current chart's set.
+    QMenu* templates = m_indicatorsMenu->addMenu("Templates");
+    templates->setToolTipsVisible(true);
+    buildTemplatesMenu(templates);
     m_indicatorsMenu->addSeparator();
     // One submenu per TA-Lib category.
     const ta::Catalog& catalog = ta::catalog();
@@ -1983,12 +2468,15 @@ QString QuotesTab::themeJson() const
     t["accent2"] = m_theme.accent2.isEmpty() ? "#f59e0b" : m_theme.accent2;
     t["accent3"] = m_theme.accent3.isEmpty() ? "#22d3ee" : m_theme.accent3;
     t["crosshair"] = m_theme.textMuted.isEmpty() ? "#8294ad" : m_theme.textMuted;
+    t["fontScale"] = m_theme.fontScale > 0.0 ? m_theme.fontScale : 1.0;
     return QString::fromUtf8(QJsonDocument(t).toJson(QJsonDocument::Compact));
 }
 
 void QuotesTab::pushTheme()
 {
-    runJs(QStringLiteral("chartApi.setTheme(%1);").arg(themeJson()));
+    const QString script = QStringLiteral("chartApi.setTheme(%1);").arg(themeJson());
+    runJs(script);
+    for (ChartPane* pane : m_panes) pane->runJs(script);
 }
 
 const QStringList& QuotesTab::drawToolNames()

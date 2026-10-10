@@ -666,3 +666,26 @@ QColor blend(const QColor& a, const QColor& b, double t)
                             a.blueF() + (b.blueF() - a.blueF()) * t,
                             1.0);
 }
+
+#include <QtCore/QRegularExpression>
+#include <cmath>
+
+QString scaledStyleSheet(const QString& css, double scale)
+{
+    // View ▸ Text Size: every "font-size: Npx" in the sheet is multiplied, never below 9 px,
+    // so the whole interface tightens or loosens together on small or large screens.
+    if (std::abs(scale - 1.0) < 1e-6) return css;
+    static const QRegularExpression fontSize(QStringLiteral("font-size:\\s*(\\d+)px"));
+    QString out;
+    qsizetype last = 0;
+    auto it = fontSize.globalMatch(css);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch m = it.next();
+        out += css.mid(last, m.capturedStart() - last);
+        const int px = std::max(9, static_cast<int>(std::lround(m.captured(1).toInt() * scale)));
+        out += QStringLiteral("font-size: %1px").arg(px);
+        last = m.capturedEnd();
+    }
+    out += css.mid(last);
+    return out;
+}

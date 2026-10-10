@@ -382,6 +382,22 @@ void MainWindow::buildMenus()
     QMenu* view = menuBar()->addMenu("&View");
     m_darkAction = view->addAction("&Dark Mode", QKeySequence(Qt::CTRL | Qt::Key_D), this, [this] { applyTheme(!m_darkMode); });
     m_darkAction->setCheckable(true);
+    // Text size: one multiplier for the whole interface and the chart fonts, for laptop
+    // screens (Compact) or large monitors (Large). ⌘- / ⌘= step through the sizes.
+    QMenu* textSize = view->addMenu("&Text Size");
+    m_textSizeGroup = new QActionGroup(this);
+    m_textSizeGroup->setExclusive(true);
+    struct SizeOption { const char* label; double scale; };
+    const SizeOption sizes[] = { { "Compact (85%)", 0.85 }, { "Small (92%)", 0.92 }, { "Default (100%)", 1.0 }, { "Large (110%)", 1.1 } };
+    for (const SizeOption& size : sizes) {
+        QAction* action = textSize->addAction(size.label, this, [this, scale = size.scale] { setTextScale(scale); });
+        action->setCheckable(true);
+        action->setData(size.scale);
+        m_textSizeGroup->addAction(action);
+    }
+    textSize->addSeparator();
+    textSize->addAction("Smaller Text", QKeySequence(Qt::CTRL | Qt::Key_Minus), this, [this] { stepTextScale(-1); });
+    textSize->addAction("Larger Text", QKeySequence(Qt::CTRL | Qt::Key_Equal), this, [this] { stepTextScale(+1); });
     view->addSeparator();
     const char* tabNames[] = { "&Quotes", "&Pricer", "&Strategy", "S&cenarios", "Option C&hain", "&Heatmap" };
     for (int i = 0; i < 6; ++i) {
@@ -402,12 +418,34 @@ void MainWindow::buildMenus()
     help->addAction("&About Option Pricer", this, [this] { showAbout(); });
 }
 
+void MainWindow::setTextScale(double scale)
+{
+    QSettings().setValue("ui/textScale", std::clamp(scale, 0.7, 1.4));
+    applyTheme(m_darkMode);
+    statusBar()->showMessage(QStringLiteral("Text size %1%").arg(qRound(std::clamp(scale, 0.7, 1.4) * 100)), 4000);
+}
+
+void MainWindow::stepTextScale(int direction)
+{
+    static const double steps[] = { 0.85, 0.92, 1.0, 1.1 };
+    const double current = QSettings().value("ui/textScale", 1.0).toDouble();
+    int index = 2;
+    for (int i = 0; i < 4; ++i) if (std::abs(steps[i] - current) < 1e-6) index = i;
+    index = std::clamp(index + direction, 0, 3);
+    setTextScale(steps[index]);
+}
+
 void MainWindow::applyTheme(bool dark)
 {
     m_darkMode = dark;
-    const Theme theme = dark ? darkTheme() : lightTheme();
+    Theme theme = dark ? darkTheme() : lightTheme();
+    // Text size (View ▸ Text Size): scales every stylesheet font and the chart fonts.
+    theme.fontScale = std::clamp(QSettings().value("ui/textScale", 1.0).toDouble(), 0.7, 1.4);
     QApplication::setPalette(paletteFor(theme));
-    qApp->setStyleSheet(styleSheetFor(theme));
+    qApp->setStyleSheet(scaledStyleSheet(styleSheetFor(theme), theme.fontScale));
+    if (m_textSizeGroup) {
+        for (QAction* action : m_textSizeGroup->actions()) action->setChecked(std::abs(action->data().toDouble() - theme.fontScale) < 1e-6);
+    }
 
     {
         const QSignalBlocker blocker(m_themeToggle);
@@ -1183,7 +1221,7 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     }
                     if (!energyTicker.isEmpty() && m_sectorHeatmap->onTickerSelected) {
                         m_sectorHeatmap->onTickerSelected(energyTicker);
-                        for (int i = 0; i < 20; ++i) QCoreApplication::processEvents(QEventLoop::AllEvents, 250);   // bars download + paint
+                        waitFor(5000);   // bars download + paint
                         QString legend;
                         if (m_chartPopup) m_chartPopup->legendText([&legend](const QString& text) { legend = text; });
                         waitFor(500);
@@ -1195,7 +1233,7 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                         if (m_chartPopup && m_chartPopup->onTimeframe) {
                             const QString userTimeframe = m_quotes->timeframeLabel();
                             m_chartPopup->onTimeframe("15m");
-                            for (int i = 0; i < 16; ++i) QCoreApplication::processEvents(QEventLoop::AllEvents, 250);
+                            waitFor(4000);
                             qInfo("[live-smoke] popup timeframe 15m: quotes chart %s, popup buttons %s, live %s (%d s), size %dx%d",
                                   qPrintable(m_quotes->timeframeLabel()), qPrintable(m_chartPopup->timeframe()),
                                   m_chartPopup->liveChecked() ? "on" : "off", m_quotes->refreshIntervalSeconds(),
@@ -1364,6 +1402,50 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                 m_quotes->setIndicators(userIndicators);
                 m_quotes->setVolumeShown(userVolume);
                 qInfo("[live-smoke] indicators restored: %s", qPrintable(m_quotes->indicatorsSummary()));
+
+                // Charts (roadmap 8): comparison overlay, indicator template, multi-chart layout.
+                {
+                    const QStringList userCompare = m_quotes->compareSymbols();
+                    const int userLayout = m_quotes->chartLayout();
+                    QString error;
+                    const bool compared = m_quotes->addCompareSymbol("SPY", &error);
+                    waitMs(4000);   // a real wait: processEvents returns at once when the queue is empty
+                    qInfo("[live-smoke] compare SPY: %s%s, symbols %s", compared ? "ok" : "FAILED ", compared ? "" : qPrintable(error), qPrintable(m_quotes->compareSymbols().join(",")));
+                    m_quotes->debugLegendText([](const QString& legend) {
+                        QString oneLine = legend;
+                        oneLine.replace('\n', ' ');
+                        qInfo("[live-smoke] compare legend: %s", qPrintable(oneLine.left(400)));
+                    });
+                    waitMs(300);
+                    m_quotes->saveChartImage(shotDir + "/chart-compare.png", [](const QString& written) {
+                        qInfo("[live-smoke] compare chart image %s", written.isEmpty() ? "FAILED" : qPrintable(written));
+                    });
+                    waitMs(1200);
+                    m_quotes->clearCompareSymbols();
+                    for (const QString& symbol : userCompare) m_quotes->addCompareSymbol(symbol);
+                    const bool applied = m_quotes->applyIndicatorTemplate("Momentum", &error);
+                    waitMs(800);
+                    qInfo("[live-smoke] template Momentum: %s -> %s", applied ? "ok" : qPrintable("FAILED " + error), qPrintable(m_quotes->indicatorsSummary()));
+                    qInfo("[live-smoke] templates available: %s", qPrintable(m_quotes->indicatorTemplateNames().join(", ")));
+                    m_quotes->setIndicators(userIndicators);
+                    m_quotes->setVolumeShown(userVolume);
+                    m_quotes->setChartLayout(4);
+                    waitMs(8000);   // three more pages load and fetch bars
+                    qInfo("[live-smoke] layout 4: %s", qPrintable(m_quotes->paneSummary()));
+                    if (grab().save(shotDir + "/quotes-layout.png")) qInfo("[live-smoke] wrote quotes-layout.png");
+                    // The same features by voice / text.
+                    for (const char* phrase : { "compare with QQQ", "clear comparisons", "show 2 charts", "apply the trend following template", "single chart" }) {
+                        const bool handled = handleLocalCommand(QString::fromLatin1(phrase), feedback);
+                        qInfo("[live-smoke] local command (%s): %s -> %s", phrase, handled ? "handled" : "NOT handled", qPrintable(feedback.left(160)));
+                        waitMs(300);
+                    }
+                    m_quotes->setIndicators(userIndicators);
+                    m_quotes->setVolumeShown(userVolume);
+                    m_quotes->clearCompareSymbols();
+                    for (const QString& symbol : userCompare) m_quotes->addCompareSymbol(symbol);
+                    m_quotes->setChartLayout(userLayout);
+                    waitMs(500);
+                }
             }
             // OPTION_PRICER_AI="OpenAI/gpt-4.1-mini" or "Ollama/llama3.2:latest" selects the provider under test.
             const QString aiOverride = qEnvironmentVariable("OPTION_PRICER_AI");

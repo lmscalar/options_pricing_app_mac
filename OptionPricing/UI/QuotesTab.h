@@ -28,6 +28,7 @@
 #include <vector>
 
 class ChartPopup;
+class ChartPane;
 
 class QuotesTab : public QWidget
 {
@@ -93,6 +94,37 @@ public:
     bool setChartType(const QString& type);
     /// Current chart type key: candles, bars, heikin or line.
     QString chartType() const;
+
+    // ---- Comparison overlays ----
+    // Other symbols drawn as lines over the price, all on a percentage scale (% change from
+    // the first visible bar), fetched on the chart's timeframe and refreshed with it.
+    static constexpr int kMaxCompare = 5;
+    QStringList compareSymbols() const { return m_compareSymbols; }
+    bool addCompareSymbol(const QString& symbol, QString* error = nullptr);
+    bool removeCompareSymbol(const QString& symbol);
+    void clearCompareSymbols();
+
+    // ---- Indicator templates ----
+    // Named indicator sets: built-in ones (Trend following, Momentum, …) and sets the user
+    // saved from the current chart. Applying one replaces the indicators and the volume switch.
+    QStringList indicatorTemplateNames() const;   ///< built-in names first, then saved
+    bool isBuiltinTemplate(const QString& name) const;
+    bool applyIndicatorTemplate(const QString& name, QString* error = nullptr);
+    bool saveIndicatorTemplate(const QString& name);
+    bool deleteIndicatorTemplate(const QString& name);
+
+    // ---- Multi-chart layout ----
+    // 1 to 4 charts: the main chart plus secondary panes (UI/ChartPane), each with its own
+    // symbol (or linked to the main one) and timeframe, sharing indicators, type and theme.
+    int chartLayout() const { return m_layout; }
+    bool setChartLayout(int charts);
+    /// One line per visible secondary chart: symbol, timeframe, bars loaded (logs, assistant).
+    QString paneSummary() const;
+
+    /// Bars as the chart page expects them ([{t,o,h,l,c,v}]); shared with the secondary panes and the pop-out.
+    static QJsonArray barsJson(const MarketDataClient::BarSeries& series);
+    /// Every indicator in `specs` computed with TA-Lib over `series`, as the chart page expects it.
+    static QJsonArray indicatorsPayload(const MarketDataClient::BarSeries& series, const QJsonArray& specs);
 
     // ---- Technical indicators (TA-Lib) ----
     // Each indicator is a JSON object {"func":"RSI","params":{"optInTimePeriod":14},"colors":["#rrggbb",...]}
@@ -215,6 +247,24 @@ private:
     void saveEarningsDates() const;
     void pushOptions();
     void pushTheme();
+    QJsonObject optionsJson() const;
+    // Comparison overlays
+    void loadCompareBars();
+    void pushCompare();
+    void rebuildCompareMenu();
+    void saveCompare() const;
+    // Indicator templates
+    void loadTemplates();
+    void saveTemplates() const;
+    void buildTemplatesMenu(QMenu* menu);
+    // Multi-chart layout
+    void applyChartLayout();
+    ChartPane* createPane();
+    void loadPanes();
+    void savePanes() const;
+    void reloadPane(ChartPane* pane);
+    void reloadLinkedPanes();
+    void pushPaneIndicators();
     /// Shows the app-wide ticker's row with the headline's figures and sends the live price to the chart.
     void syncActiveQuote();
     void pushLive();
@@ -253,6 +303,20 @@ private:
     QStringList m_pendingJs;
     QPointer<ChartPopup> m_mirror;                 ///< pop-out window showing a copy of the chart (may be null)
     std::map<QString, QString> m_mirrorState;      ///< last chartApi.set*(…) script per command, replayed into a new mirror
+    // Comparison overlays
+    QStringList m_compareSymbols;
+    std::map<QString, MarketDataClient::BarSeries> m_compareBars;
+    int m_compareSequence = 0;                     ///< increments per loadCompareBars(); stale responses are dropped
+    QToolButton* m_compareButton = nullptr;
+    QMenu* m_compareMenu = nullptr;
+    // Indicator templates saved by the user: name -> {"indicators": [...], "volume": bool}
+    QJsonObject m_templates;
+    // Multi-chart layout
+    int m_layout = 1;
+    QComboBox* m_layoutCombo = nullptr;
+    QWidget* m_chartArea = nullptr;
+    QGridLayout* m_chartGrid = nullptr;
+    std::vector<ChartPane*> m_panes;               ///< created on demand, at most three
     bool m_loadingChart = false;
     bool m_updating = false;
     bool m_autoSelecting = false;   ///< true while the first row is selected programmatically at start-up

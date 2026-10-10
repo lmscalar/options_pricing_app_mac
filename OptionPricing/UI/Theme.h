@@ -20,6 +20,7 @@ struct Theme {
     QString text;
     QString textStrong;
     QString textMuted;
+    double fontScale = 1.0;   ///< text size multiplier chosen in View ▸ Text Size; charts scale their fonts with it
     QString accent;
     QString accentHover;
     QString accentPressed;
@@ -60,6 +61,8 @@ QPalette paletteFor(const Theme& t);
 
 /// Application-wide stylesheet with the theme tokens substituted.
 QString styleSheetFor(const Theme& t);
+/// `css` with every font size multiplied by `scale` (View ▸ Text Size); 1.0 returns it unchanged.
+QString scaledStyleSheet(const QString& css, double scale);
 
 /// Applies the theme's look to a chart (background, axis colours, grid).
 void styleChart(QChart* chart, const Theme& t);

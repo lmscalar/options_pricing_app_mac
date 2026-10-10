@@ -37,6 +37,7 @@
 		F37617293079E30300F5524A /* OptimizerTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37617283079E30300F5524A /* OptimizerTab.cpp */; };
 		F376172E307A6DB400F5524A /* SurfaceView.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F376172D307A6DB400F5524A /* SurfaceView.cpp */; };
 		F3761731307A79FF00F5524A /* ChartPopup.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3761730307A79FF00F5524A /* ChartPopup.cpp */; };
+		F3761734307A86C200F5524A /* ChartPane.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3761733307A86C200F5524A /* ChartPane.cpp */; };
 		F3B6FB022988347000563EB6 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3B6FB012988347000563EB6 /* main.cpp */; };
 /* End PBXBuildFile section */
 
@@ -137,6 +138,8 @@
 		F376172D307A6DB400F5524A /* SurfaceView.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = SurfaceView.cpp; sourceTree = "<group>"; };
 		F376172F307A79F200F5524A /* ChartPopup.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ChartPopup.h; sourceTree = "<group>"; };
 		F3761730307A79FF00F5524A /* ChartPopup.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ChartPopup.cpp; sourceTree = "<group>"; };
+		F3761732307A86AE00F5524A /* ChartPane.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ChartPane.h; sourceTree = "<group>"; };
+		F3761733307A86C200F5524A /* ChartPane.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ChartPane.cpp; sourceTree = "<group>"; };
 		F3B6FAFE2988347000563EB6 /* OptionPricing */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = OptionPricing; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3B6FB012988347000563EB6 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -256,6 +259,8 @@
 				F376172D307A6DB400F5524A /* SurfaceView.cpp */,
 				F376172F307A79F200F5524A /* ChartPopup.h */,
 				F3761730307A79FF00F5524A /* ChartPopup.cpp */,
+				F3761732307A86AE00F5524A /* ChartPane.h */,
+				F3761733307A86C200F5524A /* ChartPane.cpp */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -408,6 +413,7 @@
 				F37616B330798BCD00F5524A /* SectorHeatmapTab.cpp in Sources */,
 				F3761731307A79FF00F5524A /* ChartPopup.cpp in Sources */,
 				F37616713078471300F5524A /* ChartPage.cpp in Sources */,
+				F3761734307A86C200F5524A /* ChartPane.cpp in Sources */,
 				F37616523077272300F5524A /* MainWindow.cpp in Sources */,
 				F37616363077241000F5524A /* Theme.cpp in Sources */,
 				F376168830787CC400F5524A /* AssistantClient.cpp in Sources */,

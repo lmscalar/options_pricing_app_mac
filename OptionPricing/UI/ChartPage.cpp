@@ -27,6 +27,10 @@ const char* const kControllerJs = R"js(
     // Implied move cone from the option market (host-computed, see QuotesTab::pushEventCone):
     // {enabled, symbol, points:[{t, up1, dn1, up2, dn2}], event:{t, label, up, down, up1, dn1}, caption}
     eventCone: null, coneSeries: [], coneFitFor: null, coneNeedsFit: false,
+    // Comparison overlays (host-fetched, see QuotesTab::pushCompare): [{symbol, color,
+    // points:[{t, c}]}]. With any present the right scale switches to percentage mode, so
+    // every series reads as % change from the first visible bar.
+    compare: [], compareSeries: [],
     // True until the user pans or zooms: re-renders then keep everything in view (the library's
     // fitContent is applied lazily, so a stored range read right after it can be stale).
     autoFit: true,
@@ -193,9 +197,20 @@ const char* const kControllerJs = R"js(
     paneHandle.addEventListener('dblclick', toggleExpanded);
   })();
 
+  // Fonts follow the host's text-size setting (theme.fontScale) and tighten in compact mode.
+  function fontScale() { return ((state.theme && state.theme.fontScale) || 1) * (state.options.compact ? 0.9 : 1); }
+  function axisFontSize() { return Math.max(8, Math.round(11 * fontScale())); }
+  function applyFonts() {
+    const s = fontScale();
+    const root = document.documentElement.style;
+    root.setProperty('--legend-size', Math.max(9, Math.round(12 * s)) + 'px');
+    root.setProperty('--legend-line', Math.max(14, Math.round(20 * s)) + 'px');
+    root.setProperty('--sym-size', Math.max(10, Math.round(14 * s)) + 'px');
+    root.setProperty('--pane-legend-size', Math.max(9, Math.round(11 * s)) + 'px');
+  }
   function chartOptions(theme, intraday) {
     return {
-      layout: { background: { type: 'solid', color: theme.bg }, textColor: theme.text, fontFamily: 'Menlo, SF Mono, monospace', fontSize: 11 },
+      layout: { background: { type: 'solid', color: theme.bg }, textColor: theme.text, fontFamily: 'Menlo, SF Mono, monospace', fontSize: axisFontSize() },
       grid: { vertLines: { color: theme.grid }, horzLines: { color: theme.grid } },
       rightPriceScale: { borderColor: theme.border, minimumWidth: AXIS_WIDTH, scaleMargins: { top: 0.08, bottom: layout().priceBottom } },
       // With panes below, only the bottom pane shows the time axis.
@@ -340,7 +355,30 @@ const char* const kControllerJs = R"js(
     state.overlays = [];
     for (const srs of state.coneSeries) { try { state.chart.removeSeries(srs); } catch (e) {} }
     state.coneSeries = [];
+    for (const srs of state.compareSeries) { try { state.chart.removeSeries(srs); } catch (e) {} }
+    state.compareSeries = [];
     removePanes();
+  }
+
+  // Comparison lines share the right scale with the price series; the scale is put in
+  // percentage mode so the symbols are comparable, and back to normal without them.
+  function renderCompare(intraday) {
+    const list = state.compare || [];
+    state.chart.priceScale('right').applyOptions({ mode: list.length ? LightweightCharts.PriceScaleMode.Percentage : LightweightCharts.PriceScaleMode.Normal });
+    for (const c of list) {
+      if (!c.points || !c.points.length) continue;
+      const srs = state.chart.addLineSeries({ color: c.color, lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: c.symbol, crosshairMarkerVisible: false });
+      srs.setData(c.points.map(p => ({ time: toTime(p.t, intraday), value: p.c })));
+      state.compareSeries.push(srs);
+    }
+  }
+  function compareChange(c, hoverT) {
+    // % change of a comparison symbol from its first point to the hovered (or last) point.
+    if (!c.points || !c.points.length) return null;
+    const first = c.points[0].c;
+    let p = c.points[c.points.length - 1];
+    if (hoverT !== undefined && hoverT !== null) { const hit = c.points.find(x => x.t === hoverT); if (hit) p = hit; }
+    return first ? (p.c - first) / first * 100 : null;
   }
 
   // The implied move cone: ±1 sd solid and ±2 sd dashed bands from the last bar forward,
@@ -464,6 +502,7 @@ const char* const kControllerJs = R"js(
 
   function render(fit) {
     ensureChart();
+    applyFonts();
     // Re-creating the series makes the library scroll to the latest point at its current bar
     // spacing, which pushes the early bars off the left edge; keep the user's range instead.
     const keepRange = (!fit && !state.autoFit && state.chart && state.bars.length) ? state.chart.timeScale().getVisibleLogicalRange() : null;
@@ -495,6 +534,7 @@ const char* const kControllerJs = R"js(
       state.chart.priceScale('vol').applyOptions({ scaleMargins: lay.vol });
       state.volume.setData(bars.map(b => ({ time: toTime(b.t, intraday), value: b.v, color: alpha(b.c >= b.o ? theme.up : theme.down, 0.45) })));
     }
+    renderCompare(intraday);
     renderIndicators();
     renderEventCone();
     applyLiveLine();
@@ -572,10 +612,13 @@ const char* const kControllerJs = R"js(
     const pct = basis ? change / basis * 100 : 0;
     const color = change >= 0 ? theme.up : theme.down;
     const typeName = { candles: 'Candles', bars: 'Bars', heikin: 'Heikin-Ashi', line: 'Line' }[opts.type] || '';
+    // Compact (shared-space) legend: symbol, timeframe, close and change only; no company
+    // name, O/H/L or session note, so small charts stay readable.
+    const compact = !!opts.compact;
     let html = '<span class="sym">' + (state.meta.symbol || '') + '</span>';
-    if (state.meta.name) html += '<span class="name">' + state.meta.name + '</span>';
-    html += '<span class="tf">' + (state.meta.timeframe || '') + ' · ' + typeName + '</span>';
-    html += '<span>O <b>' + fmt(bar.o) + '</b></span><span>H <b>' + fmt(bar.h) + '</b></span><span>L <b>' + fmt(bar.l) + '</b></span>';
+    if (state.meta.name && !compact) html += '<span class="name">' + state.meta.name + '</span>';
+    html += '<span class="tf">' + (state.meta.timeframe || '') + (compact ? '' : ' · ' + typeName) + '</span>';
+    if (!compact) html += '<span>O <b>' + fmt(bar.o) + '</b></span><span>H <b>' + fmt(bar.h) + '</b></span><span>L <b>' + fmt(bar.l) + '</b></span>';
     html += '<span>C <b style="color:' + color + '">' + fmt(bar.c) + '</b></span>';
     html += '<span style="color:' + color + '">' + (change >= 0 ? '+' : '') + fmt(change) + ' (' + (change >= 0 ? '+' : '') + fmt(pct) + '%)</span>';
     html += '<span>Vol <b>' + fmtVolume(bar.v || 0) + '</b></span>';
@@ -599,7 +642,18 @@ const char* const kControllerJs = R"js(
       }
       html += '</span>';
     }
-    if (state.meta.asOf) html += '<span class="asof">' + state.meta.asOf + '</span>';
+    // Comparison symbols: % change from the first charted point to the hovered (or last) one;
+    // the price series' own figure on the same basis sits first so the group reads as a race.
+    if (state.compare && state.compare.length && source.length) {
+      const base = source[0].c;
+      const mainPct = base ? (bar.c - base) / base * 100 : null;
+      html += '<span class="tf">vs</span><span style="color:' + theme.accent + '">' + (state.meta.symbol || '') + ' <b>' + (mainPct === null ? '–' : (mainPct >= 0 ? '+' : '') + fmt(mainPct) + '%') + '</b></span>';
+      for (const c of state.compare) {
+        const pct = compareChange(c, hovering ? bar.t : null);
+        html += '<span style="color:' + c.color + '">' + c.symbol + ' <b>' + (pct === null ? '–' : (pct >= 0 ? '+' : '') + fmt(pct) + '%') + '</b></span>';
+      }
+    }
+    if (state.meta.asOf && !compact) html += '<span class="asof">' + state.meta.asOf + '</span>';
     legend.innerHTML = html;
   }
 
@@ -954,6 +1008,8 @@ const char* const kControllerJs = R"js(
     setIndicators: function (list) { state.indicators = Array.isArray(list) ? list : []; if (state.chart) render(false); },
     // Implied move cone from the option market (null hides it); re-renders without changing the zoom.
     setEventCone: function (spec) { state.eventCone = spec || null; if (state.chart) render(false); },
+    // Comparison overlays [{symbol, color, points:[{t, c}]}] (empty list = none); re-renders without changing the zoom.
+    setCompare: function (list) { state.compare = Array.isArray(list) ? list : []; if (state.chart) render(false); },
     // Restores autoscale, the default zoom/pan and the cursor tool; bars are re-rendered.
     reset: resetView,
     // Live quote for the charted symbol: {price, previousClose, source, asOf} or null.
@@ -1083,7 +1139,7 @@ QString chartPageHtml()
   .pane { position: relative; box-sizing: border-box; border: 1px solid #273449; border-radius: 4px; overflow: hidden; }
   .pane-chart { position: absolute; inset: 0; }
   .pane-legend { position: absolute; left: 10px; top: 4px; z-index: 5; pointer-events: none; display: flex; gap: 0 12px;
-                 font: 11px Menlo, "SF Mono", monospace; color: #c7d2e3; line-height: 18px; }
+                 font: var(--pane-legend-size, 11px) Menlo, "SF Mono", monospace; color: #c7d2e3; line-height: 18px; }
   .pane-legend .title { font-weight: 700; }
   .pane-legend b { font-weight: 600; }
   .pane-btn { position: absolute; right: 86px; top: 3px; z-index: 6; width: 20px; height: 18px; line-height: 18px; text-align: center;
@@ -1104,8 +1160,8 @@ QString chartPageHtml()
   #menu .item:hover { background: var(--menu-hover); color: #ffffff; }
   #menu .sep { height: 1px; margin: 4px 0; background: rgba(130,148,173,0.35); }
   #legend { position: absolute; left: 12px; top: 8px; z-index: 5; pointer-events: none;
-            font: 12px Menlo, "SF Mono", monospace; color: #c7d2e3; display: flex; flex-wrap: wrap; gap: 0 14px; line-height: 20px; }
-  #legend .sym { font-weight: 700; font-size: 14px; color: #f59e0b; }
+            font: var(--legend-size, 12px) Menlo, "SF Mono", monospace; color: #c7d2e3; display: flex; flex-wrap: wrap; gap: 0 14px; line-height: var(--legend-line, 20px); }
+  #legend .sym { font-weight: 700; font-size: var(--sym-size, 14px); color: #f59e0b; }
   #legend .name, #legend .tf, #legend .asof { color: #8294ad; }
   #legend b { color: #f3f6fb; font-weight: 600; }
   #eventCaption { position: absolute; left: 12px; bottom: 34px; z-index: 5; pointer-events: none; display: none;

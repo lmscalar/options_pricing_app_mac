@@ -861,6 +861,54 @@ bool MainWindow::handleLocalCommand(const QString& rawText, QString& feedback)
             return true;
         }
     }
+    // Charts: "compare (AAPL) with SPY", "remove SPY from the comparison", "clear comparisons",
+    // "show 4 charts" / "single chart", "apply the momentum template", "save this as template X".
+    QRegularExpression compareRe("^(?:please\\s+)?(?:compare|overlay)\\s+(?:(?:it|this|the\\s+chart|[A-Za-z.]{1,6})\\s+)?(?:with|to|against|vs\\.?|versus)\\s+([A-Za-z.]{1,6})(?:\\s+on\\s+the\\s+chart)?$",
+                                 QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = compareRe.match(lower); m.hasMatch()) {
+        const QString symbol = symbolFrom(m.captured(1));
+        QString error;
+        if (!m_quotes->addCompareSymbol(symbol, &error)) { feedback = error; return true; }
+        m_tabs->setCurrentWidget(m_quotes);
+        feedback = QStringLiteral("Comparing %1 with %2 on a percentage scale.").arg(m_quotes->chartTicker(), m_quotes->compareSymbols().join(", "));
+        return true;
+    }
+    QRegularExpression uncompareRe("^(?:please\\s+)?(?:remove|drop|clear)\\s+(?:the\\s+)?(?:([A-Za-z.]{1,6})\\s+(?:from\\s+)?(?:the\\s+)?)?(?:comparisons?|compare\\s+lines?|overlays?)$",
+                                   QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = uncompareRe.match(lower); m.hasMatch()) {
+        const QString symbol = m.captured(1).trimmed();
+        if (symbol.isEmpty() || symbol == "all") { m_quotes->clearCompareSymbols(); feedback = "Comparison lines cleared."; return true; }
+        feedback = m_quotes->removeCompareSymbol(symbolFrom(symbol)) ? QStringLiteral("Removed %1 from the comparison.").arg(symbolFrom(symbol))
+                                                                     : QStringLiteral("%1 was not being compared.").arg(symbolFrom(symbol));
+        return true;
+    }
+    QRegularExpression layoutRe("^(?:please\\s+)?(?:(?:show|use|switch\\s+to|set|give\\s+me|display)\\s+)?(?:a\\s+|the\\s+)?(one|single|1|two|2|three|3|four|4)[- ]?(?:charts?|chart\\s+layout|panes?|up)(?:\\s+layout)?$",
+                                QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = layoutRe.match(lower); m.hasMatch()) {
+        static const QHash<QString, int> words = { { "one", 1 }, { "single", 1 }, { "1", 1 }, { "two", 2 }, { "2", 2 }, { "three", 3 }, { "3", 3 }, { "four", 4 }, { "4", 4 } };
+        const int charts = words.value(m.captured(1).toLower(), 1);
+        m_quotes->setChartLayout(charts);
+        m_tabs->setCurrentWidget(m_quotes);
+        feedback = charts == 1 ? QStringLiteral("Showing a single chart.") : QStringLiteral("Showing %1 charts: %2").arg(charts).arg(m_quotes->paneSummary());
+        return true;
+    }
+    QRegularExpression templateRe("^(?:please\\s+)?(?:apply|use|load|switch\\s+to|show)\\s+(?:the\\s+)?(.+?)\\s+(?:indicator\\s+)?(?:template|preset|study\\s+set)$",
+                                  QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = templateRe.match(text); m.hasMatch()) {
+        QString error;
+        if (!m_quotes->applyIndicatorTemplate(m.captured(1), &error)) { feedback = error; return true; }
+        m_tabs->setCurrentWidget(m_quotes);
+        feedback = QStringLiteral("Applied the %1 template. Indicators now: %2.").arg(m.captured(1).trimmed(), m_quotes->indicatorsSummary());
+        return true;
+    }
+    QRegularExpression saveTemplateRe("^(?:please\\s+)?save\\s+(?:this|these|the\\s+current|my|the)?\\s*(?:chart|indicators?|studies|set|setup)?\\s*(?:as\\s+(?:a\\s+|the\\s+)?(?:indicator\\s+)?template\\s+|as\\s+)[\"“']?(.+?)[\"”']?$",
+                                      QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = saveTemplateRe.match(text); m.hasMatch() && lower.contains("template")) {
+        const QString name = m.captured(1).trimmed();
+        feedback = m_quotes->saveIndicatorTemplate(name) ? QStringLiteral("Saved the current indicators as template '%1'.").arg(name)
+                                                         : QStringLiteral("Could not save '%1' (built-in names are reserved).").arg(name);
+        return true;
+    }
     // "pull up / show / open / load the option chain(s) for AAPL"
     QRegularExpression chainRe("^(?:please\\s+)?(?:pull\\s+up|show(?:\\s+me)?|open|load|bring\\s+up|display|get)\\s+(?:the\\s+)?(?:options?\\s*chains?|chains?)\\s+(?:for|of|on)\\s+([A-Za-z.]{1,6})$",
                                QRegularExpression::CaseInsensitiveOption);

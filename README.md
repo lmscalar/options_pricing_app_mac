@@ -253,6 +253,22 @@ of every Greek. Help ▸ User Guide lists every page.
   “alert me if NVDA goes above 240”, “notify me when AAPL drops 3%”, “alert me when the
   RSI on TSLA is above 70”, “alert me when SPY implied vol goes above 25%”; the assistant
   also has `create_alert`, `list_alerts` and `delete_alert`.
+- **Chart layouts, comparisons and templates** (Quotes tab). A **Layout** selector shows
+  one to four charts: the main chart plus secondary panes (`UI/ChartPane`), each with its
+  own symbol or **Link**ed to the main symbol (a second timeframe of the same stock) and
+  its own timeframe; they share indicators, chart style and theme, reload intraday bars on
+  the refresh interval, and **Main ↗** promotes a pane's symbol to the whole app
+  (`quotes/chartLayout`, `quotes/chartPanes`). **Compare** overlays up to five symbols
+  (quick picks SPY, QQQ, IWM and the app-wide ticker) as lines fetched on the chart's
+  timeframe; the price axis switches to percentage mode so every series is the change from
+  the first visible bar, and the legend shows each symbol's move (`quotes/compare`).
+  **Templates** in the Indicators menu apply a named set in one step: built-in Trend
+  following, Momentum, Mean reversion, Volume & strength and Clean chart, plus sets saved
+  from the current chart (`quotes/indicatorTemplates`). The assistant understands "compare
+  with SPY", "show 4 charts" and "apply the momentum template". Charts that share the
+  space use a compact legend (symbol, timeframe, close and change), and **View ▸ Text
+  Size** (Compact 85% … Large 110%, ⌘- / ⌘=) scales every interface and chart font
+  (`ui/textScale`) for laptop screens or large monitors.
 - **Sector Heatmap**: a market treemap in the style of professional terminals. Some 180
   large caps are grouped into sectors (Internet, Software, Semis, Hardware, Consumer,
   Healthcare, Finance, Energy, Industrials, Utilities, Materials, Real Estate); every tile
