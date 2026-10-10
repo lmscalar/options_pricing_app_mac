@@ -151,6 +151,20 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   put-call parity table per expiry with the implied forward, the dividend yield that
   reconciles it, and the worst-offending strike. Double-click a cell or row to price it.
 
+- **Trade Ideas**: a scanner over the option chains already in memory (every stored
+  chain, the watchlist or the current ticker). The market-scan table shows each chain's
+  ATM implied vol at the chosen tenor, the term slope to the next tenor, 25-delta put skew,
+  the straddle-implied one-sigma move, put/call volume and open-interest ratios and the
+  median bid-ask spread near the money. Screens (Premium selling, Directional debit,
+  Volatility, Income on shares, All strategies) pick the strategy family; strikes are
+  delta-targeted on the listed ladder (30-delta shorts, 15-delta wings), legs are marked at
+  chain mids with the chain's implied vols, and every candidate is analysed for credit or
+  debit, max profit and loss, breakevens, probability of profit at expiry and return on
+  risk, then ranked by probability-weighted return on risk discounted for wide markets.
+  Filters: expiry window, minimum probability, minimum return on risk, maximum spread,
+  minimum open interest, bias, defined risk only. Double-click an idea to open it in the
+  Strategy tab, or book it straight into the Portfolio. The assistant runs scans too
+  ("scan for premium selling ideas on the watchlist").
 - **Portfolio**: the book, organised as named **strategies**. Each strategy is its own
   book of positions (New, Save as, Rename, Delete under **Books ▾**; every position shows
   its strategy; the Add dialog, CSV import and the assistant can target a strategy by

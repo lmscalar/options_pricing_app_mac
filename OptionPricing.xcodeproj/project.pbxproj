@@ -31,6 +31,7 @@
 		F37616B330798BCD00F5524A /* SectorHeatmapTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616B230798BCD00F5524A /* SectorHeatmapTab.cpp */; };
 		F37616BA30799E4600F5524A /* PortfolioTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616B930799E4600F5524A /* PortfolioTab.cpp */; };
 		F37616BD3079A01500F5524A /* AlertsTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616BC3079A01500F5524A /* AlertsTab.cpp */; };
+		F37616C03079B5D400F5524A /* ScannerTab.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F37616BF3079B5D400F5524A /* ScannerTab.cpp */; };
 		F3B6FB022988347000563EB6 /* main.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F3B6FB012988347000563EB6 /* main.cpp */; };
 /* End PBXBuildFile section */
 
@@ -111,10 +112,13 @@
 		F37616B230798BCD00F5524A /* SectorHeatmapTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = SectorHeatmapTab.cpp; sourceTree = "<group>"; };
 		F37616B430799C8400F5524A /* Portfolio.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Portfolio.h; sourceTree = "<group>"; };
 		F37616B530799CB800F5524A /* Risk.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Risk.h; sourceTree = "<group>"; };
+		F37616B6307A0000005CA11E /* Scanner.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Scanner.h; sourceTree = "<group>"; };
 		F37616B830799D3100F5524A /* PortfolioTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PortfolioTab.h; sourceTree = "<group>"; };
 		F37616B930799E4600F5524A /* PortfolioTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PortfolioTab.cpp; sourceTree = "<group>"; };
 		F37616BB30799F6D00F5524A /* AlertsTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AlertsTab.h; sourceTree = "<group>"; };
 		F37616BC3079A01500F5524A /* AlertsTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AlertsTab.cpp; sourceTree = "<group>"; };
+		F37616BE3079B52400F5524A /* ScannerTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ScannerTab.h; sourceTree = "<group>"; };
+		F37616BF3079B5D400F5524A /* ScannerTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ScannerTab.cpp; sourceTree = "<group>"; };
 		F3B6FAFE2988347000563EB6 /* OptionPricing */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = OptionPricing; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3B6FB012988347000563EB6 /* main.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = main.cpp; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -162,6 +166,7 @@
 				F37616AE30798AD700F5524A /* Treemap.h */,
 				F37616B430799C8400F5524A /* Portfolio.h */,
 				F37616B530799CB800F5524A /* Risk.h */,
+				F37616B6307A0000005CA11E /* Scanner.h */,
 			);
 			path = Pricing;
 			sourceTree = "<group>";
@@ -218,6 +223,8 @@
 				F37616B930799E4600F5524A /* PortfolioTab.cpp */,
 				F37616BB30799F6D00F5524A /* AlertsTab.h */,
 				F37616BC3079A01500F5524A /* AlertsTab.cpp */,
+				F37616BE3079B52400F5524A /* ScannerTab.h */,
+				F37616BF3079B5D400F5524A /* ScannerTab.cpp */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -358,6 +365,7 @@
 				F376166A3077EFF800F5524A /* HeatmapTab.cpp in Sources */,
 				F37616BA30799E4600F5524A /* PortfolioTab.cpp in Sources */,
 				F37616743078478900F5524A /* QuotesTab.cpp in Sources */,
+				F37616C03079B5D400F5524A /* ScannerTab.cpp in Sources */,
 				F3B6FB022988347000563EB6 /* main.cpp in Sources */,
 				F376163D3077248000F5524A /* MarketState.cpp in Sources */,
 				F376167D30786C6A00F5524A /* ChainStore.cpp in Sources */,

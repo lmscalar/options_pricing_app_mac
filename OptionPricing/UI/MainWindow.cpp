@@ -11,6 +11,7 @@
 #include "SectorHeatmapTab.h"
 #include "PortfolioTab.h"
 #include "AlertsTab.h"
+#include "ScannerTab.h"
 #include "PricerTab.h"
 #include "QuotesTab.h"
 #include "VolatilityTab.h"
@@ -74,6 +75,19 @@ void MainWindow::buildUi()
     m_alerts = new AlertsTab(m_state, this);
     m_alerts->setStore(&m_store);
     m_alerts->onTickerSelected = [this](const QString& ticker) { showTicker(ticker, false); };
+    m_scanner = new ScannerTab(m_state, this);
+    m_scanner->setStore(&m_store);
+    m_scanner->watchlistProvider = [this] { return m_quotes->watchlist(); };
+    m_scanner->onTickerSelected = [this](const QString& ticker) { showTicker(ticker, false); };
+    m_scanner->onOpenInStrategy = [this](const QString& ticker, const pricing::Position& position) {
+        // Load the ticker's chain first so the Strategy tab marks the legs against it, then hand over the legs.
+        if (m_state.underlyingTicker != ticker) showTicker(ticker, false);
+        m_strategy->loadPosition(position);
+        m_tabs->setCurrentWidget(m_strategy);
+    };
+    m_scanner->onAddToPortfolio = [this](const QString& ticker, const pricing::Position& position) {
+        m_portfolio->importStrategy(position, ticker);
+    };
     m_alerts->onTriggered = [this](const AlertsTab::Trigger& trigger) {
         statusBar()->showMessage(QStringLiteral("Alert: %1").arg(trigger.message), 30000);
         showAlertBanner(trigger.symbol, trigger.message);
@@ -158,6 +172,7 @@ void MainWindow::buildUi()
     m_tabs->addTab(m_strategy, "Strategy");
     m_tabs->addTab(m_scenario, "Scenarios");
     m_tabs->addTab(m_chain, "Option Chain");
+    m_tabs->addTab(m_scanner, "Trade Ideas");
     m_tabs->addTab(m_heatmap, "Heatmap");
     m_tabs->addTab(m_sectorHeatmap, "Sector Heatmap");
     m_tabs->addTab(m_volatility, "Volatility");
@@ -387,6 +402,7 @@ void MainWindow::applyTheme(bool dark)
     m_sectorHeatmap->applyTheme(theme);
     m_portfolio->applyTheme(theme);
     m_alerts->applyTheme(theme);
+    m_scanner->applyTheme(theme);
     m_assistant->applyTheme(theme);
     m_assistantBusy->setColor(QColor(theme.accent3.isEmpty() ? "#22d3ee" : theme.accent3));
 
@@ -674,6 +690,7 @@ QString MainWindow::currentResultsCsv() const
     if (current == m_heatmap) return m_heatmap->resultsCsv();
     if (current == m_quotes) return m_quotes->resultsCsv();
     if (current == m_volatility) return m_volatility->resultsCsv();
+    if (current == m_scanner) return m_scanner->resultsCsv();
     return QString();
 }
 
@@ -790,8 +807,9 @@ QStringList MainWindow::captureTabs(const QString& directory)
     QStringList paths;
     m_sectorHeatmap->loadSampleData();   // offline treemap with synthetic moves
     m_portfolio->loadSampleData(true);    // offline book with synthetic marks and history (not saved)
-    const char* names[] = { "quotes", "portfolio", "pricer", "strategy", "scenarios", "chain", "heatmap", "sector-heatmap", "volatility", "alerts" };
-    for (int i = 0; i < m_tabs->count() && i < 7; ++i) {
+    m_scanner->loadSampleData();          // synthetic chains for three tickers, scanned
+    const char* names[] = { "quotes", "portfolio", "pricer", "strategy", "scenarios", "chain", "ideas", "heatmap", "sector-heatmap", "volatility", "alerts" };
+    for (int i = 0; i < m_tabs->count() && i < 8; ++i) {
         m_tabs->setCurrentIndex(i);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
         QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
@@ -958,10 +976,43 @@ void MainWindow::runLiveSmoke(const QString& ticker)
             const QVariant userBooks = QSettings().value("portfolio/books");
             const QVariant userActiveBook = QSettings().value("portfolio/activeBook");
             const QVariant userAlerts = QSettings().value("alerts/rules");
-            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_volatility, m_sectorHeatmap, m_portfolio, m_alerts, m_quotes }) {
+            for (QWidget* tab : std::initializer_list<QWidget*>{ m_heatmap, m_chain, m_strategy, m_volatility, m_sectorHeatmap, m_portfolio, m_alerts, m_scanner, m_quotes }) {
                 m_tabs->setCurrentWidget(tab);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
                 QCoreApplication::processEvents(QEventLoop::AllEvents, 300);
+                if (tab == m_scanner) {
+                    // Scan every chain in memory with the premium-selling screen, then the volatility screen on the current ticker.
+                    auto waitFor = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
+                    // The scan settings persist; stash the user's and put them back afterwards.
+                    std::map<QString, QVariant> userScan;
+                    for (const QString& key : QSettings().allKeys()) if (key.startsWith("scanner/")) userScan[key] = QSettings().value(key);
+                    m_scanner->setScreen("Premium selling");
+                    m_scanner->setBias("Any");
+                    m_scanner->setUniverse("all");
+                    m_scanner->runScan();
+                    waitFor(300);
+                    qInfo("[live-smoke] ideas: %s", qPrintable(m_scanner->summaryText().left(1500)));
+                    if (grab().save(shotDir + "/ideas.png")) qInfo("[live-smoke] wrote ideas.png");
+                    // The instructions dialog: capture it, then dismiss it.
+                    QTimer::singleShot(600, this, [shotDir] {
+                        if (QWidget* modal = QApplication::activeModalWidget()) {
+                            if (modal->grab().save(shotDir + "/ideas-help.png")) qInfo("[live-smoke] wrote ideas-help.png");
+                            if (auto* dialog = qobject_cast<QDialog*>(modal)) dialog->reject();
+                        }
+                    });
+                    m_scanner->showHelp();
+                    waitFor(200);
+                    m_scanner->setScreen("Volatility");
+                    m_scanner->setUniverse("current");
+                    m_scanner->runScan();
+                    waitFor(200);
+                    qInfo("[live-smoke] ideas (volatility, current): %zu idea(s); %s", m_scanner->ideas().size(), qPrintable(m_scanner->summaryText().section('\n', 1, 2).left(400)));
+                    const bool opened = !m_scanner->ideas().empty() && m_scanner->openIdea(0);
+                    qInfo("[live-smoke] idea -> Strategy tab: %s (%zu legs)", opened ? "ok" : "none", m_strategy->position().legs.size());
+                    for (const QString& key : QSettings().allKeys()) if (key.startsWith("scanner/")) QSettings().remove(key);
+                    for (const auto& [key, value] : userScan) QSettings().setValue(key, value);
+                    continue;
+                }
                 if (tab == m_alerts) {
                     // Parse a few spoken forms, then arm one that fires at once (price above 1) to exercise the banner.
                     auto waitFor = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };

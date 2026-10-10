@@ -13,6 +13,7 @@
 #include "Formatting.h"
 #include "HeatmapTab.h"
 #include "SectorHeatmapTab.h"
+#include "ScannerTab.h"
 #include "PortfolioTab.h"
 #include "AlertsTab.h"
 #include "PricerTab.h"
@@ -193,6 +194,7 @@ QWidget* MainWindow::tabByName(const QString& name) const
     if (wanted.contains("chain") || wanted.contains("option")) return m_chain;
     if (wanted.contains("vol")) return m_volatility;
     if (wanted.contains("sector") || wanted.contains("market map") || wanted.contains("treemap")) return m_sectorHeatmap;
+    if (wanted.contains("idea") || wanted.contains("scan") || wanted.contains("screen")) return m_scanner;
     if (wanted.contains("portfolio") || wanted.contains("position") || wanted.contains("book") || wanted.contains("risk")) return m_portfolio;
     if (wanted.contains("alert")) return m_alerts;
     if (wanted.contains("heat")) return m_heatmap;
@@ -251,6 +253,8 @@ void MainWindow::assistantContext(std::function<void(const QString&, const QImag
         s << m_alerts->summaryText() << "\nAlerts (CSV):\n" << clip(m_alerts->rulesCsv(), 4000);
     } else if (current == m_portfolio) {
         s << m_portfolio->summaryText() << "\nPositions (CSV):\n" << clip(m_portfolio->resultsCsv(), 6000) << "\nRisk (CSV):\n" << clip(m_portfolio->riskCsv(), 3000);
+    } else if (current == m_scanner) {
+        s << m_scanner->summaryText() << "\nMarket scan (CSV):\n" << clip(m_scanner->metricsCsv(), 4000) << "\nIdeas (CSV):\n" << clip(m_scanner->resultsCsv(), 7000);
     } else if (current == m_sectorHeatmap) {
         s << m_sectorHeatmap->summaryText() << "\nSector Heatmap (CSV: sector, ticker, name, market cap bn, last, performance %):\n" << clip(m_sectorHeatmap->resultsCsv(), 9000);
     } else if (current == m_strategy) {
@@ -350,6 +354,14 @@ std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
     tools.push_back({ "run_portfolio_risk",
                       "Recomputes portfolio risk: parametric delta-gamma, historical simulation and Monte Carlo VaR / CVaR (expected shortfall), component VaR by underlying, the spot x vol stress grid and the time-decay ladder.",
                       schema({ { "confidence", prop("number", "Confidence level: 95, 97.5 or 99 (percent)") }, { "horizon_days", prop("integer", "Holding period in trading days (1-60)") } }) });
+    tools.push_back({ "scan_trade_ideas",
+                      "Runs the Trade Ideas scanner over the option chains in memory and returns the market scan (ATM IV, term slope, skew, expected move, put/call ratios) and the ranked ideas with legs, credit/debit, max profit/loss, probability of profit and return on risk.",
+                      schema({ { "screen", prop("string", "Premium selling | Directional debit | Volatility | Income on shares | All strategies (default: current)") },
+                               { "bias", prop("string", "Any | Bullish | Bearish | Neutral | Volatile") },
+                               { "universe", prop("string", "all (every stored chain) | watchlist | current (the ticker on screen)") },
+                               { "min_days", prop("integer", "Earliest expiry in days") }, { "max_days", prop("integer", "Latest expiry in days") },
+                               { "min_probability", prop("number", "Minimum probability of profit, percent") },
+                               { "min_return_on_risk", prop("number", "Minimum max profit / max loss, percent") } }) });
     tools.push_back({ "get_sector_heatmap",
                       "Returns sector and stock performance from the Sector Heatmap (large caps grouped by sector, cap-weighted sector moves, top movers and laggards, CSV of every stock) for a period: Daily, 1W, 30D, 90D or YTD. Optionally switches the view to stocks or sectors.",
                       schema({ { "period", prop("string", "Performance period (default: current)", QJsonArray{ "Daily", "1W", "30D", "90D", "YTD" }) },
@@ -524,6 +536,16 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
         m_tabs->setCurrentWidget(m_portfolio);
         m_portfolio->runRisk();
         done(m_portfolio->summaryText() + "\n\nRisk (CSV):\n" + clip(m_portfolio->riskCsv(), 4000), false);
+    } else if (name == "scan_trade_ideas") {
+        if (input.contains("screen") && !m_scanner->setScreen(input.value("screen").toString())) return fail(QStringLiteral("Unknown screen. Use one of: %1").arg(m_scanner->screenNames().join(", ")));
+        if (input.contains("bias") && !m_scanner->setBias(input.value("bias").toString())) return fail("Unknown bias. Use Any, Bullish, Bearish, Neutral or Volatile.");
+        if (input.contains("universe") && !m_scanner->setUniverse(input.value("universe").toString())) return fail("Unknown universe. Use all, watchlist or current.");
+        if (input.contains("min_days") || input.contains("max_days")) m_scanner->setDays(input.value("min_days").toInt(0), input.value("max_days").toInt(0));
+        if (input.contains("min_probability")) m_scanner->setMinProbability(input.value("min_probability").toDouble());
+        if (input.contains("min_return_on_risk")) m_scanner->setMinReturnOnRisk(input.value("min_return_on_risk").toDouble());
+        m_tabs->setCurrentWidget(m_scanner);
+        m_scanner->runScan();
+        done(m_scanner->summaryText() + "\n\nMarket scan (CSV):\n" + clip(m_scanner->metricsCsv(), 4000) + "\n\nIdeas (CSV):\n" + clip(m_scanner->resultsCsv(), 7000), false);
     } else if (name == "get_sector_heatmap") {
         const QString period = input.value("period").toString();
         if (!period.isEmpty() && !m_sectorHeatmap->setPeriod(period)) return fail(QStringLiteral("Unknown period '%1'. Use Daily, 1W, 30D, 90D or YTD.").arg(period));
@@ -616,6 +638,29 @@ bool MainWindow::handleLocalCommand(const QString& rawText, QString& feedback)
     const QString lower = text.toLower();
     auto symbolFrom = [](const QString& s) { return s.trimmed().toUpper().remove(QRegularExpression("[^A-Z.]")); };
 
+    // Trade ideas: "scan for ideas", "find premium selling ideas on the watchlist", "scan for bullish trades".
+    QRegularExpression scanRe("^(?:please\\s+)?(?:scan|screen|look|search|find)(?:\\s+(?:for|me))*\\s+(.*?)(?:\\s+(?:ideas?|trades?|setups?|opportunit(?:y|ies)))?(?:\\s+(?:on|in|across|over)\\s+(?:the\\s+)?(watchlist|all\\s+chains|everything|this\\s+ticker|current\\s+ticker|[A-Za-z.]{1,6}))?$",
+                              QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = scanRe.match(text); m.hasMatch() && (lower.contains("idea") || lower.contains("trade") || lower.contains("setup") || lower.contains("opportunit") || lower.startsWith("scan"))) {
+        const QString qualifiers = m.captured(1).toLower();
+        const QString where = m.captured(2).toLower();
+        for (const char* bias : { "bullish", "bearish", "neutral", "volatile" }) if (qualifiers.contains(bias)) m_scanner->setBias(bias);
+        if (qualifiers.contains("premium") || qualifiers.contains("credit") || qualifiers.contains("income from") || qualifiers.contains("selling")) m_scanner->setScreen("Premium selling");
+        else if (qualifiers.contains("debit") || qualifiers.contains("directional")) m_scanner->setScreen("Directional debit");
+        else if (qualifiers.contains("volatil") || qualifiers.contains("straddle") || qualifiers.contains("calendar")) m_scanner->setScreen("Volatility");
+        else if (qualifiers.contains("covered") || qualifiers.contains("income") || qualifiers.contains("collar")) m_scanner->setScreen("Income on shares");
+        else if (qualifiers.contains("all") || qualifiers.contains("every")) m_scanner->setScreen("All strategies");
+        if (where.contains("watchlist")) m_scanner->setUniverse("watchlist");
+        else if (where.contains("all") || where.contains("everything")) m_scanner->setUniverse("all");
+        else if (!where.isEmpty()) {
+            if (!where.contains("ticker")) showTicker(where.toUpper(), false);
+            m_scanner->setUniverse("current");
+        }
+        m_tabs->setCurrentWidget(m_scanner);
+        m_scanner->runScan();
+        feedback = m_scanner->summaryText().section('\n', 0, 3);
+        return true;
+    }
     // Strategy books: "load the income portfolio", "show all strategies", "switch to the core hedged strategy".
     QRegularExpression bookRe("^(?:please\\s+)?(?:load|open|show(?:\\s+me)?|switch\\s+to)\\s+(?:the\\s+)?(?:(all\\s+strategies|global\\s+portfolio|whole\\s+book|all\\s+portfolios)|(.+?)\\s+(?:portfolio|strategy\\s+book|book|strategy))$",
                               QRegularExpression::CaseInsensitiveOption);

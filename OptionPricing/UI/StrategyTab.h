@@ -25,6 +25,8 @@ public:
 
     const pricing::Position& position() const { return m_position; }
     void addLeg(const pricing::Leg& leg);
+    /// Replaces the legs (used by the Trade Ideas scanner to hand over a candidate).
+    void loadPosition(const pricing::Position& position) { setPosition(position); }
 
     /// Market used to value the position (rate resolved from the curve when enabled).
     pricing::Market valuationMarket() const;
