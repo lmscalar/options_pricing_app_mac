@@ -24,6 +24,12 @@ const char* const kControllerJs = R"js(
     // chart, legendEl, series:{...}, data, syncing}].
     panes: [],
     bars: [], meta: {}, theme: null, live: null, liveLine: null, liveLineSeries: null, syncingCrosshair: false,
+    // Implied move cone from the option market (host-computed, see QuotesTab::pushEventCone):
+    // {enabled, symbol, points:[{t, up1, dn1, up2, dn2}], event:{t, label, up, down, up1, dn1}, caption}
+    eventCone: null, coneSeries: [], coneFitFor: null, coneNeedsFit: false,
+    // True until the user pans or zooms: re-renders then keep everything in view (the library's
+    // fitContent is applied lazily, so a stored range read right after it can be stale).
+    autoFit: true,
     // indicators: [{type:'sma'|'ema', period, color}, {type:'macd', fast, slow, signal}] (at
     // most three SMAs, three EMAs and one MACD; the host enforces the limits).
     options: { type: 'candles', volume: true, priceLine: true, paneHeight: 0.24 },
@@ -156,6 +162,8 @@ const char* const kControllerJs = R"js(
   }
   // Dragging an axis fires no chart event the overlay could follow; redraw on mouse moves
   // inside the chart instead (cheap: the overlay is only a few shapes).
+  container.addEventListener('wheel', () => { state.autoFit = false; }, { passive: true });
+  container.addEventListener('mousedown', () => { state.autoFit = false; });
   container.addEventListener('mousemove', () => { if (state.chart) { redraw(); updateAutoButton(); } });
   container.addEventListener('mouseup', () => { if (state.chart) { redraw(); updateAutoButton(); } });
   container.addEventListener('dblclick', () => { if (state.chart) setTimeout(() => { redraw(); updateAutoButton(); }, 0); });
@@ -330,7 +338,56 @@ const char* const kControllerJs = R"js(
     }
     for (const ind of state.overlays) { for (const srs of (ind.series || [])) { try { state.chart.removeSeries(srs); } catch (e) {} } ind.series = []; }
     state.overlays = [];
+    for (const srs of state.coneSeries) { try { state.chart.removeSeries(srs); } catch (e) {} }
+    state.coneSeries = [];
     removePanes();
+  }
+
+  // The implied move cone: ±1 sd solid and ±2 sd dashed bands from the last bar forward,
+  // the event marked on the upper band, and the beat / miss targets as axis labels.
+  function eventCaptionEl() {
+    let el = document.getElementById('eventCaption');
+    if (!el) { el = document.createElement('div'); el.id = 'eventCaption'; container.appendChild(el); }
+    return el;
+  }
+  function renderEventCone() {
+    const cone = state.eventCone, theme = state.theme;
+    const captionEl = eventCaptionEl();
+    captionEl.textContent = '';
+    captionEl.style.display = 'none';
+    const active = cone && cone.enabled && state.main && Array.isArray(cone.points) && cone.points.length >= 2 && (cone.symbol || '') === (state.meta.symbol || '');
+    state.chart.timeScale().applyOptions({ rightOffset: 4 });
+    if (!active) { state.coneFitFor = null; return; }
+    const intraday = !!state.meta.intraday;
+    const pts = cone.points.map(p => ({ t: toTime(p.t, intraday), p: p }));
+    const mk = (key, color, width, style) => {
+      const srs = state.chart.addLineSeries({ color: color, lineWidth: width, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+      srs.setData(pts.map(x => ({ time: x.t, value: x.p[key] })));
+      state.coneSeries.push(srs);
+      return srs;
+    };
+    const up1 = mk('up1', theme.up, 2, 0);
+    mk('dn1', theme.down, 2, 0);
+    mk('up2', alpha(theme.up, 0.55), 1, 2);
+    mk('dn2', alpha(theme.down, 0.55), 1, 2);
+    if (cone.event && cone.event.t !== undefined) {
+      const et = toTime(cone.event.t, intraday);
+      const target = pts.find(x => sameTime(x.t, et)) || pts[pts.length - 1];
+      // Room for the marker text past the last cone point.
+      state.chart.timeScale().applyOptions({ rightOffset: 12 });
+      up1.setMarkers([{ time: target.t, position: 'aboveBar', color: theme.accent2, shape: 'circle', text: cone.event.label || 'Earnings' }]);
+      if (cone.event.up1 && cone.event.dn1) {
+        state.main.createPriceLine({ price: cone.event.up1, color: theme.up, lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: cone.event.up || 'beat' });
+        state.main.createPriceLine({ price: cone.event.dn1, color: theme.down, lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: cone.event.down || 'miss' });
+      }
+    }
+    if (cone.caption) { captionEl.textContent = cone.caption; captionEl.style.display = 'block'; }
+    // First time the cone appears for this symbol: fit bars and cone together after render()
+    // has restored the range; later re-renders keep the user's zoom.
+    if (state.coneFitFor !== (state.meta.symbol || '')) {
+      state.coneFitFor = state.meta.symbol || '';
+      state.coneNeedsFit = true;
+    }
   }
 
   function seriesData(values) {
@@ -407,6 +464,9 @@ const char* const kControllerJs = R"js(
 
   function render(fit) {
     ensureChart();
+    // Re-creating the series makes the library scroll to the latest point at its current bar
+    // spacing, which pushes the early bars off the left edge; keep the user's range instead.
+    const keepRange = (!fit && !state.autoFit && state.chart && state.bars.length) ? state.chart.timeScale().getVisibleLogicalRange() : null;
     removeSeries();
     applyLayout();
     const theme = state.theme, opts = state.options, intraday = !!state.meta.intraday;
@@ -436,12 +496,20 @@ const char* const kControllerJs = R"js(
       state.volume.setData(bars.map(b => ({ time: toTime(b.t, intraday), value: b.v, color: alpha(b.c >= b.o ? theme.up : theme.down, 0.45) })));
     }
     renderIndicators();
+    renderEventCone();
     applyLiveLine();
     if (fit) {
       // A new symbol or timeframe: back to autoscale so a manually stretched axis never
       // squashes the new bars into a stale price range.
       state.chart.priceScale('right').applyOptions({ autoScale: true });
+      state.autoFit = true;
+    }
+    if (fit || state.autoFit || state.coneNeedsFit) {
+      // Untouched view (or the implied move cone just appeared): bars and cone together.
+      state.coneNeedsFit = false;
       state.chart.timeScale().fitContent();
+    } else if (keepRange) {
+      try { state.chart.timeScale().setVisibleLogicalRange(keepRange); } catch (e) {}
     }
     updateAutoButton();
     updateLegend(null);
@@ -884,6 +952,8 @@ const char* const kControllerJs = R"js(
     setOptions: function (opts) { state.options = Object.assign(state.options, opts); if (state.chart) render(false); },
     // Indicator results from the host (see state.indicators); re-renders without changing the zoom.
     setIndicators: function (list) { state.indicators = Array.isArray(list) ? list : []; if (state.chart) render(false); },
+    // Implied move cone from the option market (null hides it); re-renders without changing the zoom.
+    setEventCone: function (spec) { state.eventCone = spec || null; if (state.chart) render(false); },
     // Restores autoscale, the default zoom/pan and the cursor tool; bars are re-rendered.
     reset: resetView,
     // Live quote for the charted symbol: {price, previousClose, source, asOf} or null.
@@ -954,7 +1024,7 @@ const char* const kControllerJs = R"js(
       if (target.type === 'trend') { const p = trendPoints(target); if (!p) return -3; x = (p.x1 + p.x2) / 2; y = (p.y1 + p.y2) / 2; }
       else { x = pane.w / 2; y = yOfPrice((target.lo + target.hi) / 2); }
       if (x === null || y === null || isNaN(x) || isNaN(y)) return -3;
-      if (x < 0 || y < 0 || x > pane.w || y > pane.h) return -4;
+      if (x < 0 || y < 0 || x > pane.w || y > pane.h) { notify('log', 'contextDelete: point outside plot x=' + x + ' y=' + y + ' pane=' + pane.w + 'x' + pane.h + ' range=' + JSON.stringify(state.chart.timeScale().getVisibleLogicalRange())); return -4; }
       const r = draw.getBoundingClientRect();
       const before = D.items.length;
       lastMenuAt = 0;
@@ -1038,6 +1108,8 @@ QString chartPageHtml()
   #legend .sym { font-weight: 700; font-size: 14px; color: #f59e0b; }
   #legend .name, #legend .tf, #legend .asof { color: #8294ad; }
   #legend b { color: #f3f6fb; font-weight: 600; }
+  #eventCaption { position: absolute; left: 12px; bottom: 34px; z-index: 5; pointer-events: none; display: none;
+                  font: 11px Menlo, "SF Mono", monospace; color: #f59e0b; background: rgba(15, 23, 42, 0.72); padding: 2px 7px; border-radius: 4px; }
   #empty { position: absolute; inset: 0; z-index: 6; display: flex; align-items: center; justify-content: center;
            font: 13px -apple-system, sans-serif; color: #8294ad; }
 </style></head>

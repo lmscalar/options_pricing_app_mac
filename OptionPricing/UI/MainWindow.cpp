@@ -1096,6 +1096,22 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     m_sectorHeatmap->clearFocus();
                     waitFor(200);
                 }
+                if (tab == m_quotes) {
+                    // Earnings overlay: the implied move cone on the chart, with a pinned date and then inferred.
+                    auto waitFor = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
+                    const bool userCone = m_quotes->eventConeShown();
+                    const QDate userDate = m_quotes->pinnedEarningsDate(m_chain->ticker());   // only a real pin is put back
+                    m_quotes->setEventConeShown(true);
+                    waitFor(1500);
+                    qInfo("[live-smoke] events (fetched/inferred): %s", qPrintable(m_quotes->eventSummary().left(900)));
+                    const int inferredDays = m_quotes->eventAnalysis().eventDetected ? m_quotes->eventAnalysis().eventDays : 18;
+                    m_quotes->setEarningsDate(m_chain->ticker(), QDate::currentDate().addDays(inferredDays));
+                    waitFor(400);
+                    qInfo("[live-smoke] events (pinned +%dd): %s", inferredDays, qPrintable(m_quotes->eventSummary().left(600)));
+                    m_quotes->setEarningsDate(m_chain->ticker(), userDate);
+                    m_quotes->setEventConeShown(userCone);
+                    waitFor(300);
+                }
                 const QString path = shotDir + (tab == m_heatmap ? "/heatmap.png" : (tab == m_chain ? "/chain.png" : (tab == m_strategy ? "/strategy.png" : (tab == m_volatility ? "/volatility.png" : (tab == m_sectorHeatmap ? "/sector-heatmap.png" : "/quotes.png")))));
                 if (grab().save(path)) qInfo("[live-smoke] wrote %s", qPrintable(path));
             }

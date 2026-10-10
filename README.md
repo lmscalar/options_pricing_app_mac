@@ -34,6 +34,12 @@ volatility smiles from option chains and prices batches of contracts from CSV.
 | `Csv.h` | CSV reader/writer and parsers for option chains and batch pricing requests. |
 | `Activity.h` | Strike x expiry activity grid, most-active contract ranking, put-call parity by expiry, activity summary. |
 | `ChainStrategy.h` | Chain index, marking legs to listed quotes, chain-driven strategy presets. |
+| `Portfolio.h` | Book of stock and option holdings, exposures, full revaluation. |
+| `Risk.h` | Return histories, covariance, parametric / historical / Monte Carlo VaR and expected shortfall, component VaR, stress grid, decay ladder. |
+| `Scanner.h` | Chain metrics (ATM IV, term slope, skew, expected move, put/call ratios), delta-targeted strategy construction, ranked trade ideas. |
+| `Events.h` | Earnings analytics: ATM term structure in total variance, event variance isolation, skew-adjusted implied move, price cone. |
+| `Treemap.h` | Squarified treemap layout for the sector heatmap. |
+| `TechnicalAnalysis.h` | TA-Lib catalogue wrapper and generic indicator evaluation. |
 | `Volatility.h` | Realized vol estimators (close-to-close, Parkinson, Garman-Klass, Rogers-Satchell, Yang-Zhang), rolling series, volatility cone, EWMA, GARCH(1,1) / GJR-GARCH(1,1) by quasi-maximum likelihood with variance forecasts and forecast term structure. |
 
 ## Building
@@ -151,6 +157,18 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   put-call parity table per expiry with the implied forward, the dividend yield that
   reconciles it, and the worst-offending strike. Double-click a cell or row to price it.
 
+- **Earnings overlay** (Quotes chart, the **Earnings cone** checkbox and the **Earnings ▾** menu): the option-implied earnings move as a
+  cone drawn from the last bar through the report date. The at-the-money implied-vol term
+  structure is converted to total variance per expiry; the variance the expiry after the
+  event carries over the post-event forward vol (the diffusive baseline) is the event
+  variance, whose square root is the one-standard-deviation earnings move. The cone is
+  asymmetric: the beat side scales with 25-delta call vol, the miss side with 25-delta put
+  vol, so a put-skewed name shows a deeper miss than beat. ±1 sd solid, ±2 sd dashed, the
+  event marked on the band, beat and miss targets as axis labels, and a caption with the
+  numbers. The report date comes from the Benzinga calendar when the plan carries it, is
+  otherwise projected from the filing cadence, can be pinned by hand, or is inferred from
+  the term structure when nothing else is known. The assistant answers "what is the
+  implied earnings move" and pins dates ("earnings for NVDA on 2026-10-30").
 - **Trade Ideas**: a scanner over the option chains already in memory (every stored
   chain, the watchlist or the current ticker). The market-scan table shows each chain's
   ATM implied vol at the chosen tenor, the term slope to the next tenor, 25-delta put skew,

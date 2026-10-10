@@ -113,6 +113,7 @@
 		F37616B430799C8400F5524A /* Portfolio.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Portfolio.h; sourceTree = "<group>"; };
 		F37616B530799CB800F5524A /* Risk.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Risk.h; sourceTree = "<group>"; };
 		F37616B6307A0000005CA11E /* Scanner.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Scanner.h; sourceTree = "<group>"; };
+		F37616B7307A0000005CA11F /* Events.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Events.h; sourceTree = "<group>"; };
 		F37616B830799D3100F5524A /* PortfolioTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = PortfolioTab.h; sourceTree = "<group>"; };
 		F37616B930799E4600F5524A /* PortfolioTab.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = PortfolioTab.cpp; sourceTree = "<group>"; };
 		F37616BB30799F6D00F5524A /* AlertsTab.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AlertsTab.h; sourceTree = "<group>"; };
@@ -167,6 +168,7 @@
 				F37616B430799C8400F5524A /* Portfolio.h */,
 				F37616B530799CB800F5524A /* Risk.h */,
 				F37616B6307A0000005CA11E /* Scanner.h */,
+				F37616B7307A0000005CA11F /* Events.h */,
 			);
 			path = Pricing;
 			sourceTree = "<group>";
@@ -404,7 +406,7 @@
 					"/opt/homebrew/opt/ta-lib/lib",
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = "-lta-lib";
 				PRODUCT_BUNDLE_IDENTIFIER = com.luismolina.PricingTests;
@@ -433,7 +435,7 @@
 					"/opt/homebrew/opt/ta-lib/lib",
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = "-lta-lib";
 				PRODUCT_BUNDLE_IDENTIFIER = com.luismolina.PricingTests;
@@ -500,7 +502,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.1;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -556,7 +558,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.1;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
@@ -583,7 +585,7 @@
 					/opt/homebrew/opt/qt/lib,
 					"/opt/homebrew/opt/ta-lib/lib",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				OTHER_LDFLAGS = (
 					"-framework",
 					Speech,
@@ -634,7 +636,7 @@
 					/opt/homebrew/opt/qt/lib,
 					"/opt/homebrew/opt/ta-lib/lib",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				OTHER_LDFLAGS = (
 					"-framework",
 					Speech,

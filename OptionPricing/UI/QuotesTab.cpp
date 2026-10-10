@@ -26,6 +26,8 @@ constexpr const char* kIndicatorsKey = "quotes/indicators";  ///< JSON array, se
 constexpr const char* kVolumeKey = "quotes/volume";
 constexpr const char* kPriceLineKey = "quotes/priceLine";
 constexpr const char* kPaneHeightKey = "quotes/paneHeight";   ///< indicator pane height as a fraction of the chart
+constexpr const char* kEventConeKey = "quotes/eventCone";     ///< implied move cone shown
+constexpr const char* kEarningsDatesKey = "events/dates";     ///< JSON object: ticker -> ISO date pinned by the user
 /// Overlay colours handed out in order to new moving averages (first unused wins).
 const QStringList& indicatorPalette()
 {
@@ -169,7 +171,10 @@ QuotesTab::QuotesTab(MarketState& state, QWidget* parent)
         if (!m_state.companyName.isEmpty() && !symbol.isEmpty()) m_names[symbol] = m_state.companyName;
         // Keep the active ticker's row and the chart's live readout in step with the headline.
         syncActiveQuote();
+        // The chain (or its spot) changed: the implied move cone follows.
+        if (symbol == m_chartTicker) pushEventCone();
     });
+    loadEarningsDates();
     QTimer::singleShot(400, this, [this] { refreshQuotes(); });
 }
 
@@ -318,6 +323,37 @@ void QuotesTab::buildUi()
     m_volumeAction = new QAction("Volume", this);
     m_volumeAction->setCheckable(true);
     m_volumeAction->setChecked(QSettings().value(kVolumeKey, true).toBool());
+    // Earnings / events: the option-implied move cone and the report date it is anchored on.
+    m_eventsButton = new QToolButton(this);
+    m_eventsButton->setText("Earnings ▾");
+    m_eventsButton->setPopupMode(QToolButton::InstantPopup);
+    m_eventsButton->setCursor(Qt::PointingHandCursor);
+    m_eventsButton->setToolTip("Option-implied earnings move: a cone of the expected move (beat side and miss side) through the report date, from the chain's implied-vol term structure");
+    auto* eventsMenu = new QMenu(this);
+    m_coneAction = eventsMenu->addAction("Implied move cone");
+    m_coneAction->setCheckable(true);
+    m_coneAction->setChecked(QSettings().value(kEventConeKey, true).toBool());
+    eventsMenu->addSeparator();
+    m_eventDateAction = eventsMenu->addAction("Earnings date: unknown");
+    eventsMenu->addAction("Set earnings date…", this, [this] {
+        if (m_chartTicker.isEmpty()) return;
+        const QDate current = earningsDate(m_chartTicker);
+        QDialog dialog(this);
+        dialog.setWindowTitle(QStringLiteral("Earnings date for %1").arg(m_chartTicker));
+        auto* form = new QFormLayout(&dialog);
+        auto* date = new QDateEdit(current.isValid() ? current : QDate::currentDate().addDays(14), &dialog);
+        date->setCalendarPopup(true);
+        date->setDisplayFormat("yyyy-MM-dd");
+        form->addRow("Report date", date);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+        form->addRow(buttons);
+        connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+        if (dialog.exec() == QDialog::Accepted) setEarningsDate(m_chartTicker, date->date());
+    });
+    eventsMenu->addAction("Fetch earnings date", this, [this] { if (!m_chartTicker.isEmpty()) { m_earningsRequested.remove(m_chartTicker); m_fetchedEarnings.erase(m_chartTicker); fetchEarningsDate(m_chartTicker); } });
+    eventsMenu->addAction("Clear pinned date", this, [this] { if (!m_chartTicker.isEmpty()) setEarningsDate(m_chartTicker, QDate()); });
+    m_eventsButton->setMenu(eventsMenu);
     m_openChain = ui::makeButton(this, "Open Option Chain", "secondary", "Fetch this ticker's option chain on the Option Chain tab");
     m_saveImage = ui::makeButton(this, "Save Image…", "secondary", "Save the chart as a PNG image");
     m_resetChart = ui::makeButton(this, "Reset", "secondary", "Reset the chart view: reload the bars, restore autoscale and the default zoom, return to the cursor tool (drawings are kept)");
@@ -332,10 +368,15 @@ void QuotesTab::buildUi()
     toolbarBottom->addWidget(m_chartType);
     toolbarBottom->addSpacing(6);
     toolbarBottom->addWidget(m_indicatorsButton);
+    toolbarBottom->addWidget(m_eventsButton);
     m_priceLineCheck = new QCheckBox("Price line", this);
     m_priceLineCheck->setChecked(QSettings().value(kPriceLineKey, true).toBool());
     m_priceLineCheck->setToolTip("Horizontal line at the live price (or the last close): a chart marker, not a drawing");
     toolbarBottom->addWidget(m_priceLineCheck);
+    m_coneCheck = new QCheckBox("Earnings cone", this);
+    m_coneCheck->setChecked(m_coneAction->isChecked());
+    m_coneCheck->setToolTip("Draw the option-implied move cone through the next earnings date: ±1 sd solid (beat side green, miss side red), ±2 sd dashed");
+    toolbarBottom->addWidget(m_coneCheck);
     toolbarBottom->addStretch(1);
     // Drawing tools: exclusive tool buttons plus undo / delete / clear.
     m_drawTools = new QButtonGroup(this);
@@ -499,6 +540,13 @@ void QuotesTab::wire()
         pushOptions();
     });
     connect(m_priceLineCheck, &QCheckBox::toggled, this, [this](bool on) { QSettings().setValue(kPriceLineKey, on); pushOptions(); });
+    // The toolbar checkbox and the menu entry are the same switch.
+    connect(m_coneAction, &QAction::toggled, this, [this](bool on) {
+        QSettings().setValue(kEventConeKey, on);
+        if (m_coneCheck->isChecked() != on) m_coneCheck->setChecked(on);
+        pushEventCone();
+    });
+    connect(m_coneCheck, &QCheckBox::toggled, this, [this](bool on) { if (m_coneAction->isChecked() != on) m_coneAction->setChecked(on); });
     connect(m_volumeAction, &QAction::toggled, this, [this](bool on) {
         QSettings().setValue(kVolumeKey, on);
         rebuildIndicatorsMenu();
@@ -1063,6 +1111,8 @@ void QuotesTab::loadChart(const QString& ticker)
             pushDrawings();
             pinPreviousCloseFromBars();
             pushLive();
+            pushEventCone();
+            if (m_coneAction->isChecked()) fetchEarningsDate(symbol);
             if (m_chartLoaded) { auto cb = std::move(m_chartLoaded); m_chartLoaded = nullptr; cb(true); }
             const MarketDataClient::Bar& last = series.bars.back();
             ui::setStatus(m_chartStatus, QStringLiteral("%1 · %2 bars (%3) from %4 to %5 · last %6 at %7")
@@ -1198,6 +1248,7 @@ QString QuotesTab::contextSummary(int maxBars) const
     if (m_names.count(m_chartTicker)) s << " (" << m_names.at(m_chartTicker) << ")";
     s << ", timeframe " << tf.label << " (" << tf.multiplier << " " << tf.timespan << " bars), style " << m_chartType->currentData().toString()
       << ". Indicators: " << indicatorsSummary() << ".\n";
+    s << eventSummary() << "\n";
     const auto quote = m_quotes.find(m_chartTicker);
     if (quote != m_quotes.end()) {
         s << "Latest quote: last " << ui::number(quote->second.last, 2) << ", change " << ui::number(quote->second.change, 2) << " ("
@@ -2100,5 +2151,224 @@ QString QuotesTab::resultsCsv() const
               << b.open << "," << b.high << "," << b.low << "," << b.close << "," << b.volume << "\n";
         }
     }
+    return out;
+}
+
+// MARK: - Earnings / events overlay
+
+void QuotesTab::loadEarningsDates()
+{
+    m_earningsDates.clear();
+    const QJsonObject dates = QJsonDocument::fromJson(QSettings().value(kEarningsDatesKey).toByteArray()).object();
+    for (auto it = dates.begin(); it != dates.end(); ++it) {
+        const QDate d = QDate::fromString(it.value().toString(), Qt::ISODate);
+        if (d.isValid()) m_earningsDates[it.key()] = d;
+    }
+}
+
+void QuotesTab::saveEarningsDates() const
+{
+    QJsonObject dates;
+    for (const auto& [ticker, date] : m_earningsDates) dates[ticker] = date.toString(Qt::ISODate);
+    QSettings().setValue(kEarningsDatesKey, QJsonDocument(dates).toJson(QJsonDocument::Compact));
+}
+
+void QuotesTab::setEventConeShown(bool on)
+{
+    if (m_coneAction->isChecked() != on) m_coneAction->setChecked(on);   // toggled() pushes
+    else pushEventCone();
+}
+
+bool QuotesTab::eventConeShown() const { return m_coneAction->isChecked(); }
+
+void QuotesTab::setEarningsDate(const QString& rawTicker, const QDate& date)
+{
+    const QString ticker = rawTicker.trimmed().toUpper();
+    if (ticker.isEmpty()) return;
+    if (date.isValid()) m_earningsDates[ticker] = date;
+    else m_earningsDates.erase(ticker);
+    saveEarningsDates();
+    if (ticker == m_chartTicker) pushEventCone();
+}
+
+QDate QuotesTab::earningsDate(const QString& rawTicker) const
+{
+    const QString ticker = rawTicker.trimmed().toUpper();
+    if (const auto pinned = m_earningsDates.find(ticker); pinned != m_earningsDates.end()) return pinned->second;
+    if (const auto fetched = m_fetchedEarnings.find(ticker); fetched != m_fetchedEarnings.end()) return fetched->second.date;
+    return QDate();
+}
+
+QDate QuotesTab::pinnedEarningsDate(const QString& rawTicker) const
+{
+    const auto pinned = m_earningsDates.find(rawTicker.trimmed().toUpper());
+    return pinned == m_earningsDates.end() ? QDate() : pinned->second;
+}
+
+void QuotesTab::fetchEarningsDate(const QString& rawTicker)
+{
+    const QString ticker = rawTicker.trimmed().toUpper();
+    if (ticker.isEmpty() || m_earningsRequested.contains(ticker) || !m_client.hasApiKey()) return;
+    m_earningsRequested.insert(ticker);
+    m_client.fetchEarnings(ticker,
+        [this, ticker](const MarketDataClient::EarningsInfo& info) {
+            m_fetchedEarnings[ticker] = info;
+            if (ticker == m_chartTicker) pushEventCone();
+        },
+        [this, ticker](const QString& message) {
+            qInfo("[events] %s: no earnings date (%s)", qPrintable(ticker), qPrintable(message));
+            if (ticker == m_chartTicker) pushEventCone();
+        });
+}
+
+void QuotesTab::pushEventCone()
+{
+    m_eventAnalysis = pricing::events::Analysis{};
+    m_eventTicker = m_chartTicker;
+    m_eventSource.clear();
+    if (m_eventDateAction) m_eventDateAction->setText("Earnings date: unknown");
+    if (m_chartTicker.isEmpty() || m_bars.bars.empty()) { runJs("chartApi.setEventCone(null);"); return; }
+
+    // The chain: the loaded one for the app-wide ticker, otherwise the stored copy.
+    std::vector<pricing::ChainQuote> quotes;
+    double spot = 0.0;
+    if (m_chartTicker == m_state.underlyingTicker && !m_state.chainQuotes.empty()) { quotes = m_state.chainQuotes; spot = m_state.market.spot; }
+    else if (m_store) {
+        if (const auto stored = m_store->get(m_chartTicker); stored && !stored->download.quotes.empty()) { quotes = stored->download.quotes; spot = stored->snapshot.price; }
+    }
+    if (quotes.empty() || spot <= 0.0) { runJs("chartApi.setEventCone(null);"); return; }
+    pricing::ActivityMarket am;
+    am.model = m_state.market.model;
+    am.spot = spot;
+    am.dividendYield = m_chartTicker == m_state.underlyingTicker ? m_state.market.dividendYield : 0.0;
+    am.rateFor = [this](double t) { return m_state.rateFor(t); };
+
+    const QDate today = QDate::currentDate();
+    const QDate date = earningsDate(m_chartTicker);
+    const auto pinned = m_earningsDates.find(m_chartTicker);
+    const auto fetched = m_fetchedEarnings.find(m_chartTicker);
+    if (pinned != m_earningsDates.end()) m_eventSource = "pinned by you";
+    else if (fetched != m_fetchedEarnings.end()) m_eventSource = fetched->second.estimated ? "projected from filings" : fetched->second.source;
+    const int eventDays = date.isValid() ? static_cast<int>(today.daysTo(date)) : -1;
+    m_eventNote.clear();
+    // Two readings: the calendar's date (when there is one) and the option market's own placement.
+    // The market wins when there is no date, when the date finds no event, or when a calendar entry
+    // (unless pinned by the user) sits well after an event the options already price in.
+    const pricing::events::Analysis known = eventDays >= 0 ? pricing::events::analyze(quotes, am, eventDays) : pricing::events::Analysis{};
+    const pricing::events::Analysis inferred = pricing::events::analyze(quotes, am, -1);
+    const bool userPinned = pinned != m_earningsDates.end();
+    const bool calendarTooLate = inferred.eventDetected && eventDays >= 0 && inferred.eventDays < eventDays - 10 && !userPinned;
+    if (eventDays >= 0 && known.ok && known.eventDetected && !calendarTooLate) {
+        m_eventAnalysis = known;
+    } else if (inferred.ok && inferred.eventDetected) {
+        m_eventAnalysis = inferred;
+        if (date.isValid()) {
+            m_eventNote = QStringLiteral("the calendar's next entry is %1 (%2) but the options price an event after the %3 close")
+                              .arg(date.toString("MMM d"), m_eventSource, today.addDays(std::max(0, inferred.eventDays - 1)).toString("MMM d"));
+        }
+    } else {
+        m_eventAnalysis = eventDays >= 0 ? known : inferred;
+    }
+    const pricing::events::Analysis& a = m_eventAnalysis;
+    // Where the marker goes: the known report day, or the last expiry the options say is clear of the event.
+    const QDate markerDate = a.eventDateKnown ? date : today.addDays(std::max(0, a.eventDays - 1));
+
+    QString dateText = "Earnings date: unknown";
+    if (date.isValid()) {
+        dateText = QStringLiteral("Earnings date: %1 (%2)").arg(date.toString(Qt::ISODate), m_eventSource);
+        if (!m_eventNote.isEmpty()) dateText += QStringLiteral(" · options: after the %1 close").arg(markerDate.toString("MMM d"));
+        if (fetched != m_fetchedEarnings.end() && pinned == m_earningsDates.end()) {
+            if (!fetched->second.timing.isEmpty()) dateText += ", " + fetched->second.timing;
+            if (!fetched->second.fiscalPeriod.isEmpty()) dateText += ", " + fetched->second.fiscalPeriod;
+            if (fetched->second.epsEstimate != 0.0) dateText += QStringLiteral(", EPS est. %1").arg(QString::number(fetched->second.epsEstimate, 'f', 2));
+        }
+    } else if (a.eventDetected) {
+        dateText = QStringLiteral("Earnings date: after the %1 close (inferred from the option market)").arg(markerDate.toString(Qt::ISODate));
+    }
+    if (m_eventDateAction) m_eventDateAction->setText(dateText);
+
+    if (!m_coneAction->isChecked() || !a.ok) { runJs("chartApi.setEventCone(null);"); return; }
+
+    // Cone points: the last bar (anchor) then every weekday ahead, a little past the event expiry.
+    const Timeframe& tf = timeframes()[static_cast<size_t>(m_timeframeIndex)];
+    const qint64 anchorSec = m_bars.bars.back().timeMs / 1000;
+    const QDate anchorDate = QDateTime::fromSecsSinceEpoch(anchorSec, QTimeZone::utc()).date();
+    int horizonDays = a.eventDetected ? std::max(a.eventExpiry.daysToExpiry + 10, 14) : 30;   // a little past the event expiry so the marker text has room
+    horizonDays = std::clamp(horizonDays, 10, 90);
+    QJsonArray points;
+    points.append(QJsonObject{ { "t", static_cast<double>(anchorSec) }, { "up1", spot }, { "dn1", spot }, { "up2", spot }, { "dn2", spot } });
+    const QDate start = std::max(anchorDate, today);
+    for (int d = 1; d <= horizonDays; ++d) {
+        const QDate day = start.addDays(d);
+        if (day.dayOfWeek() >= 6) continue;
+        const pricing::events::ConePoint c = pricing::events::coneAt(a, today.daysTo(day) / 365.0);
+        const double t = tf.intraday ? static_cast<double>(QDateTime(day, QTime(14, 30), QTimeZone::utc()).toSecsSinceEpoch())
+                                     : static_cast<double>(QDateTime(day, QTime(0, 0), QTimeZone::utc()).toSecsSinceEpoch());
+        points.append(QJsonObject{ { "t", t }, { "up1", std::round(c.up1 * 100.0) / 100.0 }, { "dn1", std::round(c.down1 * 100.0) / 100.0 },
+                                   { "up2", std::round(c.up2 * 100.0) / 100.0 }, { "dn2", std::round(c.down2 * 100.0) / 100.0 } });
+    }
+    QJsonObject cone{ { "enabled", true }, { "symbol", m_chartTicker }, { "spot", spot }, { "points", points } };
+    QString caption;
+    if (a.eventDetected) {
+        QDate eventDate = markerDate;
+        while (eventDate.dayOfWeek() >= 6) eventDate = eventDate.addDays(a.eventDateKnown ? 1 : -1);
+        QJsonObject event;
+        event["t"] = tf.intraday ? static_cast<double>(QDateTime(eventDate, QTime(14, 30), QTimeZone::utc()).toSecsSinceEpoch())
+                                 : static_cast<double>(QDateTime(eventDate, QTime(0, 0), QTimeZone::utc()).toSecsSinceEpoch());
+        event["label"] = a.eventDateKnown ? QStringLiteral("Earnings %1").arg(eventDate.toString("MMM d")) : QStringLiteral("Earnings after %1").arg(eventDate.toString("MMM d"));
+        event["up"] = QStringLiteral("beat +%1%").arg(QString::number(a.upMove * 100.0, 'f', 1));
+        event["down"] = QStringLiteral("miss −%1%").arg(QString::number(a.downMove * 100.0, 'f', 1));
+        event["up1"] = std::round(spot * std::exp(a.upMove) * 100.0) / 100.0;
+        event["dn1"] = std::round(spot * std::exp(-a.downMove) * 100.0) / 100.0;
+        cone["event"] = event;
+        caption = QStringLiteral("Implied earnings move ±%1% (beat +%2% → %3 · miss −%4% → %5) · event-window vol %6% vs baseline %7% · %8")
+                      .arg(QString::number(a.eventMove * 100.0, 'f', 1), QString::number(a.upMove * 100.0, 'f', 1), ui::number(spot * std::exp(a.upMove), 2),
+                           QString::number(a.downMove * 100.0, 'f', 1), ui::number(spot * std::exp(-a.downMove), 2),
+                           QString::number(a.term.empty() ? 0.0 : a.jumpRatio * a.baselineVol * 100.0, 'f', 0), QString::number(a.baselineVol * 100.0, 'f', 0),
+                           a.eventDateKnown ? QStringLiteral("%1 %2").arg(eventDate.toString("MMM d"), m_eventSource) : QStringLiteral("options imply after the %1 close").arg(eventDate.toString("MMM d")));
+    } else {
+        caption = QStringLiteral("Implied move cone ±1 sd / ±2 sd from the option market · ATM vol %1%%2")
+                      .arg(QString::number((a.term.empty() ? a.baselineVol : a.term.front().atmIv) * 100.0, 'f', 0),
+                           date.isValid() ? QStringLiteral(" · earnings %1: no event premium priced").arg(date.toString("MMM d")) : QStringLiteral(" · no earnings premium detected"));
+    }
+    cone["caption"] = caption;
+    runJs(QStringLiteral("chartApi.setEventCone(%1);").arg(QString::fromUtf8(QJsonDocument(cone).toJson(QJsonDocument::Compact))));
+}
+
+QString QuotesTab::eventSummary() const
+{
+    if (m_eventTicker.isEmpty()) return "Earnings overlay: no chart loaded.";
+    const pricing::events::Analysis& a = m_eventAnalysis;
+    if (!a.ok) return QStringLiteral("Earnings overlay for %1: no option chain to read an implied move from (%2).").arg(m_eventTicker, QString::fromStdString(a.note));
+    const QDate date = earningsDate(m_eventTicker);
+    QString out;
+    QTextStream s(&out);
+    s << "Earnings overlay for " << m_eventTicker << " (cone " << (m_coneAction->isChecked() ? "shown" : "hidden") << "): ";
+    if (date.isValid()) {
+        s << "report date " << date.toString(Qt::ISODate) << " (" << m_eventSource << ")";
+        if (const auto f = m_fetchedEarnings.find(m_eventTicker); f != m_fetchedEarnings.end() && !m_earningsDates.count(m_eventTicker)) {
+            if (!f->second.timing.isEmpty()) s << ", " << f->second.timing;
+            if (!f->second.fiscalPeriod.isEmpty()) s << ", " << f->second.fiscalPeriod;
+            if (f->second.epsEstimate != 0.0) s << ", consensus EPS " << QString::number(f->second.epsEstimate, 'f', 2);
+            if (f->second.revenueEstimate > 0.0) s << ", revenue " << ui::compact(f->second.revenueEstimate);
+        }
+    }
+    else if (a.eventDetected) s << "report date not published; inferred around " << QDate::currentDate().addDays(a.eventDays).toString(Qt::ISODate) << " from the implied-vol term structure";
+    else s << "no report date and no event premium in the term structure";
+    s << ". ";
+    if (a.eventDetected) {
+        s << "Option-implied earnings move ±" << QString::number(a.eventMove * 100.0, 'f', 1) << "% (one standard deviation): beat side +" << QString::number(a.upMove * 100.0, 'f', 1)
+          << "% to " << ui::number(a.spot * std::exp(a.upMove), 2) << ", miss side −" << QString::number(a.downMove * 100.0, 'f', 1) << "% to " << ui::number(a.spot * std::exp(-a.downMove), 2)
+          << " (skew: call wing " << QString::number(a.skewUp, 'f', 2) << "x, put wing " << QString::number(a.skewDown, 'f', 2) << "x ATM). Event expiry "
+          << QString::fromStdString(a.eventExpiry.expiryDate) << " (" << a.eventExpiry.daysToExpiry << "d): forward vol across the event window " << QString::number(a.jumpRatio * a.baselineVol * 100.0, 'f', 1)
+          << "% vs baseline " << QString::number(a.baselineVol * 100.0, 'f', 1) << "%, total 1 sd move to that expiry ±" << QString::number(a.totalMove * 100.0, 'f', 1)
+          << "%, ATM straddle " << QString::number(a.straddleMove * 100.0, 'f', 1) << "% of spot.";
+    } else {
+        s << "Baseline vol " << QString::number(a.baselineVol * 100.0, 'f', 1) << "%.";
+    }
+    if (!m_eventNote.isEmpty()) s << " Note: " << m_eventNote << ".";
+    s << " Term structure (expiry: ATM IV):";
+    for (size_t i = 0; i < std::min<size_t>(6, a.term.size()); ++i) s << " " << QString::fromStdString(a.term[i].expiry.expiryDate) << " " << QString::number(a.term[i].atmIv * 100.0, 'f', 1) << "%" << (i + 1 < std::min<size_t>(6, a.term.size()) ? "," : "");
+    s << ".";
     return out;
 }

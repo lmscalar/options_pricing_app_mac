@@ -113,11 +113,17 @@ bool SpeechDictation::start(std::function<void(const QString&, bool)> onResult, 
         return false;
     }
     [input removeTapOnBus:0];
-    [input installTapOnBus:0 bufferSize:1024 format:format block:^(AVAudioPCMBuffer* buffer, AVAudioTime*) {
-        [request appendAudioPCMBuffer:buffer];
-    }];
-    [m_impl->engine prepare];
     NSError* error = nil;
+    // The macOS 27 form reports failures (an unsupported format, a tap already installed) instead of throwing.
+    if (![input installTapOnBus:0 bufferSize:1024 format:format error:&error block:^(AVAudioPCMBuffer* buffer, AVAudioTime*) {
+            [request appendAudioPCMBuffer:buffer];
+        }]) {
+        m_impl->request = nil;
+        if (m_impl->onError) m_impl->onError(QStringLiteral("Could not tap the microphone: %1").arg(fromNS(error.localizedDescription)));
+        return false;
+    }
+    [m_impl->engine prepare];
+    error = nil;
     if (![m_impl->engine startAndReturnError:&error]) {
         [input removeTapOnBus:0];
         m_impl->request = nil;

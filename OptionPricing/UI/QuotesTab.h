@@ -19,6 +19,7 @@
 #include "MarketState.h"
 #include "Theme.h"
 #include "Widgets.h"
+#include "../Pricing/Events.h"
 
 #include <functional>
 #include <map>
@@ -119,6 +120,21 @@ public:
     /// settings, drawings, and the most recent bars as CSV.
     QString contextSummary(int maxBars = 80) const;
 
+    // ---- Earnings / events overlay ----
+    /// Draws the option-implied move cone (±1 and ±2 sd, beat side scaled by call-wing vol,
+    /// miss side by put-wing vol) from the last bar through the earnings date on the chart.
+    void setEventConeShown(bool on);
+    bool eventConeShown() const;
+    /// Pins the earnings date for a ticker (invalid date clears it); the cone follows.
+    void setEarningsDate(const QString& ticker, const QDate& date);
+    QDate earningsDate(const QString& ticker) const;      ///< pinned, else fetched, else invalid
+    QDate pinnedEarningsDate(const QString& ticker) const; ///< only a date the user pinned
+    /// Asks the data vendor for the next report date (cached per session); the cone follows.
+    void fetchEarningsDate(const QString& ticker);
+    const pricing::events::Analysis& eventAnalysis() const { return m_eventAnalysis; }
+    /// One paragraph: event date and source, implied move, beat / miss targets, baseline vs event vol.
+    QString eventSummary() const;
+
     /// Test hooks: the watchlist row's displayed Last / change / percent, and the chart legend text.
     QString debugRowText(const QString& symbol) const;
     void debugLegendText(std::function<void(const QString&)> done);
@@ -177,6 +193,10 @@ private:
     QStringList unusedIndicatorColors(int count) const;
     static bool normalizeIndicator(QJsonObject& spec, QString* error);
     void pushBars();
+    /// Recomputes the event analysis for the charted symbol and sends the cone to the page.
+    void pushEventCone();
+    void loadEarningsDates();
+    void saveEarningsDates() const;
     void pushOptions();
     void pushTheme();
     /// Shows the app-wide ticker's row with the headline's figures and sends the live price to the chart.
@@ -241,7 +261,18 @@ private:
     QMenu* m_indicatorsMenu = nullptr;
     QAction* m_volumeAction = nullptr;           ///< checkable "Volume" entry in the menu
     QJsonArray m_indicators;                     ///< see indicators(); mirrors QSettings quotes/indicators
+    QToolButton* m_eventsButton = nullptr;       ///< "Earnings ▾" drop-down menu
+    QAction* m_coneAction = nullptr;             ///< checkable "Implied move cone"
+    QAction* m_eventDateAction = nullptr;        ///< shows the resolved date; click to edit
+    std::map<QString, QDate> m_earningsDates;    ///< pinned by the user (mirrors QSettings events/dates)
+    std::map<QString, MarketDataClient::EarningsInfo> m_fetchedEarnings;
+    QSet<QString> m_earningsRequested;
+    pricing::events::Analysis m_eventAnalysis;
+    QString m_eventTicker;
+    QString m_eventSource;                       ///< where the date came from
+    QString m_eventNote;                         ///< e.g. the calendar date the options disagree with
     QCheckBox* m_priceLineCheck = nullptr;
+    QCheckBox* m_coneCheck = nullptr;            ///< toolbar toggle for the implied move cone (mirrors m_coneAction)
     QPushButton* m_openChain = nullptr;
     QPushButton* m_saveImage = nullptr;
     QPushButton* m_resetChart = nullptr;

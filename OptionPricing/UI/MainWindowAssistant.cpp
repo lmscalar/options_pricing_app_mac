@@ -354,6 +354,10 @@ std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
     tools.push_back({ "run_portfolio_risk",
                       "Recomputes portfolio risk: parametric delta-gamma, historical simulation and Monte Carlo VaR / CVaR (expected shortfall), component VaR by underlying, the spot x vol stress grid and the time-decay ladder.",
                       schema({ { "confidence", prop("number", "Confidence level: 95, 97.5 or 99 (percent)") }, { "horizon_days", prop("integer", "Holding period in trading days (1-60)") } }) });
+    tools.push_back({ "get_implied_earnings_move",
+                      "Earnings overlay on the Quotes chart: the option-implied earnings move (beat side and miss side, from the implied-vol term structure and skew), the report date and its source, and the ATM term structure. Optionally pins the report date or toggles the cone.",
+                      schema({ { "ticker", prop("string", "Symbol (default: the charted one)") }, { "earnings_date", prop("string", "ISO date to pin as the report date; 'clear' removes the pin") },
+                               { "show_cone", prop("boolean", "Show or hide the implied move cone on the chart") } }) });
     tools.push_back({ "scan_trade_ideas",
                       "Runs the Trade Ideas scanner over the option chains in memory and returns the market scan (ATM IV, term slope, skew, expected move, put/call ratios) and the ranked ideas with legs, credit/debit, max profit/loss, probability of profit and return on risk.",
                       schema({ { "screen", prop("string", "Premium selling | Directional debit | Volatility | Income on shares | All strategies (default: current)") },
@@ -536,6 +540,22 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
         m_tabs->setCurrentWidget(m_portfolio);
         m_portfolio->runRisk();
         done(m_portfolio->summaryText() + "\n\nRisk (CSV):\n" + clip(m_portfolio->riskCsv(), 4000), false);
+    } else if (name == "get_implied_earnings_move") {
+        const QString ticker = input.value("ticker").toString().trimmed().toUpper();
+        if (!ticker.isEmpty() && ticker != m_quotes->chartTicker()) { showTicker(ticker, false); m_quotes->showTicker(ticker); }
+        const QString target = ticker.isEmpty() ? m_quotes->chartTicker() : ticker;
+        if (input.contains("earnings_date")) {
+            const QString text = input.value("earnings_date").toString().trimmed();
+            if (text.compare("clear", Qt::CaseInsensitive) == 0) m_quotes->setEarningsDate(target, QDate());
+            else {
+                const QDate d = QDate::fromString(text, Qt::ISODate);
+                if (!d.isValid()) return fail("earnings_date must be an ISO date (YYYY-MM-DD) or 'clear'.");
+                m_quotes->setEarningsDate(target, d);
+            }
+        }
+        if (input.contains("show_cone")) m_quotes->setEventConeShown(input.value("show_cone").toBool(true));
+        m_tabs->setCurrentWidget(m_quotes);
+        QTimer::singleShot(ticker.isEmpty() ? 300 : 2500, this, [this, done] { done(m_quotes->eventSummary(), false); });
     } else if (name == "scan_trade_ideas") {
         if (input.contains("screen") && !m_scanner->setScreen(input.value("screen").toString())) return fail(QStringLiteral("Unknown screen. Use one of: %1").arg(m_scanner->screenNames().join(", ")));
         if (input.contains("bias") && !m_scanner->setBias(input.value("bias").toString())) return fail("Unknown bias. Use Any, Bullish, Bearish, Neutral or Volatile.");
@@ -638,6 +658,34 @@ bool MainWindow::handleLocalCommand(const QString& rawText, QString& feedback)
     const QString lower = text.toLower();
     auto symbolFrom = [](const QString& s) { return s.trimmed().toUpper().remove(QRegularExpression("[^A-Z.]")); };
 
+    // Earnings overlay: "show the implied move cone", "hide the earnings cone", "earnings for NVDA on 2026-10-30",
+    // "set the earnings date to 2026-10-30", "what is the implied earnings move".
+    QRegularExpression coneRe("^(?:please\\s+)?(show|hide|turn\\s+on|turn\\s+off|enable|disable)\\s+(?:the\\s+)?(?:implied\\s+)?(?:move|earnings|event)\\s*(?:move\\s+)?cone$", QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = coneRe.match(text); m.hasMatch()) {
+        const QString verb = m.captured(1).toLower();
+        const bool on = verb == "show" || verb == "enable" || verb.endsWith("on");
+        m_quotes->setEventConeShown(on);
+        m_tabs->setCurrentWidget(m_quotes);
+        feedback = on ? "Implied move cone shown on the chart. " + m_quotes->eventSummary().section(". ", 0, 1) + "." : "Implied move cone hidden.";
+        return true;
+    }
+    QRegularExpression dateRe("^(?:please\\s+)?(?:set\\s+(?:the\\s+)?)?earnings(?:\\s+date)?(?:\\s+for\\s+([A-Za-z.]{1,6}))?\\s+(?:is|are|to|on|=)\\s+(\\d{4}-\\d{2}-\\d{2})$", QRegularExpression::CaseInsensitiveOption);
+    if (const auto m = dateRe.match(text); m.hasMatch()) {
+        const QString ticker = m.captured(1).isEmpty() ? m_quotes->chartTicker() : m.captured(1).toUpper();
+        const QDate d = QDate::fromString(m.captured(2), Qt::ISODate);
+        if (!ticker.isEmpty() && d.isValid()) {
+            m_quotes->setEarningsDate(ticker, d);
+            m_quotes->setEventConeShown(true);
+            m_tabs->setCurrentWidget(m_quotes);
+            feedback = QStringLiteral("Earnings date for %1 pinned to %2. ").arg(ticker, d.toString(Qt::ISODate)) + m_quotes->eventSummary().section(". ", 1, 1) + ".";
+            return true;
+        }
+    }
+    if (lower.contains("implied") && (lower.contains("earnings move") || lower.contains("expected move") || lower.contains("event move"))) {
+        m_tabs->setCurrentWidget(m_quotes);
+        feedback = m_quotes->eventSummary();
+        return true;
+    }
     // Trade ideas: "scan for ideas", "find premium selling ideas on the watchlist", "scan for bullish trades".
     QRegularExpression scanRe("^(?:please\\s+)?(?:scan|screen|look|search|find)(?:\\s+(?:for|me))*\\s+(.*?)(?:\\s+(?:ideas?|trades?|setups?|opportunit(?:y|ies)))?(?:\\s+(?:on|in|across|over)\\s+(?:the\\s+)?(watchlist|all\\s+chains|everything|this\\s+ticker|current\\s+ticker|[A-Za-z.]{1,6}))?$",
                               QRegularExpression::CaseInsensitiveOption);

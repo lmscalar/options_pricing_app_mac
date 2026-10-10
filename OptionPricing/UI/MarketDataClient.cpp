@@ -574,3 +574,60 @@ void MarketDataClient::fetchDividends(const QString& ticker, const QDate& valuat
             ok(info);
         }, err);
 }
+
+void MarketDataClient::fetchEarnings(const QString& ticker, std::function<void(const EarningsInfo&)> ok, ErrorHandler err)
+{
+    const QString symbol = ticker.trimmed().toUpper();
+    const QDate today = QDate::currentDate();
+    // Fallback: project the next report from the spacing of the last quarterly filings.
+    auto fromFilings = [this, symbol, today, ok, err] {
+        get(endpoint("/vX/reference/financials", { { "ticker", symbol }, { "timeframe", "quarterly" }, { "limit", "8" }, { "sort", "filing_date" }, { "order", "desc" } }),
+            [ok, err, today](const QJsonObject& body) {
+                std::vector<QDate> filings;
+                for (const QJsonValue v : body["results"].toArray()) {
+                    const QDate d = QDate::fromString(v.toObject()["filing_date"].toString(), Qt::ISODate);
+                    if (d.isValid()) filings.push_back(d);
+                }
+                std::sort(filings.begin(), filings.end());
+                filings.erase(std::unique(filings.begin(), filings.end()), filings.end());
+                if (filings.empty()) { err("No earnings calendar or filing history is available for this ticker."); return; }
+                // Median gap between filings (quarterly companies: ~91 days; annual filers stretch one gap).
+                std::vector<qint64> gaps;
+                for (size_t i = 1; i < filings.size(); ++i) gaps.push_back(filings[i - 1].daysTo(filings[i]));
+                qint64 gap = 91;
+                if (!gaps.empty()) { std::sort(gaps.begin(), gaps.end()); gap = std::clamp<qint64>(gaps[gaps.size() / 2], 60, 120); }
+                QDate next = filings.back().addDays(gap);
+                for (int i = 0; i < 8 && next <= today; ++i) next = next.addDays(gap);
+                EarningsInfo info;
+                info.date = next;
+                info.estimated = true;
+                info.source = QStringLiteral("projected from the last filing (%1) at a %2-day cadence").arg(filings.back().toString(Qt::ISODate)).arg(gap);
+                ok(info);
+            }, err);
+    };
+    get(endpoint("/benzinga/v1/earnings", { { "ticker", symbol }, { "date.gte", today.toString(Qt::ISODate) }, { "limit", "5" }, { "sort", "date.asc" } }),
+        [ok, fromFilings](const QJsonObject& body) {
+            EarningsInfo info;
+            for (const QJsonValue v : body["results"].toArray()) {
+                const QJsonObject e = v.toObject();
+                const QDate d = QDate::fromString(e.value("date").toString(e.value("report_date").toString()), Qt::ISODate);
+                if (!d.isValid()) continue;
+                if (info.date.isValid() && d >= info.date) continue;
+                info.date = d;
+                // "time" is a wall-clock Eastern time such as "16:00:00"; the status is "confirmed" or "projected".
+                const QString time = e.value("time").toString().toLower();
+                const int hour = time.contains(':') ? time.section(':', 0, 0).toInt() : -1;
+                if (time.contains("before") || time.contains("bmo") || (hour >= 0 && hour < 10)) info.timing = "before the open";
+                else if (time.contains("after") || time.contains("amc") || hour >= 16) info.timing = "after the close";
+                else if (hour >= 0) info.timing = "during the session";
+                info.confirmed = e.value("date_status").toString().compare("confirmed", Qt::CaseInsensitive) == 0;
+                info.epsEstimate = e.value("estimated_eps").toDouble(e.value("eps_estimate").toDouble());
+                info.revenueEstimate = e.value("estimated_revenue").toDouble();
+                if (e.contains("fiscal_period")) info.fiscalPeriod = QStringLiteral("%1 FY%2").arg(e.value("fiscal_period").toString()).arg(e.value("fiscal_year").toInt());
+                info.source = QStringLiteral("Benzinga calendar, %1").arg(info.confirmed ? "confirmed" : "projected");
+            }
+            if (info.date.isValid()) ok(info);
+            else fromFilings();
+        },
+        [fromFilings](const QString&) { fromFilings(); });
+}

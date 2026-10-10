@@ -84,6 +84,18 @@ public:
         QDateTime asOf;
     };
 
+    /// Next scheduled earnings report.
+    struct EarningsInfo {
+        QDate date;
+        QString timing;              ///< "before the open", "after the close" or empty
+        double epsEstimate = 0.0;    ///< consensus EPS, 0 when unknown
+        double revenueEstimate = 0.0;///< consensus revenue, 0 when unknown
+        QString fiscalPeriod;        ///< e.g. "Q4 FY2026"
+        bool confirmed = false;      ///< the company confirmed the date (otherwise the calendar's projection)
+        bool estimated = false;      ///< projected from the filing cadence rather than a published calendar
+        QString source;
+    };
+
     struct DividendInfo {
         double cashAmount = 0.0;
         int frequency = 0;           ///< payments per year (4 = quarterly)
@@ -123,6 +135,9 @@ public:
     void fetchImage(const QString& url, std::function<void(const QImage&)> ok, ErrorHandler err);
     void fetchDividends(const QString& ticker, const QDate& valuationDate, double horizonYears,
                         std::function<void(const DividendInfo&)> ok, ErrorHandler err);
+    /// Next earnings date: the Benzinga calendar when the plan carries it, otherwise projected
+    /// from the cadence of the company's quarterly filings (flagged `estimated`).
+    void fetchEarnings(const QString& ticker, std::function<void(const EarningsInfo&)> ok, ErrorHandler err);
 
 private:
     void get(const QUrl& url, std::function<void(const QJsonObject&)> ok, ErrorHandler err);
