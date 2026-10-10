@@ -48,6 +48,11 @@ public:
     /// is also sent to the popup, and the current state is replayed when the popup is attached.
     void mirrorChartTo(ChartPopup* popup);
     void refreshQuotes();
+    /// Real-time path for futures: re-reads the futures snapshot for the watchlist's and the
+    /// chart's futures symbols (every few seconds while auto-refresh is on), updating their
+    /// rows, the headline and the chart's live price without waiting for the stock interval.
+    void refreshFuturesQuotes();
+    int futuresRefreshCount() const { return m_futuresRefreshes; }
     bool hasTicker(const QString& ticker) const { return m_watchlist.contains(ticker.trimmed().toUpper()); }
     /// Shared store: refreshed quotes are written to it, and loadStoredQuotes() shows the
     /// previous session's prices before the first refresh arrives.
@@ -331,6 +336,10 @@ private:
     QTableWidget* m_table = nullptr;
     QCheckBox* m_autoRefresh = nullptr;
     QSpinBox* m_refreshInterval = nullptr;
+    QTimer* m_futuresTimer = nullptr;     ///< real-time futures: snapshot every few seconds while auto-refresh is on
+    bool m_futuresBusy = false;
+    int m_futuresTicks = 0;
+    int m_futuresRefreshes = 0;           ///< completed real-time refreshes (logs / smoke)
     QLabel* m_quoteStatus = nullptr;
     QTimer* m_timer = nullptr;
 

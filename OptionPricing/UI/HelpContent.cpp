@@ -24,6 +24,14 @@ a name, rename or delete it. The <b>Watchlist</b> selector switches between save
 for the list are preloaded into memory in the background.</li>
 <li><b>Select a row</b> to load its chart; double-click (or <i>Open Option Chain</i>) to jump to the chain.
 Quotes refresh automatically (interval and auto-refresh switch below the table).</li>
+<li><b>Futures</b>: type Massive's contract ticker (<i>CLX6</i> = crude oil, November 2026: product root, month code
+F G H J K M N Q U V X Z for January to December, one or two year digits: <i>NGX6</i> and <i>NGX26</i> both reach the
+November 2026 natural gas contract whatever the vendor's convention) or the platform-style slash form (<i>/CLX6</i>);
+<i>/ES</i> alone is the front month of the E-mini S&amp;P 500, rolled a week before expiry. Also /NQ, /GC, /ZN, /6E, /BTC and
+the other CME Group products. Prices are real-time: while auto-refresh is on, futures rows, the headline and the chart's live price
+line update every three seconds and intraday futures candles every twenty, independent of the stock interval. They
+chart, compare, alert and sit in the Portfolio (type Future, with the contract multiplier) like stocks; option chains for futures are not available yet, so the Option Chain tab is left
+alone when a future is selected.</li>
 <li><b>Pick a timeframe</b> (1m … 1H intraday, 1D one year of daily bars, 1W five years of weekly bars) and a
 chart style (candlesticks, bars, Heikin-Ashi, line).</li>
 <li><b>Layout</b> (1 to 4 charts): extra charts appear beside the main one, each with its own symbol and
@@ -419,7 +427,9 @@ performance over the chosen period, in the style of professional terminals.</p>
 move that is large for that period, so a bright tile means a big move for the horizon.</li>
 <li>Pick a <b>view</b>: <i>Stocks</i> shows every tile inside its sector; <i>Sectors</i> collapses each sector into one
 cap-weighted tile.</li>
-<li>Pick a <b>universe</b>: the built-in large-cap list or your watchlist (sectors come from the tickers' industry data).</li>
+<li>Pick a <b>universe</b>: the built-in large-cap list, ETFs by asset class, front-month futures (real-time), or your
+watchlist (sectors come from the tickers' industry data); and a <b>Size</b> rule: market cap, dollars traded today or equal.</li>
+<li>Pick a <b>view</b>: <i>Stocks</i>, <i>Sectors</i>, or <i>Rotation</i> (relative strength against momentum, see below).</li>
 <li><b>Click a sector</b> in the Sectors view to expand it and see its stocks; <i>Reset</i> returns to the full map.
 <b>Click a stock</b> to make it the app-wide ticker and open a pop-out chart window: an exact copy of the Quotes chart
 (same timeframe, indicators and drawings) so the stock's performance is visible without leaving the map. The window is
@@ -431,11 +441,22 @@ so the two views always agree. Double-click a tile to open its option chain. <i>
 
 <h3>Understanding the analysis</h3>
 <ul>
-<li><b>Tile size</b> is market cap, so the map shows where the money is: a sector's colour is the cap-weighted
-performance of its members, not a simple average.</li>
+<li><b>Tile size</b> is market cap by default, so the map shows where the money is: a group's colour is the weighted
+performance of its members, not a simple average. <b>Size</b> switches to dollars traded today (what the market is
+actually moving, and the only size available for ETFs and futures) or equal tiles (every name counts the same).</li>
+<li><b>Universes</b>: the built-in large caps by sector; <b>ETFs</b> by asset class (US equity, US sectors, international,
+bonds, commodities, crypto and thematic); <b>Futures</b>, the front month of each CME Group product by group (equity index,
+energy, metals, rates, grains, meats, FX, crypto) with real-time prices; or the active <b>Watchlist</b> by industry. Futures
+symbols carry a leading slash (/ES, /CL) throughout the app; they have no option chains yet, so clicking one loads its
+price, chart and portfolio marks but leaves the Option Chain tab alone.</li>
 <li>Performance over the longer periods is measured against the close on the first session of the period (grouped
-daily aggregates); YTD uses the last close of the previous year.</li>
-<li>The breadth line at the top counts advancers against decliners and names the best and worst sectors and stocks.</li>
+daily aggregates, or per-contract bars for futures); YTD uses the last close of the previous year.</li>
+<li><b>Breadth</b>: the summary line and each group's tile count advancers against decliners (▲ ▼), so a sector that is
+up on two mega caps while most members fall shows as weak breadth.</li>
+<li><b>Rotation</b> view: each group is a point. x is its period performance minus the universe's (relative strength);
+y is the same over the last week (momentum, or the day when the period itself is a week or less). Top right is
+<i>Leading</i>, top left <i>Improving</i> (weak but turning up), bottom right <i>Weakening</i>, bottom left <i>Lagging</i>, the
+reading used in relative-rotation graphs. Hover for the figures; click a point to expand that group.</li>
 </ul>
 )html";
 

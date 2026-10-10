@@ -384,8 +384,10 @@ std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
     tools.push_back({ "get_sector_heatmap",
                       "Returns sector and stock performance from the Sector Heatmap (large caps grouped by sector, cap-weighted sector moves, top movers and laggards, CSV of every stock) for a period: Daily, 1W, 30D, 90D or YTD. Optionally switches the view to stocks or sectors.",
                       schema({ { "period", prop("string", "Performance period (default: current)", QJsonArray{ "Daily", "1W", "30D", "90D", "YTD" }) },
-                               { "view", prop("string", "Treemap view", QJsonArray{ "stocks", "sectors" }) },
-                               { "sector", prop("string", "Expand this sector to fill the map (e.g. Energy); 'all' resets to every sector") } }) });
+                               { "view", prop("string", "Treemap view, or the rotation scatter (relative strength vs momentum)", QJsonArray{ "stocks", "sectors", "rotation" }) },
+                               { "universe", prop("string", "What to map: the built-in large caps, ETFs by asset class, front-month futures (real-time), or the watchlist", QJsonArray{ "large caps", "etfs", "futures", "watchlist" }) },
+                               { "sizing", prop("string", "Tile size rule", QJsonArray{ "market cap", "volume", "equal" }) },
+                               { "sector", prop("string", "Expand this sector / group to fill the map (e.g. Energy); 'all' resets to every group") } }) });
     tools.push_back({ "get_volatility",
                       "Loads daily history for a symbol on the Volatility tab (if needed) and returns realized vol (several estimators), EWMA, GARCH fit and forecast, the vol cone and implied ATM vol.",
                       schema({ { "symbol", prop("string", "Ticker (default: current)") } }) });
@@ -617,6 +619,9 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
         const QString period = input.value("period").toString();
         if (!period.isEmpty() && !m_sectorHeatmap->setPeriod(period)) return fail(QStringLiteral("Unknown period '%1'. Use Daily, 1W, 30D, 90D or YTD.").arg(period));
         if (input.contains("view")) m_sectorHeatmap->setView(input.value("view").toString());
+        const bool universeChanged = input.contains("universe") && m_sectorHeatmap->setUniverse(input.value("universe").toString());
+        if (input.contains("universe") && !universeChanged) return fail("Unknown universe. Use large caps, ETFs, futures or watchlist.");
+        if (input.contains("sizing") && !m_sectorHeatmap->setSizing(input.value("sizing").toString())) return fail("Unknown sizing. Use market cap, volume or equal.");
         if (input.contains("sector")) {
             const QString sector = input.value("sector").toString().trimmed();
             if (sector.isEmpty() || sector.compare("all", Qt::CaseInsensitive) == 0) m_sectorHeatmap->clearFocus();
@@ -624,7 +629,7 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
         }
         m_tabs->setCurrentWidget(m_sectorHeatmap);
         // Prices may still be downloading after a period change; give the request a moment.
-        QTimer::singleShot(period.isEmpty() ? 0 : 2500, this, [this, done] {
+        QTimer::singleShot(period.isEmpty() && !universeChanged ? 0 : (universeChanged ? 6000 : 2500), this, [this, done] {
             done(m_sectorHeatmap->summaryText() + "\n\nCSV (sector, ticker, name, market cap bn, last, performance %):\n" + clip(m_sectorHeatmap->resultsCsv(), 9000), false);
         });
     } else if (name == "get_volatility") {
@@ -703,7 +708,13 @@ bool MainWindow::handleLocalCommand(const QString& rawText, QString& feedback)
     QString text = rawText.trimmed();
     text.remove(QRegularExpression("[.!?]+$"));
     const QString lower = text.toLower();
-    auto symbolFrom = [](const QString& s) { return s.trimmed().toUpper().remove(QRegularExpression("[^A-Z.]")); };
+    // Stock symbols keep letters and dots; a futures symbol keeps its slash and digits ("/ESZ6", "/6E", "CLX6").
+    auto symbolFrom = [](const QString& s) {
+        QString upper = s.trimmed().toUpper();
+        upper.remove(QRegularExpression(QStringLiteral("[^A-Z0-9./]")));
+        if (!MarketDataClient::isFutures(upper)) upper.remove(QRegularExpression(QStringLiteral("[0-9/]")));
+        return upper;
+    };
 
     // IV rank: "backfill iv history", "what is the iv rank".
     if (lower.contains("backfill") && (lower.contains("iv") || lower.contains("implied"))) {

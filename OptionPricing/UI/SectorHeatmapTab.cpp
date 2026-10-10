@@ -6,6 +6,7 @@
 #include "SectorHeatmapTab.h"
 #include "Formatting.h"
 
+#include <QtCore/QSet>
 #include <QtCore/QStandardPaths>
 
 #include <algorithm>
@@ -15,8 +16,32 @@ namespace {
 
 constexpr const char* kPeriodKey = "sectorHeatmap/period";
 constexpr const char* kViewKey = "sectorHeatmap/view";
-constexpr const char* kUniverseKey = "sectorHeatmap/universe";
+constexpr const char* kUniverseKey = "sectorHeatmap/universe";   ///< "builtin", "etfs", "futures" or "watchlist"
+constexpr const char* kSizingKey = "sectorHeatmap/sizing";       ///< 0 market cap, 1 $ volume, 2 equal
 constexpr int kCapCacheDays = 14;
+
+/// Curated ETF universe grouped by asset class (sized by dollar volume: ETFs carry no market cap).
+struct EtfEntry { const char* ticker; const char* name; const char* group; };
+const std::vector<EtfEntry>& etfUniverse()
+{
+    static const std::vector<EtfEntry> list = {
+        { "SPY", "S&P 500", "US equity" }, { "QQQ", "Nasdaq-100", "US equity" }, { "DIA", "Dow Jones Industrial", "US equity" },
+        { "IWM", "Russell 2000", "US equity" }, { "MDY", "S&P MidCap 400", "US equity" }, { "RSP", "S&P 500 Equal Weight", "US equity" },
+        { "XLK", "Technology", "US sectors" }, { "XLF", "Financials", "US sectors" }, { "XLE", "Energy", "US sectors" }, { "XLV", "Health Care", "US sectors" },
+        { "XLY", "Consumer Discretionary", "US sectors" }, { "XLP", "Consumer Staples", "US sectors" }, { "XLI", "Industrials", "US sectors" },
+        { "XLB", "Materials", "US sectors" }, { "XLU", "Utilities", "US sectors" }, { "XLRE", "Real Estate", "US sectors" }, { "XLC", "Communication Services", "US sectors" },
+        { "SMH", "Semiconductors", "US sectors" }, { "XBI", "Biotech", "US sectors" }, { "KRE", "Regional Banks", "US sectors" }, { "XHB", "Homebuilders", "US sectors" },
+        { "EFA", "EAFE developed", "International" }, { "EEM", "Emerging markets", "International" }, { "FXI", "China large caps", "International" },
+        { "EWJ", "Japan", "International" }, { "EWZ", "Brazil", "International" }, { "INDA", "India", "International" }, { "EWG", "Germany", "International" }, { "EWY", "South Korea", "International" },
+        { "TLT", "20+ Year Treasuries", "Bonds" }, { "IEF", "7-10 Year Treasuries", "Bonds" }, { "SHY", "1-3 Year Treasuries", "Bonds" }, { "LQD", "Investment-grade corporates", "Bonds" },
+        { "HYG", "High-yield corporates", "Bonds" }, { "AGG", "US aggregate bonds", "Bonds" }, { "TIP", "TIPS", "Bonds" }, { "EMB", "Emerging-market bonds", "Bonds" },
+        { "GLD", "Gold", "Commodities" }, { "SLV", "Silver", "Commodities" }, { "USO", "Crude oil", "Commodities" }, { "UNG", "Natural gas", "Commodities" },
+        { "DBC", "Broad commodities", "Commodities" }, { "GDX", "Gold miners", "Commodities" }, { "CPER", "Copper", "Commodities" }, { "DBA", "Agriculture", "Commodities" },
+        { "IBIT", "Bitcoin", "Crypto & thematic" }, { "ETHA", "Ether", "Crypto & thematic" }, { "ARKK", "ARK Innovation", "Crypto & thematic" },
+        { "VXX", "Short-term VIX futures", "Crypto & thematic" }, { "UUP", "US Dollar", "Crypto & thematic" },
+    };
+    return list;
+}
 
 /// Built-in large-cap universe with sector and an approximate market cap (USD bn) used only
 /// until the live figure arrives from ticker details.
@@ -111,6 +136,10 @@ QColor sectorColor(const QString& sector, const Theme& theme)
         { "Internet", "#a78bfa" }, { "Software", "#7c3aed" }, { "Semis", "#4f46e5" }, { "Hardware", "#8b5cf6" }, { "Consumer", "#f59e0b" },
         { "Healthcare", "#ec4899" }, { "Finance", "#3b82f6" }, { "Energy", "#f97316" }, { "Industrials", "#9ca3af" }, { "Utilities", "#84cc16" },
         { "Materials", "#d97706" }, { "Real Estate", "#14b8a6" },
+        // ETF asset classes and futures product groups
+        { "US equity", "#3b82f6" }, { "US sectors", "#7c3aed" }, { "International", "#14b8a6" }, { "Bonds", "#84cc16" },
+        { "Commodities", "#f59e0b" }, { "Crypto & thematic", "#ec4899" }, { "Equity index", "#3b82f6" }, { "Metals", "#d97706" },
+        { "Rates", "#84cc16" }, { "Grains", "#65a30d" }, { "Meats", "#f43f5e" }, { "FX", "#06b6d4" }, { "Crypto", "#ec4899" },
     };
     const QString hex = colors.value(sector);
     if (!hex.isEmpty()) return QColor(hex);
@@ -416,12 +445,13 @@ void SectorHeatmapTab::buildUi()
     auto* viewRow = new QHBoxLayout;
     viewRow->setSpacing(4);
     int index = 0;
-    for (const char* name : { "Stocks", "Sectors" }) {
+    for (const char* name : { "Stocks", "Sectors", "Rotation" }) {
         auto* button = new QToolButton(this);
         button->setText(name);
         button->setCheckable(true);
         button->setCursor(Qt::PointingHandCursor);
-        button->setToolTip(index == 0 ? "Every stock as a tile inside its sector, sized by market cap" : "One cap-weighted tile per sector");
+        button->setToolTip(index == 0 ? "Every instrument as a tile inside its group" : index == 1 ? "One weighted tile per group"
+                                      : "Each group as a point: relative strength over the period (x) against one-week momentum (y), versus the universe");
         m_viewGroup->addButton(button, index++);
         viewRow->addWidget(button);
     }
@@ -441,8 +471,15 @@ void SectorHeatmapTab::buildUi()
     }
     m_universe = new QComboBox(this);
     m_universe->addItem(QStringLiteral("Large caps (%1)").arg(universe().size()), "builtin");
+    m_universe->addItem(QStringLiteral("ETFs (%1)").arg(etfUniverse().size()), "etfs");
+    m_universe->addItem("Futures", "futures");
     m_universe->addItem("Watchlist", "watchlist");
-    m_universe->setToolTip("Which stocks to show: the built-in large-cap universe grouped by sector, or the active watchlist grouped by industry");
+    m_universe->setToolTip("What to show: the built-in large caps by sector, ETFs by asset class, front-month futures by product group (real-time), or the active watchlist by industry");
+    m_sizingBox = new QComboBox(this);
+    m_sizingBox->addItem("Size: market cap", 0);
+    m_sizingBox->addItem("Size: $ volume", 1);
+    m_sizingBox->addItem("Size: equal", 2);
+    m_sizingBox->setToolTip("Tile area: market capitalisation (ETFs and futures fall back to dollars traded today), dollars traded today, or equal tiles");
     m_summary = new QLabel(this);
     m_summary->setObjectName("muted");
     m_summary->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
@@ -458,11 +495,19 @@ void SectorHeatmapTab::buildUi()
     controls->addLayout(periodRow);
     controls->addSpacing(8);
     controls->addWidget(m_universe);
+    controls->addWidget(m_sizingBox);
     controls->addWidget(m_summary, 1);
     controls->addWidget(m_reset);
     controls->addWidget(m_refresh);
 
     m_view = new TreemapView(this);
+    // Rotation view: a scatter of the groups, drawn by buildRotation().
+    m_rotation = new QChart;
+    m_rotation->legend()->setAlignment(Qt::AlignRight);
+    m_rotationChart = ui::makeChartView(this, m_rotation, 300);
+    m_stack = new QStackedWidget(this);
+    m_stack->addWidget(m_view);
+    m_stack->addWidget(m_rotationChart);
     m_status = new QLabel(this);
     m_status->setObjectName("muted");
     m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
@@ -473,7 +518,7 @@ void SectorHeatmapTab::buildUi()
     paneLayout->setContentsMargins(12, 10, 12, 10);
     paneLayout->setSpacing(8);
     paneLayout->addLayout(controls);
-    paneLayout->addWidget(m_view, 1);
+    paneLayout->addWidget(m_stack, 1);
     paneLayout->addWidget(m_status);
 
     auto* root = new QVBoxLayout(this);
@@ -482,11 +527,17 @@ void SectorHeatmapTab::buildUi()
 
     const QSettings settings;
     m_periodIndex = std::clamp(settings.value(kPeriodKey, 0).toInt(), 0, static_cast<int>(periods().size()) - 1);
-    m_sectorsView = settings.value(kViewKey, "stocks").toString() == "sectors";
-    m_watchlistUniverse = settings.value(kUniverseKey, "builtin").toString() == "watchlist";
+    const QString view = settings.value(kViewKey, "stocks").toString();
+    m_sectorsView = view == "sectors";
+    m_rotationView = view == "rotation";
+    const QString universeName = settings.value(kUniverseKey, "builtin").toString();
+    m_universeKind = universeName == "watchlist" ? Universe::Watchlist : universeName == "etfs" ? Universe::Etfs : universeName == "futures" ? Universe::Futures : Universe::LargeCaps;
+    m_watchlistUniverse = m_universeKind == Universe::Watchlist;
+    m_sizing = std::clamp(settings.value(kSizingKey, 0).toInt(), 0, 2);
     if (QAbstractButton* b = m_periodGroup->button(m_periodIndex)) b->setChecked(true);
-    if (QAbstractButton* b = m_viewGroup->button(m_sectorsView ? 1 : 0)) b->setChecked(true);
-    m_universe->setCurrentIndex(m_watchlistUniverse ? 1 : 0);
+    if (QAbstractButton* b = m_viewGroup->button(m_rotationView ? 2 : (m_sectorsView ? 1 : 0))) b->setChecked(true);
+    m_universe->setCurrentIndex(std::max(0, m_universe->findData(universeName)));
+    m_sizingBox->setCurrentIndex(m_sizing);
     m_view->setScale(periods()[static_cast<size_t>(m_periodIndex)].colorScale);
     m_view->setEmptyText("Press Refresh to load sector performance.");
 }
@@ -495,7 +546,14 @@ void SectorHeatmapTab::wire()
 {
     connect(m_viewGroup, &QButtonGroup::idClicked, this, [this](int id) {
         m_sectorsView = id == 1;
-        QSettings().setValue(kViewKey, m_sectorsView ? "sectors" : "stocks");
+        m_rotationView = id == 2;
+        QSettings().setValue(kViewKey, m_rotationView ? "rotation" : (m_sectorsView ? "sectors" : "stocks"));
+        if (m_rotationView && m_loaded) ensureShortReference();
+        relayout();
+    });
+    connect(m_sizingBox, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+        m_sizing = std::clamp(index, 0, 2);
+        QSettings().setValue(kSizingKey, m_sizing);
         relayout();
     });
     connect(m_periodGroup, &QButtonGroup::idClicked, this, [this](int id) {
@@ -506,8 +564,12 @@ void SectorHeatmapTab::wire()
         else relayout();
     });
     connect(m_universe, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) {
-        m_watchlistUniverse = m_universe->currentData().toString() == "watchlist";
-        QSettings().setValue(kUniverseKey, m_watchlistUniverse ? "watchlist" : "builtin");
+        const QString key = m_universe->currentData().toString();
+        m_universeKind = key == "watchlist" ? Universe::Watchlist : key == "etfs" ? Universe::Etfs : key == "futures" ? Universe::Futures : Universe::LargeCaps;
+        m_watchlistUniverse = m_universeKind == Universe::Watchlist;
+        QSettings().setValue(kUniverseKey, key);
+        m_focusSector.clear();
+        m_reset->setVisible(false);
         buildUniverse();
         refresh();
     });
@@ -591,6 +653,26 @@ void SectorHeatmapTab::buildUniverse()
             if (s.name.isEmpty()) s.name = s.ticker;
             m_stocks.push_back(s);
         }
+    } else if (m_universeKind == Universe::Etfs) {
+        for (const EtfEntry& e : etfUniverse()) {
+            Stock s;
+            s.ticker = e.ticker;
+            s.name = e.name;
+            s.sector = e.group;
+            m_stocks.push_back(s);
+        }
+    } else if (m_universeKind == Universe::Futures) {
+        // Front months of the standard-size contracts (micros duplicate their parent products).
+        static const QSet<QString> micros = { "MES", "MNQ", "MCL", "MGC", "MBT", "MET" };
+        for (const MarketDataClient::FuturesProduct& p : MarketDataClient::knownFuturesProducts()) {
+            if (micros.contains(p.code)) continue;
+            Stock s;
+            s.ticker = QStringLiteral("/%1").arg(p.code);
+            s.name = p.name;
+            s.sector = p.category;
+            s.multiplier = p.multiplier;
+            m_stocks.push_back(s);
+        }
     } else {
         for (const UniverseEntry& e : universe()) {
             Stock s;
@@ -605,6 +687,63 @@ void SectorHeatmapTab::buildUniverse()
     }
     m_loaded = false;
     relayout();
+}
+
+QString SectorHeatmapTab::universeTitle() const
+{
+    switch (m_universeKind) {
+    case Universe::Etfs: return QStringLiteral("ETFs");
+    case Universe::Futures: return QStringLiteral("Futures");
+    case Universe::Watchlist: return QStringLiteral("Watchlist");
+    case Universe::LargeCaps: break;
+    }
+    return QStringLiteral("Large caps");
+}
+
+bool SectorHeatmapTab::setUniverse(const QString& name)
+{
+    const QString wanted = name.trimmed().toLower();
+    QString key;
+    if (wanted.startsWith("etf")) key = "etfs";
+    else if (wanted.startsWith("future")) key = "futures";
+    else if (wanted.startsWith("watch")) key = "watchlist";
+    else if (wanted.contains("cap") || wanted.contains("stock") || wanted.contains("built")) key = "builtin";
+    if (key.isEmpty()) return false;
+    const int index = m_universe->findData(key);
+    if (index < 0) return false;
+    if (index != m_universe->currentIndex()) m_universe->setCurrentIndex(index);   // the handler rebuilds and refreshes
+    return true;
+}
+
+bool SectorHeatmapTab::setSizing(const QString& name)
+{
+    const QString wanted = name.trimmed().toLower();
+    int index = -1;
+    if (wanted.contains("cap")) index = 0;
+    else if (wanted.contains("vol") || wanted.contains("dollar") || wanted.contains("$")) index = 1;
+    else if (wanted.contains("equal") || wanted.contains("same")) index = 2;
+    if (index < 0) return false;
+    m_sizingBox->setCurrentIndex(index);
+    return true;
+}
+
+QString SectorHeatmapTab::sizingLabel() const
+{
+    if (m_sizing == 1) return QStringLiteral("dollars traded today");
+    if (m_sizing == 2 || m_universeKind == Universe::Futures) return QStringLiteral("equal tiles");
+    return m_universeKind == Universe::Etfs ? QStringLiteral("dollars traded today") : QStringLiteral("market cap");
+}
+
+double SectorHeatmapTab::weightFor(const Stock& s) const
+{
+    const double dollarVolume = s.last * s.dayVolume * s.multiplier;
+    if (m_sizing == 2) return 1.0;
+    if (m_sizing == 1) return std::max(dollarVolume, 1.0);
+    if (s.marketCap > 0.0) return s.marketCap;
+    // No market cap: futures get equal tiles (notional traded would let the Treasuries and
+    // index contracts swamp every other product); ETFs size by what traded today.
+    if (m_universeKind == Universe::Futures) return 1.0;
+    return std::max(dollarVolume, 1e8);
 }
 
 void SectorHeatmapTab::refresh()
@@ -637,6 +776,7 @@ void SectorHeatmapTab::fetchQuotes()
                     if (s.ticker != q.ticker) continue;
                     s.last = q.last;
                     s.previousClose = q.previousClose;
+                    s.dayVolume = q.dayVolume;
                     if (q.asOf.isValid() && q.asOf > m_pricesAsOf) m_pricesAsOf = q.asOf;
                 }
             }
@@ -666,12 +806,60 @@ QDate SectorHeatmapTab::referenceDate() const
     return today.addDays(-period.lookbackDays);
 }
 
+void SectorHeatmapTab::ensureShortReference()
+{
+    // The rotation view's momentum axis uses the one-week window; load its reference closes
+    // once (the period's own closes come through ensureReferenceCloses).
+    static const QString label = QStringLiteral("1W");
+    if (m_referenceSession.count(label) || m_stocks.empty()) { applyReferenceCloses(); return; }
+    if (m_shortReferencePending) return;
+    m_shortReferencePending = true;
+    const QDate target = QDate::currentDate().addDays(-7);
+    if (m_universeKind == Universe::Futures) {
+        // Grouped daily closes cover stocks and ETFs only; futures take per-contract bars.
+        auto closes = std::make_shared<std::map<QString, double>>();
+        auto pending = std::make_shared<int>(static_cast<int>(m_stocks.size()));
+        for (const Stock& s : m_stocks) {
+            const QString ticker = s.ticker;
+            auto done = [this, closes, pending, target] {
+                if (--*pending > 0) return;
+                m_referenceCloses[target.toString(Qt::ISODate) + "#1W"] = *closes;
+                m_referenceSession[label] = target;
+                m_shortReferencePending = false;
+                applyReferenceCloses();
+            };
+            m_client.fetchAggregates(ticker, 1, "day", target.addDays(-10), target, [ticker, closes, done](const MarketDataClient::BarSeries& series) {
+                if (!series.bars.empty()) (*closes)[ticker] = series.bars.back().close;
+                done();
+            }, [done](const QString&) { done(); });
+        }
+        return;
+    }
+    auto attempt = std::make_shared<std::function<void(QDate, int)>>();
+    *attempt = [this, attempt](QDate date, int triesLeft) {
+        m_client.fetchGroupedDaily(date, [this, date, triesLeft, attempt](const std::map<QString, double>& closes) {
+            if (closes.empty() && triesLeft > 0) { (*attempt)(date.addDays(-1), triesLeft - 1); return; }
+            m_referenceCloses[date.toString(Qt::ISODate)] = closes;
+            m_referenceSession[label] = date;
+            m_shortReferencePending = false;
+            applyReferenceCloses();
+        }, [this](const QString& message) {
+            qWarning("[sector-heatmap] 1W reference failed: %s", qPrintable(message));
+            m_shortReferencePending = false;
+            applyReferenceCloses();
+        });
+    };
+    (*attempt)(target, 6);
+}
+
 void SectorHeatmapTab::ensureReferenceCloses()
 {
     const Period& period = periods()[static_cast<size_t>(m_periodIndex)];
+    if (m_rotationView && !m_referenceSession.count(QStringLiteral("1W"))) ensureShortReference();
     if (period.lookbackDays == 0) { recomputePerformance(); return; }
     const QString label = period.label;
     if (m_referenceSession.count(label)) { applyReferenceCloses(); return; }
+    if (m_universeKind == Universe::Futures) { fetchReferenceFallback(referenceDate()); return; }   // no grouped closes for futures
     // Walk back from the target date to the most recent trading session (weekends, holidays).
     auto attempt = std::make_shared<std::function<void(QDate, int)>>();
     *attempt = [this, label, attempt](QDate date, int triesLeft) {
@@ -723,6 +911,19 @@ void SectorHeatmapTab::fetchReferenceFallback(const QDate& target)
 
 void SectorHeatmapTab::applyReferenceCloses()
 {
+    // One-week closes for the rotation view first (futures keep theirs under a "#1W" key);
+    // they matter even when the period itself needs no reference (Daily).
+    const auto shortSession = m_referenceSession.find(QStringLiteral("1W"));
+    if (shortSession != m_referenceSession.end()) {
+        auto shortCloses = m_referenceCloses.find(shortSession->second.toString(Qt::ISODate) + "#1W");
+        if (shortCloses == m_referenceCloses.end()) shortCloses = m_referenceCloses.find(shortSession->second.toString(Qt::ISODate));
+        for (Stock& s : m_stocks) {
+            s.shortReferenceClose = 0.0;
+            if (shortCloses == m_referenceCloses.end()) continue;
+            const auto it = shortCloses->second.find(s.ticker);
+            if (it != shortCloses->second.end()) s.shortReferenceClose = it->second;
+        }
+    }
     const QString label = periods()[static_cast<size_t>(m_periodIndex)].label;
     const auto session = m_referenceSession.find(label);
     if (session == m_referenceSession.end()) { recomputePerformance(); return; }
@@ -744,12 +945,15 @@ void SectorHeatmapTab::recomputePerformance()
     for (Stock& s : m_stocks) {
         const double base = period.lookbackDays == 0 ? s.previousClose : s.referenceClose;
         s.performance = (s.last > 0.0 && base > 0.0) ? (s.last / base - 1.0) * 100.0 : std::numeric_limits<double>::quiet_NaN();
+        // One-week performance for the rotation view (its axes are chosen in rotationAxes()).
+        s.shortPerformance = (s.last > 0.0 && s.shortReferenceClose > 0.0) ? (s.last / s.shortReferenceClose - 1.0) * 100.0 : std::numeric_limits<double>::quiet_NaN();
         if (!std::isnan(s.performance)) ++priced;
     }
-    QString status = QStringLiteral("%1 of %2 stocks priced").arg(priced).arg(m_stocks.size());
+    const char* noun = m_universeKind == Universe::Futures ? "contracts" : m_universeKind == Universe::Etfs ? "ETFs" : "stocks";
+    QString status = QStringLiteral("%1 of %2 %3 priced").arg(priced).arg(m_stocks.size()).arg(noun);
     if (m_pricesAsOf.isValid()) status += QStringLiteral(" · last prices %1").arg(m_pricesAsOf.toLocalTime().toString("yyyy-MM-dd HH:mm"));
     if (period.lookbackDays != 0 && m_referenceSessionDate.isValid()) status += QStringLiteral(" · versus the %1 close").arg(m_referenceSessionDate.toString(Qt::ISODate));
-    status += " · 15-minute delayed data from Massive.com";
+    status += m_universeKind == Universe::Futures ? " · real-time futures data from Massive.com" : " · 15-minute delayed data from Massive.com";
     updateStatus(status, ui::StatusKind::Info);
     relayout();
 }
@@ -770,29 +974,42 @@ void SectorHeatmapTab::relayout()
         t.ticker = s.ticker;
         t.title = s.ticker;
         t.subtitle = s.name;
-        t.weight = std::max(s.marketCap, 1e8);
+        t.weight = weightFor(s);
         t.performance = s.performance;
-        t.tooltip = QStringLiteral("<b>%1</b> · %2<br>%3<br>Market cap %4<br>Last %5 · %6: %7")
-                        .arg(s.ticker, s.name, s.sector, formatCap(s.marketCap), s.last > 0 ? ui::number(s.last, 2) : QStringLiteral("–"),
+        const QString sizeLine = s.marketCap > 0.0 ? QStringLiteral("Market cap %1").arg(formatCap(s.marketCap))
+                                                   : QStringLiteral("Traded today %1").arg(formatCap(s.last * s.dayVolume * s.multiplier));
+        t.tooltip = QStringLiteral("<b>%1</b> · %2<br>%3<br>%4<br>Last %5 · %6: %7")
+                        .arg(s.ticker, s.name, s.sector, sizeLine, s.last > 0 ? ui::number(s.last, 2) : QStringLiteral("–"),
                              periods()[static_cast<size_t>(m_periodIndex)].label, signedPct(s.performance));
+        if (!std::isnan(s.shortPerformance) && periods()[static_cast<size_t>(m_periodIndex)].lookbackDays > 7) t.tooltip += QStringLiteral(" · 1W: %1").arg(signedPct(s.shortPerformance));
         g.weight += t.weight;
         g.tiles.push_back(t);
     }
+    const char* noun = m_universeKind == Universe::Futures ? "contracts" : m_universeKind == Universe::Etfs ? "ETFs" : "stocks";
+    const char* groupNoun = m_universeKind == Universe::LargeCaps || m_universeKind == Universe::Watchlist ? "sectors" : "groups";
+    int upAll = 0, downAll = 0;
     std::vector<TreemapView::Group> list;
     for (const QString& name : order) {
         TreemapView::Group g = groups[name];
-        // Cap-weighted sector performance over the priced members.
+        // Weighted group performance over the priced members, and breadth (advancers / decliners).
         double wsum = 0.0, psum = 0.0;
-        for (const TreemapView::Tile& t : g.tiles) { if (!std::isnan(t.performance)) { wsum += t.weight; psum += t.weight * t.performance; } }
+        int up = 0, down = 0;
+        for (const TreemapView::Tile& t : g.tiles) {
+            if (std::isnan(t.performance)) continue;
+            wsum += t.weight; psum += t.weight * t.performance;
+            (t.performance >= 0 ? up : down)++;
+        }
+        upAll += up; downAll += down;
         g.performance = wsum > 0.0 ? psum / wsum : std::numeric_limits<double>::quiet_NaN();
+        const QString breadth = up + down ? QStringLiteral("%1▲ %2▼").arg(up).arg(down) : QString();
         if (sectorsOnly) {
             TreemapView::Tile sectorTile;
             sectorTile.title = g.name;
-            sectorTile.subtitle = QStringLiteral("%1 stocks · %2").arg(g.tiles.size()).arg(formatCap(g.weight));
+            sectorTile.subtitle = QStringLiteral("%1 %2 · %3%4").arg(g.tiles.size()).arg(noun, breadth, m_sizing == 2 ? QString() : QStringLiteral(" · %1").arg(formatCap(g.weight)));
             sectorTile.weight = g.weight;
             sectorTile.performance = g.performance;
-            sectorTile.tooltip = QStringLiteral("<b>%1</b><br>%2 stocks · market cap %3<br>%4: %5 (cap-weighted)")
-                                     .arg(g.name).arg(g.tiles.size()).arg(formatCap(g.weight), periods()[static_cast<size_t>(m_periodIndex)].label, signedPct(g.performance));
+            sectorTile.tooltip = QStringLiteral("<b>%1</b><br>%2 %3 · breadth %4<br>%5: %6 (weighted by %7)")
+                                     .arg(g.name).arg(g.tiles.size()).arg(noun, breadth, periods()[static_cast<size_t>(m_periodIndex)].label, signedPct(g.performance), sizingLabel());
             g.tiles.assign(1, sectorTile);
         } else {
             std::sort(g.tiles.begin(), g.tiles.end(), [](const TreemapView::Tile& a, const TreemapView::Tile& b) { return a.weight > b.weight; });
@@ -801,17 +1018,152 @@ void SectorHeatmapTab::relayout()
     }
     std::sort(list.begin(), list.end(), [](const TreemapView::Group& a, const TreemapView::Group& b) { return a.weight > b.weight; });
     const size_t shown = list.empty() ? 0 : (focused ? list.front().tiles.size() : m_stocks.size());
+    const QString breadthAll = upAll + downAll ? QStringLiteral(" · breadth %1▲ %2▼ (%3% up)").arg(upAll).arg(downAll).arg(qRound(100.0 * upAll / (upAll + downAll))) : QString();
+    const QString sizeNote = QStringLiteral("Tile size is %1 and colour is the period change.").arg(sizingLabel());
     m_view->setGroups(std::move(list), sectorsOnly);
-    if (focused) {
-        m_summary->setText(QStringLiteral("%1 · %2 stocks · %3 change")
-                               .arg(m_focusSector).arg(shown).arg(periods()[static_cast<size_t>(m_periodIndex)].label));
-        m_summary->setToolTip("Tile size is market cap and colour is the period change. Click a tile to load it; Reset returns to all sectors.");
+    if (m_rotationView && !focused) {
+        if (m_loaded && !m_referenceSession.count(QStringLiteral("1W"))) ensureShortReference();   // momentum axis needs the week-ago closes
+        buildRotation();
+        m_stack->setCurrentWidget(m_rotationChart);
+        const int lookback = periods()[static_cast<size_t>(m_periodIndex)].lookbackDays;
+        const QString longLabel = lookback == 0 ? QStringLiteral("1W") : QString::fromLatin1(periods()[static_cast<size_t>(m_periodIndex)].label);
+        const QString shortLabel = lookback == 0 || lookback == 7 ? QStringLiteral("Daily") : QStringLiteral("1W");
+        m_summary->setText(QStringLiteral("%1 · %2 %3 · rotation: %4 relative strength vs %5 momentum%6").arg(universeTitle()).arg(order.size()).arg(groupNoun, longLabel, shortLabel, breadthAll));
+        m_summary->setToolTip("Each point is a group. x: its period performance minus the universe's (relative strength); y: the same over the last week (momentum). "
+                              "Leading = top right, Improving = top left, Weakening = bottom right, Lagging = bottom left. Click a point to expand that group.");
     } else {
-        m_summary->setText(QStringLiteral("%1 stocks · %2 sectors · %3 change")
-                               .arg(m_stocks.size()).arg(order.size()).arg(periods()[static_cast<size_t>(m_periodIndex)].label));
-        m_summary->setToolTip(m_sectorsView ? "Tile size is market cap and colour is the period change. Click a sector to expand it."
-                                            : "Tile size is market cap and colour is the period change.");
+        m_stack->setCurrentWidget(m_view);
+        if (focused) {
+            m_summary->setText(QStringLiteral("%1 · %2 %3 · %4 change%5").arg(m_focusSector).arg(shown).arg(noun, periods()[static_cast<size_t>(m_periodIndex)].label, breadthAll));
+            m_summary->setToolTip(sizeNote + " Click a tile to load it; Reset returns to all groups.");
+        } else {
+            m_summary->setText(QStringLiteral("%1 · %2 %3 · %4 %5 · %6 change%7").arg(universeTitle()).arg(m_stocks.size()).arg(noun).arg(order.size()).arg(groupNoun, periods()[static_cast<size_t>(m_periodIndex)].label, breadthAll));
+            m_summary->setToolTip(m_sectorsView ? sizeNote + " Click a group to expand it." : sizeNote);
+        }
     }
+}
+
+namespace {
+/// The rotation view's two windows for a stock: the long one (relative strength) and the
+/// short one (momentum). Daily period: 1W against the day; 1W period: the week against the
+/// day; longer periods: the period against 1W. Returns false when a figure is missing.
+bool rotationAxes(const SectorHeatmapTab::Stock& s, int lookbackDays, double* longPct, double* shortPct)
+{
+    const double daily = (s.last > 0.0 && s.previousClose > 0.0) ? (s.last / s.previousClose - 1.0) * 100.0 : std::numeric_limits<double>::quiet_NaN();
+    const double week = s.shortPerformance;
+    if (lookbackDays == 0) { *longPct = week; *shortPct = daily; }
+    else if (lookbackDays == 7) { *longPct = s.performance; *shortPct = daily; }
+    else { *longPct = s.performance; *shortPct = week; }
+    return !std::isnan(*longPct) && !std::isnan(*shortPct);
+}
+QString rotationLongLabel(int lookbackDays, const char* periodLabel) { return lookbackDays == 0 ? QStringLiteral("1W") : QString::fromLatin1(periodLabel); }
+QString rotationShortLabel(int lookbackDays) { return lookbackDays == 0 || lookbackDays == 7 ? QStringLiteral("Daily") : QStringLiteral("1W"); }
+} // namespace
+
+void SectorHeatmapTab::buildRotation()
+{
+    // Weighted performance per group over the long window (x) and the short window (y), each
+    // relative to the weighted universe, so the chart reads as a relative-rotation map.
+    struct Agg { double w = 0, p = 0, ps = 0; int n = 0; };
+    std::map<QString, Agg> groups;
+    Agg all;
+    std::vector<QString> order;
+    const Period& period = periods()[static_cast<size_t>(m_periodIndex)];
+    for (const Stock& s : m_stocks) {
+        double longPct = 0.0, shortPct = 0.0;
+        if (!rotationAxes(s, period.lookbackDays, &longPct, &shortPct)) continue;
+        const double w = weightFor(s);
+        if (!groups.count(s.sector)) order.push_back(s.sector);
+        Agg& a = groups[s.sector];
+        a.w += w; a.p += w * longPct; a.ps += w * shortPct; ++a.n;
+        all.w += w; all.p += w * longPct; all.ps += w * shortPct; ++all.n;
+    }
+    m_rotation->removeAllSeries();
+    for (QAbstractAxis* axis : m_rotation->axes()) m_rotation->removeAxis(axis);
+    const QString longLabel = rotationLongLabel(period.lookbackDays, period.label);
+    const QString shortLabel = rotationShortLabel(period.lookbackDays);
+    const QColor text(m_theme.text.isEmpty() ? "#c7d2e3" : m_theme.text);
+    m_rotation->setBackgroundBrush(QColor(m_theme.surface.isEmpty() ? "#121a2b" : m_theme.surface));
+    m_rotation->setTitleBrush(text);
+    m_rotation->legend()->setLabelColor(text);
+    m_rotation->setTitle(all.w > 0.0
+                             ? QStringLiteral("%1 rotation · %2 relative strength vs %3 momentum (weighted by %4)").arg(universeTitle(), longLabel, shortLabel, sizingLabel())
+                             : QStringLiteral("%1 rotation · loading the week-ago closes…").arg(universeTitle()));
+    if (all.w <= 0.0) return;
+    const double benchLong = all.p / all.w, benchShort = all.ps / all.w;
+    auto* x = new QValueAxis;
+    x->setTitleText(QStringLiteral("Relative strength, %1 (pct points vs universe)").arg(longLabel));
+    auto* y = new QValueAxis;
+    y->setTitleText(QStringLiteral("Momentum, %1 (pct points vs universe)").arg(shortLabel));
+    m_rotation->addAxis(x, Qt::AlignBottom);
+    m_rotation->addAxis(y, Qt::AlignLeft);
+    double maxX = 0.5, maxY = 0.5;
+    for (const QString& name : order) {
+        const Agg& a = groups[name];
+        const double rx = a.p / a.w - benchLong, ry = a.ps / a.w - benchShort;
+        maxX = std::max(maxX, std::fabs(rx)); maxY = std::max(maxY, std::fabs(ry));
+        auto* series = new QScatterSeries;
+        series->setName(QStringLiteral("%1 (%2, %3)").arg(name, signedPct(rx), signedPct(ry)));
+        series->setMarkerSize(16.0);
+        series->setColor(sectorColor(name, m_theme));
+        series->setBorderColor(QColor(m_theme.border.isEmpty() ? "#273449" : m_theme.border));
+        series->append(rx, ry);
+        m_rotation->addSeries(series);
+        series->attachAxis(x);
+        series->attachAxis(y);
+        const QString quadrant = rx >= 0 ? (ry >= 0 ? "Leading" : "Weakening") : (ry >= 0 ? "Improving" : "Lagging");
+        const QString tip = QStringLiteral("%1 · %2\n%3 relative %4 · %5 momentum %6\n%7 members · click to expand").arg(name, quadrant, longLabel, signedPct(rx), shortLabel, signedPct(ry)).arg(a.n);
+        connect(series, &QScatterSeries::hovered, this, [tip](const QPointF&, bool state) { if (state) QToolTip::showText(QCursor::pos(), tip); else QToolTip::hideText(); });
+        connect(series, &QScatterSeries::clicked, this, [this, name](const QPointF&) { focusSector(name); if (QAbstractButton* b = m_viewGroup->button(0)) b->click(); });
+    }
+    // Quadrant axes through the universe (0, 0).
+    const double rangeX = std::ceil(maxX * 1.25 * 2.0) / 2.0, rangeY = std::ceil(maxY * 1.25 * 2.0) / 2.0;
+    x->setRange(-rangeX, rangeX);
+    y->setRange(-rangeY, rangeY);
+    for (int axis = 0; axis < 2; ++axis) {
+        auto* zero = new QLineSeries;
+        if (axis == 0) { zero->append(-rangeX, 0.0); zero->append(rangeX, 0.0); }
+        else { zero->append(0.0, -rangeY); zero->append(0.0, rangeY); }
+        QPen pen(QColor(m_theme.textMuted.isEmpty() ? "#8294ad" : m_theme.textMuted));
+        pen.setStyle(Qt::DashLine);
+        zero->setPen(pen);
+        m_rotation->addSeries(zero);
+        zero->attachAxis(x);
+        zero->attachAxis(y);
+        if (QLegendMarker* marker = m_rotation->legend()->markers(zero).value(0)) marker->setVisible(false);
+    }
+    // Axis colours
+    for (QValueAxis* axis : { x, y }) {
+        axis->setLabelsColor(text);
+        axis->setTitleBrush(text);
+        axis->setGridLineColor(QColor(m_theme.gridLine.isEmpty() ? "#1f2a3f" : m_theme.gridLine));
+        axis->setLabelFormat("%+.1f");
+    }
+}
+
+QString SectorHeatmapTab::rotationSummary() const
+{
+    struct Agg { double w = 0, p = 0, ps = 0; };
+    std::map<QString, Agg> groups;
+    Agg all;
+    const Period& period = periods()[static_cast<size_t>(m_periodIndex)];
+    for (const Stock& s : m_stocks) {
+        double longPct = 0.0, shortPct = 0.0;
+        if (!rotationAxes(s, period.lookbackDays, &longPct, &shortPct)) continue;
+        const double w = weightFor(s);
+        Agg& a = groups[s.sector];
+        a.w += w; a.p += w * longPct; a.ps += w * shortPct;
+        all.w += w; all.p += w * longPct; all.ps += w * shortPct;
+    }
+    if (all.w <= 0.0) return QStringLiteral("Rotation: no priced groups yet (the one-week reference closes may still be loading).");
+    QStringList parts;
+    for (const auto& [name, a] : groups) {
+        const double rx = a.p / a.w - all.p / all.w, ry = a.ps / a.w - all.ps / all.w;
+        const QString quadrant = rx >= 0 ? (ry >= 0 ? "leading" : "weakening") : (ry >= 0 ? "improving" : "lagging");
+        parts << QStringLiteral("%1 %2 (RS %3, momentum %4)").arg(name, quadrant, signedPct(rx), signedPct(ry));
+    }
+    return QStringLiteral("Rotation versus the %1 universe (%2 relative strength, %3 momentum): %4.")
+        .arg(universeTitle(), rotationLongLabel(period.lookbackDays, period.label), rotationShortLabel(period.lookbackDays), parts.join("; "));
 }
 
 // MARK: - Market caps
@@ -848,8 +1200,10 @@ void SectorHeatmapTab::saveCapCache() const
 
 void SectorHeatmapTab::fetchMissingCaps()
 {
+    if (m_universeKind == Universe::Futures) return;   // contracts have no market cap; tiles size by dollars traded
     const QDateTime stale = QDateTime::currentDateTime().addDays(-kCapCacheDays);
     for (const Stock& s : m_stocks) {
+        if (MarketDataClient::isFutures(s.ticker)) continue;
         const auto it = m_capCache.find(s.ticker);
         if ((it == m_capCache.end() || it->second.asOf < stale) && !m_capQueue.contains(s.ticker)) m_capQueue << s.ticker;
     }
@@ -879,7 +1233,11 @@ void SectorHeatmapTab::fetchMissingCaps()
 void SectorHeatmapTab::loadSampleData()
 {
     m_watchlistUniverse = false;
-    m_universe->setCurrentIndex(0);
+    m_universeKind = Universe::LargeCaps;
+    {
+        const QSignalBlocker blocker(m_universe);
+        m_universe->setCurrentIndex(0);
+    }
     buildUniverse();
     // Deterministic pseudo-random moves: sector drift plus a stock-specific wiggle.
     uint seed = 7;
@@ -890,7 +1248,10 @@ void SectorHeatmapTab::loadSampleData()
         s.previousClose = 100.0;
         s.last = 100.0 * (1.0 + (drift[s.sector] + rnd() * 2.0) / 100.0);
         s.referenceClose = 100.0 * (1.0 - (drift[s.sector] * 3.0 + rnd() * 6.0) / 100.0);
+        s.shortReferenceClose = 100.0 * (1.0 - (drift[s.sector] * 1.5 + rnd() * 3.0) / 100.0);
+        s.dayVolume = 1e6 * (1.5 + rnd());
     }
+    m_referenceSession[QStringLiteral("1W")] = QDate::currentDate().addDays(-7);
     m_pricesAsOf = QDateTime::currentDateTime();
     m_loaded = true;
     recomputePerformance();
@@ -922,8 +1283,9 @@ bool SectorHeatmapTab::setPeriod(const QString& label)
 bool SectorHeatmapTab::setView(const QString& view)
 {
     const QString wanted = view.trimmed().toLower();
-    if (wanted.startsWith("sector")) { if (QAbstractButton* b = m_viewGroup->button(1)) b->click(); return true; }
-    if (wanted.startsWith("stock")) { if (QAbstractButton* b = m_viewGroup->button(0)) b->click(); return true; }
+    if (wanted.startsWith("sector") || wanted.startsWith("group")) { if (QAbstractButton* b = m_viewGroup->button(1)) b->click(); return true; }
+    if (wanted.startsWith("stock") || wanted.startsWith("tile")) { if (QAbstractButton* b = m_viewGroup->button(0)) b->click(); return true; }
+    if (wanted.startsWith("rotation") || wanted.startsWith("rrg")) { if (QAbstractButton* b = m_viewGroup->button(2)) b->click(); return true; }
     return false;
 }
 
@@ -939,7 +1301,8 @@ QString SectorHeatmapTab::summaryText() const
         priced.push_back(&s);
         (s.performance >= 0 ? up : down)++;
         Agg& a = sectors[s.sector];
-        a.w += s.marketCap; a.p += s.marketCap * s.performance; ++a.n;
+        const double w = weightFor(s);
+        a.w += w; a.p += w * s.performance; ++a.n;
     }
     if (priced.empty()) return QStringLiteral("Sector Heatmap (%1): prices not loaded yet.").arg(periodLabel());
     std::vector<std::pair<QString, double>> ranked;
@@ -948,10 +1311,12 @@ QString SectorHeatmapTab::summaryText() const
     std::sort(priced.begin(), priced.end(), [](const Stock* a, const Stock* b) { return a->performance > b->performance; });
     QString out;
     QTextStream s(&out);
-    s << "Sector Heatmap, " << periodLabel() << " performance, " << priced.size() << " stocks priced (" << up << " up, " << down << " down)";
-    if (!m_focusSector.isEmpty()) s << ", currently expanded to the " << m_focusSector << " sector";
+    s << "Sector Heatmap (" << universeTitle() << " universe, tiles sized by " << sizingLabel() << "), " << periodLabel() << " performance, "
+      << priced.size() << " instruments priced (breadth " << up << " up, " << down << " down, " << qRound(100.0 * up / std::max<size_t>(1, priced.size())) << "% advancing)";
+    if (!m_focusSector.isEmpty()) s << ", currently expanded to " << m_focusSector;
+    if (m_rotationView) s << ", rotation view";
     if (m_referenceSessionDate.isValid() && periods()[static_cast<size_t>(m_periodIndex)].lookbackDays != 0) s << " versus the " << m_referenceSessionDate.toString(Qt::ISODate) << " close";
-    s << ".\nSectors (cap-weighted): ";
+    s << ".\nGroups (weighted): ";
     QStringList parts;
     for (const auto& [name, perf] : ranked) parts << QStringLiteral("%1 %2").arg(name, signedPct(perf));
     s << parts.join(", ") << ".\nTop movers: ";
@@ -961,6 +1326,7 @@ QString SectorHeatmapTab::summaryText() const
     parts.clear();
     for (size_t i = priced.size(); i-- > 0 && parts.size() < 5;) parts << QStringLiteral("%1 %2").arg(priced[i]->ticker, signedPct(priced[i]->performance));
     s << parts.join(", ") << ".";
+    if (m_rotationView) s << "\n" << rotationSummary();
     return out;
 }
 

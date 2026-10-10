@@ -280,7 +280,13 @@ of every Greek. Help ▸ User Guide lists every page.
   the active watchlist grouped by industry instead. Prices come from the
   Massive.com bulk snapshot, period reference closes from grouped daily aggregates (with a
   per-ticker fallback), and market caps from ticker details, cached for two weeks in
-  `sector-heatmap-caps.json`. Hover a tile for name, cap, last and change; click to load
+  `sector-heatmap-caps.json`. Four **universes**: the large caps, **ETFs** by asset class
+  (US equity, US sectors, international, bonds, commodities, crypto and thematic), **Futures**
+  (the front month of each CME Group product by group, real-time) and the watchlist; three
+  **sizing** rules (market cap, dollars traded today, equal); **breadth** (advancers ▲ /
+  decliners ▼) per group and overall; and a **Rotation** view, a relative-rotation scatter of
+  the groups (period performance minus the universe's on x, one-week momentum on y; Leading /
+  Improving / Weakening / Lagging quadrants). Hover a tile for name, cap, last and change; click to load
   the ticker everywhere and open a **pop-out chart** (`UI/ChartPopup`), an exact copy of the
   Quotes chart with its timeframe, indicators, drawings and earnings cone, kept in sync by
   mirroring every script the Quotes tab sends to its chart page; double-click to open its
@@ -383,6 +389,30 @@ The API key is read from `MASSIVE_API_KEY` or `POLYGON_API_KEY`. When the app is
 from Xcode or Finder those variables are usually absent, so **Market > Set Massive API
 Key** accepts a key for the session, optionally remembered (unencrypted) in the
 application preferences. The key is only ever sent to `api.massive.com`.
+
+### Futures
+
+Futures are recognised in Massive's bare contract form (`CLX6`: product root, month code
+F G H J K M N Q U V X Z, one or two year digits; the root must be a known product so that
+`ES` or `CL` alone still mean the listed companies) and with the platform-style leading
+slash. An explicit contract is matched by month and year against the product's listed
+contracts, so `NGX6` reaches the vendor's two-digit `NGX26` and `ESZ26` reaches `ESZ6`;
+a ticker that already matches passes through. `/ES` is the front month of
+the E-mini S&P 500 (`MarketDataClient::resolveFutures` picks the nearest listed outright
+with at least a week left from `/futures/v1/contracts`, cached per day), `/ESZ6` a specific
+contract. `fetchQuotes`, `fetchAggregates`, `fetchUnderlying` and `fetchTickerDetails`
+route slash symbols to the `/futures/v1` snapshot, aggregates and products endpoints
+(real-time last trade, session open/high/low/volume, previous settlement; bars by
+`resolution` 1min … 1week), so watchlists, charts, comparisons, alerts, the Portfolio
+(type Future, with the product's contract multiplier: 50 for /ES, 1,000 for /CL, 100 for
+/GC …) and the risk engine work unchanged. A built-in table names the CME Group products
+(equity index, energy, metals, rates, grains, meats, FX, crypto); other codes are looked
+up from the products endpoint. Because the futures feed is real-time, the Quotes tab runs a
+separate 3-second snapshot poll for the futures on the watchlist and the charted future
+while auto-refresh is on (`QuotesTab::refreshFuturesQuotes`), updating their rows, the
+headline and the chart's live line, and re-pulls intraday futures candles every ~20 s. Option-chain fetches report that options on futures are not
+available yet, and `MainWindow::showTicker` makes a future the app-wide ticker (banner,
+charts, portfolio marks) without touching the Option Chain tab or the chain preload.
 
 ### In-memory chain store
 

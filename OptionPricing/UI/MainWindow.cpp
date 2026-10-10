@@ -120,8 +120,9 @@ void MainWindow::buildUi()
     m_quotes->onOpenInChain = [this](const QString& ticker) { showTicker(ticker, true); };
     m_quotes->onTickerSelected = [this](const QString& ticker) { showTicker(ticker, false); };
     m_quotes->onWatchlistChanged = [this](const QStringList& watchlist) {
-        // Fetch chains for new tickers and refresh any that are older than ten minutes.
-        m_store.preload(watchlist, 10 * 60);
+        // Fetch chains for new tickers and refresh any that are older than ten minutes
+        // (futures symbols have no option chains yet and are skipped).
+        m_store.preload(chainTickers(watchlist), 10 * 60);
         statusBar()->showMessage(QStringLiteral("Watchlist “%1”: %2 tickers; %3 option chain download%4 queued.")
                                      .arg(m_quotes->activeWatchlistName()).arg(watchlist.size()).arg(m_store.pending()).arg(m_store.pending() == 1 ? "" : "s"), 8000);
     };
@@ -154,7 +155,7 @@ void MainWindow::buildUi()
                                      .arg(restored).arg(m_store.contractCount())
                                      .arg(m_store.savedAt().isValid() ? m_store.savedAt().toString("yyyy-MM-dd HH:mm") : QStringLiteral("earlier")), 10000);
     }
-    QTimer::singleShot(800, this, [this] { m_store.preload(m_quotes->watchlist(), 10 * 60); });
+    QTimer::singleShot(800, this, [this] { m_store.preload(chainTickers(m_quotes->watchlist()), 10 * 60); });
 
     m_pricer->onAddLeg = [this](const pricing::Leg& leg) {
         m_strategy->addLeg(leg);
@@ -1160,6 +1161,15 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     m_portfolio->runRisk();
                     waitFor(400);
                     qInfo("[live-smoke] portfolio: %s", qPrintable(m_portfolio->summaryText().left(900)));
+                    // A futures position: marked from the real-time futures snapshot, history from futures bars.
+                    {
+                        QString error;
+                        const bool added = m_portfolio->addHolding(QJsonObject{ { "symbol", "/ES" }, { "type", "future" }, { "quantity", 1 }, { "entry", 7800.0 } }, &error);
+                        waitFor(6000);
+                        m_portfolio->runRisk();
+                        waitFor(600);
+                        qInfo("[live-smoke] portfolio + /ES future: %s -> %s", added ? "added" : qPrintable("FAILED " + error), qPrintable(m_portfolio->summaryText().left(700)));
+                    }
                     if (grab().save(shotDir + "/portfolio.png")) qInfo("[live-smoke] wrote portfolio.png");
                     // Hover readout on the P&L distribution: synthesize a mouse move over the plot.
                     if (auto* view = m_portfolio->findChild<QChartView*>()) {
@@ -1263,6 +1273,31 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     }
                     m_sectorHeatmap->clearFocus();
                     waitFor(200);
+                    // Universes, sizing and the rotation view (roadmap 9); the user's choices are put back after.
+                    {
+                        const QString userUniverse = QSettings().value("sectorHeatmap/universe", "builtin").toString();
+                        const QString userView = QSettings().value("sectorHeatmap/view", "stocks").toString();
+                        const int userSizing = QSettings().value("sectorHeatmap/sizing", 0).toInt();
+                        m_sectorHeatmap->setUniverse("futures");
+                        waitFor(9000);
+                        qInfo("[live-smoke] sector heatmap futures: %s", qPrintable(m_sectorHeatmap->summaryText().left(700)));
+                        if (grab().save(shotDir + "/sector-futures.png")) qInfo("[live-smoke] wrote sector-futures.png");
+                        m_sectorHeatmap->setUniverse("etfs");
+                        m_sectorHeatmap->setSizing("volume");
+                        waitFor(8000);
+                        qInfo("[live-smoke] sector heatmap ETFs ($ volume): %s", qPrintable(m_sectorHeatmap->summaryText().left(600)));
+                        if (grab().save(shotDir + "/sector-etfs.png")) qInfo("[live-smoke] wrote sector-etfs.png");
+                        m_sectorHeatmap->setUniverse("large caps");
+                        waitFor(6000);
+                        m_sectorHeatmap->setView("rotation");
+                        waitFor(10000);   // the week-ago grouped closes walk back over the weekend
+                        qInfo("[live-smoke] sector rotation: %s", qPrintable(m_sectorHeatmap->rotationSummary().left(900)));
+                        if (grab().save(shotDir + "/sector-rotation.png")) qInfo("[live-smoke] wrote sector-rotation.png");
+                        m_sectorHeatmap->setSizing(userSizing == 1 ? "volume" : userSizing == 2 ? "equal" : "market cap");
+                        m_sectorHeatmap->setView(userView == "rotation" ? "rotation" : userView == "sectors" ? "sectors" : "stocks");
+                        m_sectorHeatmap->setUniverse(userUniverse == "etfs" ? "etfs" : userUniverse == "futures" ? "futures" : userUniverse == "watchlist" ? "watchlist" : "large caps");
+                        waitFor(3000);
+                    }
                 }
                 if (tab == m_volatility) {
                     // IV rank: rebuild a year of implied vol for the tab's ticker from option history, then rank today's IV30.
@@ -1403,6 +1438,51 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                 m_quotes->setVolumeShown(userVolume);
                 qInfo("[live-smoke] indicators restored: %s", qPrintable(m_quotes->indicatorsSummary()));
 
+                // Futures (real-time, no option chain): app-wide ticker, chart and quotes for /ES.
+                {
+                    const QString before = m_chain->ticker();
+                    const QString userTf = m_quotes->timeframeLabel();
+                    showTicker("/ES", false);
+                    waitMs(4000);
+                    qInfo("[live-smoke] futures /ES: underlying %s, spot %.2f (%s), prev %.2f, name \"%s\", exchange %s, industry \"%s\"",
+                          qPrintable(m_state.underlyingTicker), m_state.market.spot, qPrintable(m_state.spotSource), m_state.previousClose,
+                          qPrintable(m_state.companyName), qPrintable(m_state.exchange), qPrintable(m_state.industry));
+                    m_quotes->chartSymbol("/ES");
+                    waitMs(5000);
+                    m_quotes->debugLegendText([](const QString& legend) {
+                        QString oneLine = legend;
+                        oneLine.replace('\n', ' ');
+                        qInfo("[live-smoke] futures chart legend: %s", qPrintable(oneLine.left(400)));
+                    });
+                    waitMs(300);
+                    m_quotes->saveChartImage(shotDir + "/chart-futures.png", [](const QString& written) {
+                        qInfo("[live-smoke] futures chart image %s", written.isEmpty() ? "FAILED" : qPrintable(written));
+                    });
+                    waitMs(1200);
+                    m_quotes->setTimeframe("15m");
+                    waitMs(4000);
+                    qInfo("[live-smoke] futures /ES 15m bars: %zu", m_quotes->bars().bars.size());
+                    waitMs(7000);   // two or three real-time ticks of the 3 s futures refresh
+                    qInfo("[live-smoke] futures real-time refreshes so far: %d (auto-refresh %s)", m_quotes->futuresRefreshCount(), m_quotes->autoRefreshEnabled() ? "on" : "off");
+                    m_quotes->setTimeframe(userTf);
+                    // Massive's bare contract tickers (no slash) must be recognised too, mixed with stocks.
+                    // NGX6 and NGX26 must both reach the vendor's two-digit-year ticker NGX26.
+                    m_chain->client().resolveFutures("NGX6", [](const MarketDataClient::FuturesContract& c) { qInfo("[live-smoke] resolve NGX6 -> %s (%s)", qPrintable(c.ticker), qPrintable(c.lastTradeDate.toString(Qt::ISODate))); },
+                                                     [](const QString& m) { qInfo("[live-smoke] resolve NGX6 FAILED: %s", qPrintable(m)); });
+                    m_chain->client().resolveFutures("ESZ26", [](const MarketDataClient::FuturesContract& c) { qInfo("[live-smoke] resolve ESZ26 -> %s", qPrintable(c.ticker)); },
+                                                     [](const QString& m) { qInfo("[live-smoke] resolve ESZ26 FAILED: %s", qPrintable(m)); });
+                    m_chain->client().fetchQuotes({ "CLX6", "6EZ6", "/GC", "AAPL", "NGX6", "NGX26" }, [](const std::vector<MarketDataClient::Quote>& quotes) {
+                        QStringList parts;
+                        for (const MarketDataClient::Quote& q : quotes) parts << QStringLiteral("%1 %2 (%3%)").arg(q.ticker).arg(q.last, 0, 'f', 2).arg(q.changePercent, 0, 'f', 2);
+                        qInfo("[live-smoke] futures bare tickers: %zu quotes -> %s", quotes.size(), qPrintable(parts.join(", ")));
+                    }, [](const QString& message) { qInfo("[live-smoke] futures bare tickers FAILED: %s", qPrintable(message)); });
+                    qInfo("[live-smoke] isFutures: CLX6=%d 6EZ6=%d /GC=%d ES=%d AAPL=%d clx6=%d", MarketDataClient::isFutures("CLX6"), MarketDataClient::isFutures("6EZ6"),
+                          MarketDataClient::isFutures("/GC"), MarketDataClient::isFutures("ES"), MarketDataClient::isFutures("AAPL"), MarketDataClient::isFutures("clx6"));
+                    waitMs(3000);
+                    showTicker(before, false);
+                    m_quotes->chartSymbol(before);
+                    waitMs(3000);
+                }
                 // Charts (roadmap 8): comparison overlay, indicator template, multi-chart layout.
                 {
                     const QStringList userCompare = m_quotes->compareSymbols();
@@ -1534,10 +1614,56 @@ void MainWindow::showChartPopup(const QString& rawSymbol)
     m_chartPopup->activateWindow();
 }
 
+QStringList MainWindow::chainTickers(const QStringList& symbols)
+{
+    QStringList out;
+    for (const QString& s : symbols) if (!MarketDataClient::isFutures(s)) out << s;
+    return out;
+}
+
+void MainWindow::showFuturesTicker(const QString& symbol, bool wantedChain)
+{
+    // Futures have real-time prices but no option chains yet: the symbol becomes the
+    // app-wide ticker (banner, charts, portfolio, risk) and the chain tab is left alone.
+    qInfo("[ticker] showFuturesTicker %s", qPrintable(symbol));
+    // The chain tab takes the symbol too (its Fetch explains that options on futures are not
+    // available yet) and drops the previous stock's chain, so a background refresh of that
+    // stock cannot re-apply it and pull the app-wide ticker back.
+    m_chain->setTicker(symbol);
+    m_chain->clearChain();
+    MarketDataClient& client = m_chain->client();
+    client.fetchUnderlying(symbol, [this, symbol](const MarketDataClient::UnderlyingSnapshot& snap) {
+        m_state.underlyingTicker = symbol;
+        m_state.chainQuotes.clear();
+        m_state.impliedSpot = 0.0;
+        m_state.impliedSpotNote.clear();
+        m_state.vendorSpot = snap.price;
+        m_state.market.spot = snap.price;
+        m_state.previousClose = snap.previousClose;
+        m_state.vendorSource = snap.priceSource;
+        m_state.spotSource = snap.priceSource;
+        m_state.spotAsOf = snap.asOf;
+        m_state.spotTime = QDateTime::currentDateTime();
+        m_state.notify();
+        statusBar()->showMessage(QStringLiteral("%1: %2 (%3). Options on futures are not available yet; charts, portfolio and risk work without them.")
+                                     .arg(symbol, QString::number(snap.price, 'f', 2), snap.priceSource), 10000);
+    }, [this, symbol](const QString& message) { statusBar()->showMessage(QStringLiteral("%1: %2").arg(symbol, message), 12000); });
+    client.fetchTickerDetails(symbol, [this, symbol](const MarketDataClient::TickerDetails& details) {
+        if (m_state.underlyingTicker != symbol) return;
+        m_state.companyName = details.name;
+        m_state.exchange = details.exchange;
+        m_state.industry = details.sicDescription;
+        m_state.companyDescription = details.description;
+        m_state.notify();
+    }, [](const QString&) {});
+    if (wantedChain) statusBar()->showMessage(QStringLiteral("%1 is a futures contract: options on futures are not available yet.").arg(symbol), 10000);
+}
+
 void MainWindow::showTicker(const QString& rawSymbol, bool switchToChainTab)
 {
     const QString symbol = rawSymbol.trimmed().toUpper();
     if (symbol.isEmpty()) return;
+    if (MarketDataClient::isFutures(symbol)) { showFuturesTicker(symbol, switchToChainTab); return; }
     qInfo("[ticker] showTicker %s (stored: %s, chain tab busy: %s)", qPrintable(symbol), m_store.contains(symbol) ? "yes" : "no", m_chain->isBusy() ? "yes" : "no");
     constexpr qint64 kStaleSeconds = 10 * 60;
     if (switchToChainTab) m_tabs->setCurrentWidget(m_chain);

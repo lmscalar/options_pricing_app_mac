@@ -170,6 +170,7 @@ void MarketDataClient::getPaged(const QUrl& url, int maxPages, std::function<voi
 
 void MarketDataClient::fetchUnderlying(const QString& ticker, std::function<void(const UnderlyingSnapshot&)> ok, ErrorHandler err)
 {
+    if (isFutures(ticker)) { fetchFuturesUnderlying(ticker.trimmed().toUpper(), std::move(ok), std::move(err)); return; }
     const QString symbol = ticker.trimmed().toUpper();
     get(endpoint(QStringLiteral("/v2/snapshot/locale/us/markets/stocks/tickers/%1").arg(symbol)),
         [symbol, ok, err, this](const QJsonObject& body) {
@@ -222,6 +223,7 @@ void MarketDataClient::fetchUnderlying(const QString& ticker, std::function<void
 
 void MarketDataClient::fetchExpirations(const QString& ticker, std::function<void(const QList<QDate>&)> ok, ErrorHandler err)
 {
+    if (isFutures(ticker)) { err(QStringLiteral("Options on futures (%1) are not available yet.").arg(ticker.trimmed().toUpper())); return; }
     auto dates = std::make_shared<std::set<QDate>>();
     const QUrl url = endpoint("/v3/reference/options/contracts",
                               { { "underlying_ticker", ticker.trimmed().toUpper() }, { "expired", "false" },
@@ -249,6 +251,7 @@ void MarketDataClient::fetchChains(const QString& ticker, const QDate& valuation
                                    std::function<void(int pages, int contracts)> progress,
                                    std::function<void(const ChainDownload&)> ok, ErrorHandler err)
 {
+    if (isFutures(ticker)) { err(QStringLiteral("Options on futures (%1) are not available yet; the price, chart and portfolio features work without them.").arg(ticker.trimmed().toUpper())); return; }
     const QString symbol = ticker.trimmed().toUpper();
     auto download = std::make_shared<ChainDownload>();
 
@@ -349,6 +352,7 @@ void MarketDataClient::fetchChains(const QString& ticker, const QDate& valuation
 
 void MarketDataClient::fetchTickerDetails(const QString& ticker, std::function<void(const TickerDetails&)> ok, ErrorHandler err)
 {
+    if (isFutures(ticker)) { fetchFuturesDetails(ticker.trimmed().toUpper(), std::move(ok), std::move(err)); return; }
     const QString symbol = ticker.trimmed().toUpper();
     get(endpoint(QStringLiteral("/v3/reference/tickers/%1").arg(symbol)), [symbol, ok](const QJsonObject& body) {
         const QJsonObject r = body["results"].toObject();
@@ -396,6 +400,7 @@ void MarketDataClient::fetchImage(const QString& url, std::function<void(const Q
 void MarketDataClient::fetchAggregates(const QString& ticker, int multiplier, const QString& timespan, const QDate& from, const QDate& to,
                                        std::function<void(const BarSeries&)> ok, ErrorHandler err)
 {
+    if (isFutures(ticker)) { fetchFuturesAggregates(ticker.trimmed().toUpper(), multiplier, timespan, from, to, std::move(ok), std::move(err)); return; }
     auto series = std::make_shared<BarSeries>();
     series->ticker = ticker.trimmed().toUpper();
     series->multiplier = multiplier;
@@ -434,8 +439,27 @@ void MarketDataClient::fetchQuotes(const QStringList& tickers, std::function<voi
         ok({});
         return;
     }
-    QStringList symbols;
-    for (const QString& t : tickers) symbols << t.trimmed().toUpper();
+    QStringList symbols, futures;
+    for (const QString& t : tickers) (isFutures(t) ? futures : symbols) << t.trimmed().toUpper();
+    if (!futures.isEmpty()) {
+        // Futures come from their own snapshot endpoint; stock quotes (if any) are fetched
+        // alongside and the two lists are delivered together.
+        auto merged = std::make_shared<std::vector<Quote>>();
+        auto pending = std::make_shared<int>(symbols.isEmpty() ? 1 : 2);
+        auto failure = std::make_shared<QString>();
+        auto finish = [merged, pending, failure, ok, err] {
+            if (--*pending > 0) return;
+            if (merged->empty() && !failure->isEmpty()) err(*failure);
+            else ok(*merged);
+        };
+        fetchFuturesQuotes(futures, [merged, finish](const std::vector<Quote>& quotes) { merged->insert(merged->end(), quotes.begin(), quotes.end()); finish(); },
+                           [failure, finish](const QString& message) { *failure = message; finish(); });
+        if (!symbols.isEmpty()) {
+            fetchQuotes(symbols, [merged, finish](const std::vector<Quote>& quotes) { merged->insert(merged->end(), quotes.begin(), quotes.end()); finish(); },
+                        [failure, finish](const QString& message) { *failure = message; finish(); });
+        }
+        return;
+    }
     get(endpoint("/v2/snapshot/locale/us/markets/stocks/tickers", { { "tickers", symbols.join(',') } }),
         [ok](const QJsonObject& body) {
             std::vector<Quote> quotes;
@@ -521,6 +545,7 @@ void MarketDataClient::fetchTreasuryCurve(std::function<void(const TreasuryCurve
 void MarketDataClient::fetchDividends(const QString& ticker, const QDate& valuationDate, double horizonYears,
                                       std::function<void(const DividendInfo&)> ok, ErrorHandler err)
 {
+    if (isFutures(ticker)) { err(QStringLiteral("%1 is a futures contract: no dividends.").arg(ticker.trimmed().toUpper())); return; }
     const QString symbol = ticker.trimmed().toUpper();
     get(endpoint("/v3/reference/dividends", { { "ticker", symbol }, { "limit", "12" }, { "sort", "ex_dividend_date" }, { "order", "desc" } }),
         [ok, valuationDate, horizonYears, symbol](const QJsonObject& body) {
@@ -577,6 +602,7 @@ void MarketDataClient::fetchDividends(const QString& ticker, const QDate& valuat
 
 void MarketDataClient::fetchEarnings(const QString& ticker, std::function<void(const EarningsInfo&)> ok, ErrorHandler err)
 {
+    if (isFutures(ticker)) { err(QStringLiteral("%1 is a futures contract: no earnings calendar.").arg(ticker.trimmed().toUpper())); return; }
     const QString symbol = ticker.trimmed().toUpper();
     const QDate today = QDate::currentDate();
     // Fallback: project the next report from the spacing of the last quarterly filings.
@@ -635,6 +661,7 @@ void MarketDataClient::fetchEarnings(const QString& ticker, std::function<void(c
 void MarketDataClient::fetchOptionContracts(const QString& underlying, const QDate& expiry, double strikeLo, double strikeHi,
                                             std::function<void(const std::vector<OptionContract>&)> ok, ErrorHandler err)
 {
+    if (isFutures(underlying)) { err(QStringLiteral("Options on futures (%1) are not available yet.").arg(underlying.trimmed().toUpper())); return; }
     get(endpoint("/v3/reference/options/contracts", { { "underlying_ticker", underlying.trimmed().toUpper() }, { "expiration_date", expiry.toString(Qt::ISODate) },
                                                       { "expired", "true" }, { "strike_price.gte", QString::number(strikeLo, 'f', 2) }, { "strike_price.lte", QString::number(strikeHi, 'f', 2) },
                                                       { "limit", "250" } }),
@@ -651,4 +678,392 @@ void MarketDataClient::fetchOptionContracts(const QString& underlying, const QDa
             }
             ok(out);
         }, err);
+}
+
+// MARK: - Futures (Massive /futures/v1)
+
+#include <QtCore/QRegularExpression>
+
+namespace {
+
+/// Contract ticker shape: product root, month code, one or two year digits ("ESZ6", "6EZ26").
+const QRegularExpression& contractPattern()
+{
+    static const QRegularExpression re(QStringLiteral("^([A-Z0-9]+?)([FGHJKMNQUVXZ])(\\d{1,2})$"));
+    return re;
+}
+
+int monthFromCode(QChar code)
+{
+    static const QString codes = QStringLiteral("FGHJKMNQUVXZ");
+    const qsizetype index = codes.indexOf(code);
+    return index < 0 ? 0 : static_cast<int>(index) + 1;
+}
+
+QString futuresResolution(int multiplier, const QString& timespan)
+{
+    if (timespan == "minute") return QStringLiteral("%1min").arg(std::max(1, multiplier));
+    if (timespan == "hour") return QStringLiteral("%1hour").arg(std::max(1, multiplier));
+    if (timespan == "week") return QStringLiteral("1week");
+    if (timespan == "month") return QStringLiteral("1month");
+    return QStringLiteral("1day");
+}
+
+QDateTime fromNanos(double nanos)
+{
+    return nanos > 0 ? QDateTime::fromMSecsSinceEpoch(static_cast<qint64>(nanos / 1e6)) : QDateTime();
+}
+
+} // namespace
+
+bool MarketDataClient::isFutures(const QString& symbol)
+{
+    const QString code = symbol.trimmed().toUpper();
+    if (code.startsWith('/')) return true;
+    const QRegularExpressionMatch m = contractPattern().match(code);
+    return m.hasMatch() && knownFuturesProduct(m.captured(1)) != nullptr;
+}
+
+QString MarketDataClient::futuresProductCode(const QString& symbol)
+{
+    QString code = symbol.trimmed().toUpper();
+    if (code.startsWith('/')) code.remove(0, 1);
+    const QRegularExpressionMatch m = contractPattern().match(code);
+    return m.hasMatch() ? m.captured(1) : code;
+}
+
+QString MarketDataClient::contractLabel(const QString& ticker)
+{
+    QString code = ticker.trimmed().toUpper();
+    if (code.startsWith('/')) code.remove(0, 1);
+    const QRegularExpressionMatch m = contractPattern().match(code);
+    if (!m.hasMatch()) return QString();
+    const int month = monthFromCode(m.captured(2).at(0));
+    const QString digits = m.captured(3);
+    const int thisYear = QDate::currentDate().year();
+    int year = digits.size() == 2 ? 2000 + digits.toInt() : (thisYear / 10) * 10 + digits.toInt();
+    if (digits.size() == 1 && year < thisYear - 2) year += 10;   // single digit wraps within the decade
+    return QStringLiteral("%1 %2").arg(QLocale(QLocale::English).monthName(month, QLocale::ShortFormat)).arg(year);
+}
+
+const std::vector<MarketDataClient::FuturesProduct>& MarketDataClient::knownFuturesProducts()
+{
+    // CME Group products carried by the feed (CME, CBOT, NYMEX, COMEX). Multipliers are the
+    // contract unit per quoted point: index points, barrels, troy ounces, Treasury points per
+    // $100k face, grains in cents per bushel, meats in cents per pound.
+    static const std::vector<FuturesProduct> products = {
+        { "ES", "E-mini S&P 500", "Equity index", 50, "index points", "XCME" },
+        { "NQ", "E-mini Nasdaq-100", "Equity index", 20, "index points", "XCME" },
+        { "YM", "E-mini Dow ($5)", "Equity index", 5, "index points", "XCBT" },
+        { "RTY", "E-mini Russell 2000", "Equity index", 50, "index points", "XCME" },
+        { "MES", "Micro E-mini S&P 500", "Equity index", 5, "index points", "XCME" },
+        { "MNQ", "Micro E-mini Nasdaq-100", "Equity index", 2, "index points", "XCME" },
+        { "CL", "Crude Oil (WTI)", "Energy", 1000, "barrels", "XNYM" },
+        { "MCL", "Micro WTI Crude Oil", "Energy", 100, "barrels", "XNYM" },
+        { "NG", "Henry Hub Natural Gas", "Energy", 10000, "MMBtu", "XNYM" },
+        { "RB", "RBOB Gasoline", "Energy", 42000, "gallons", "XNYM" },
+        { "HO", "NY Harbor ULSD (Heating Oil)", "Energy", 42000, "gallons", "XNYM" },
+        { "GC", "Gold", "Metals", 100, "troy oz", "XCEC" },
+        { "MGC", "Micro Gold", "Metals", 10, "troy oz", "XCEC" },
+        { "SI", "Silver", "Metals", 5000, "troy oz", "XCEC" },
+        { "HG", "Copper", "Metals", 25000, "lbs", "XCEC" },
+        { "PL", "Platinum", "Metals", 50, "troy oz", "XNYM" },
+        { "ZB", "30-Year T-Bond", "Rates", 1000, "points of $100k face", "XCBT" },
+        { "ZN", "10-Year T-Note", "Rates", 1000, "points of $100k face", "XCBT" },
+        { "ZF", "5-Year T-Note", "Rates", 1000, "points of $100k face", "XCBT" },
+        { "ZT", "2-Year T-Note", "Rates", 2000, "points of $200k face", "XCBT" },
+        { "ZC", "Corn", "Grains", 50, "cents per bushel (5,000 bu)", "XCBT" },
+        { "ZS", "Soybeans", "Grains", 50, "cents per bushel (5,000 bu)", "XCBT" },
+        { "ZW", "Wheat", "Grains", 50, "cents per bushel (5,000 bu)", "XCBT" },
+        { "LE", "Live Cattle", "Meats", 400, "cents per lb (40,000 lbs)", "XCME" },
+        { "HE", "Lean Hogs", "Meats", 400, "cents per lb (40,000 lbs)", "XCME" },
+        { "6E", "Euro FX", "FX", 125000, "USD per EUR", "XCME" },
+        { "6J", "Japanese Yen", "FX", 12500000, "USD per JPY", "XCME" },
+        { "6B", "British Pound", "FX", 62500, "USD per GBP", "XCME" },
+        { "6A", "Australian Dollar", "FX", 100000, "USD per AUD", "XCME" },
+        { "6C", "Canadian Dollar", "FX", 100000, "USD per CAD", "XCME" },
+        { "BTC", "Bitcoin", "Crypto", 5, "USD per BTC (5 BTC)", "XCME" },
+        { "MBT", "Micro Bitcoin", "Crypto", 0.1, "USD per BTC (0.1 BTC)", "XCME" },
+        { "ETH", "Ether", "Crypto", 50, "USD per ETH (50 ETH)", "XCME" },
+        { "MET", "Micro Ether", "Crypto", 0.1, "USD per ETH (0.1 ETH)", "XCME" },
+    };
+    return products;
+}
+
+const MarketDataClient::FuturesProduct* MarketDataClient::knownFuturesProduct(const QString& code)
+{
+    const QString wanted = code.trimmed().toUpper();
+    for (const FuturesProduct& p : knownFuturesProducts()) if (p.code == wanted) return &p;
+    return nullptr;
+}
+
+void MarketDataClient::fetchFuturesProduct(const QString& rawCode, std::function<void(const FuturesProduct&)> ok, ErrorHandler err)
+{
+    const QString code = futuresProductCode(rawCode);
+    if (const FuturesProduct* known = knownFuturesProduct(code)) { ok(*known); return; }
+    const auto cached = m_products.find(code);
+    if (cached != m_products.end()) { ok(cached->second); return; }
+    get(endpoint("/futures/v1/products", { { "product_code", code }, { "limit", "1" } }), [this, code, ok, err](const QJsonObject& body) {
+        const QJsonArray results = body["results"].toArray();
+        if (results.isEmpty()) { err(QStringLiteral("Unknown futures product %1.").arg(code)); return; }
+        const QJsonObject r = results.first().toObject();
+        FuturesProduct p;
+        p.code = code;
+        p.name = QStringLiteral("%1 futures").arg(code);
+        const QString sub = r["asset_sub_class"].toString();
+        p.category = sub == "equity" ? "Equity index" : sub == "energy" ? "Energy" : sub == "metals" ? "Metals" : sub == "interest_rate" ? "Rates"
+                   : sub == "currency" ? "FX" : sub.isEmpty() ? QStringLiteral("Other") : sub;
+        p.multiplier = r["unit_of_measure_qty"].toDouble(1.0);
+        p.unit = r["unit_of_measure"].toString();
+        p.venue = r["trading_venue"].toString();
+        m_products[code] = p;
+        ok(p);
+    }, err);
+}
+
+namespace {
+
+/// Contract year from the ticker's digits: two digits are the century year, one digit the
+/// year within the current decade (wrapping forward when it would be more than two years back).
+int contractYear(const QString& digits)
+{
+    const int thisYear = QDate::currentDate().year();
+    if (digits.size() == 2) return 2000 + digits.toInt();
+    int year = (thisYear / 10) * 10 + digits.toInt();
+    if (year < thisYear - 2) year += 10;
+    return year;
+}
+
+/// Month and year of a vendor contract ticker for a known product root ("NGX26" with "NG" -> 11, 2026).
+bool contractMonthYear(const QString& ticker, const QString& product, int* month, int* year)
+{
+    if (!ticker.startsWith(product)) return false;
+    static const QRegularExpression tail(QStringLiteral("^([FGHJKMNQUVXZ])(\\d{1,2})$"));
+    const QRegularExpressionMatch m = tail.match(ticker.mid(product.size()));
+    if (!m.hasMatch()) return false;
+    static const QString codes = QStringLiteral("FGHJKMNQUVXZ");
+    *month = static_cast<int>(codes.indexOf(m.captured(1).at(0))) + 1;
+    *year = contractYear(m.captured(2));
+    return true;
+}
+
+} // namespace
+
+void MarketDataClient::resolveFutures(const QString& symbol, std::function<void(const FuturesContract&)> ok, ErrorHandler err)
+{
+    const QString app = symbol.trimmed().toUpper();
+    QString code = app;
+    if (code.startsWith('/')) code.remove(0, 1);
+    const QRegularExpressionMatch m = contractPattern().match(code);
+    const QString product = m.hasMatch() ? m.captured(1) : code;
+    const bool explicitContract = m.hasMatch();
+    const int wantMonth = explicitContract ? monthFromCode(m.captured(2).at(0)) : 0;
+    const int wantYear = explicitContract ? contractYear(m.captured(3)) : 0;
+    // As typed, for an explicit contract the vendor does not list (expired, or a product the
+    // contracts endpoint cannot see): the request still goes out under that ticker.
+    auto passThrough = [app, code, product, ok] {
+        FuturesContract c;
+        c.symbol = app;
+        c.ticker = code;
+        c.productCode = product;
+        c.name = QStringLiteral("%1 Future").arg(code);
+        ok(c);
+    };
+    loadFuturesContracts(product, [app, product, explicitContract, wantMonth, wantYear, passThrough, ok, err](const std::vector<FuturesContract>& contracts) {
+        if (explicitContract) {
+            // Match by month and year, so NGX6 finds NGX26 and ESZ26 finds ESZ6.
+            for (const FuturesContract& c : contracts) {
+                int month = 0, year = 0;
+                if (contractMonthYear(c.ticker, product, &month, &year) && month == wantMonth && year == wantYear) {
+                    FuturesContract r = c;
+                    r.symbol = app;
+                    ok(r);
+                    return;
+                }
+            }
+            passThrough();
+            return;
+        }
+        // Front month: the nearest expiry with at least a week left (a contract in its last
+        // days rolls to the next one).
+        if (contracts.empty()) { err(QStringLiteral("No listed %1 contracts found.").arg(product)); return; }
+        FuturesContract front = contracts.front();
+        if (front.daysToMaturity < 8 && contracts.size() > 1) front = contracts[1];
+        front.symbol = app;
+        ok(front);
+    }, [explicitContract, passThrough, err](const QString& message) {
+        if (explicitContract) passThrough();
+        else err(message);
+    });
+}
+
+void MarketDataClient::loadFuturesContracts(const QString& product, std::function<void(const std::vector<FuturesContract>&)> ok, ErrorHandler err)
+{
+    const QDate today = QDate::currentDate();
+    if (m_frontMonthDate != today) { m_contracts.clear(); m_frontMonthDate = today; }
+    const auto cached = m_contracts.find(product);
+    if (cached != m_contracts.end()) { ok(cached->second); return; }
+    // Every outright contract listed today (spreads carry a "-" and are dropped).
+    get(endpoint("/futures/v1/contracts", { { "product_code", product }, { "date", today.toString(Qt::ISODate) }, { "active", "true" }, { "type", "single" }, { "limit", "250" } }),
+        [this, product, ok](const QJsonObject& body) {
+            std::map<QString, FuturesContract> byTicker;
+            for (const QJsonValue v : body["results"].toArray()) {
+                const QJsonObject r = v.toObject();
+                FuturesContract c;
+                c.ticker = r["ticker"].toString();
+                c.productCode = r["product_code"].toString();
+                c.name = r["name"].toString();
+                c.lastTradeDate = QDate::fromString(r["last_trade_date"].toString(), Qt::ISODate);
+                c.settlementDate = QDate::fromString(r["settlement_date"].toString(), Qt::ISODate);
+                c.daysToMaturity = r["days_to_maturity"].toInt();
+                c.tickSize = r["trade_tick_size"].toDouble();
+                if (c.ticker.isEmpty() || c.ticker.contains('-') || !contractPattern().match(c.ticker).hasMatch()) continue;   // spreads
+                if (c.daysToMaturity <= 0 && c.lastTradeDate.isValid()) c.daysToMaturity = static_cast<int>(QDate::currentDate().daysTo(c.lastTradeDate));
+                if (c.daysToMaturity <= 0) continue;
+                byTicker[c.ticker] = c;
+            }
+            std::vector<FuturesContract> contracts;
+            for (const auto& [ticker, c] : byTicker) contracts.push_back(c);
+            std::sort(contracts.begin(), contracts.end(), [](const FuturesContract& a, const FuturesContract& b) { return a.daysToMaturity < b.daysToMaturity; });
+            m_contracts[product] = contracts;
+            ok(contracts);
+        }, err);
+}
+
+void MarketDataClient::fetchFuturesQuotes(const QStringList& symbols, std::function<void(const std::vector<Quote>&)> ok, ErrorHandler err)
+{
+    // Resolve every symbol to its contract, then one snapshot request for all of them.
+    // Contract ticker -> every app symbol that resolved to it ("NGX6" and "NGX26" both map to NGX26).
+    auto contracts = std::make_shared<std::map<QString, QStringList>>();
+    auto pending = std::make_shared<int>(symbols.size());
+    auto failure = std::make_shared<QString>();
+    auto request = [this, contracts, failure, ok, err] {
+        if (contracts->empty()) { err(failure->isEmpty() ? QStringLiteral("No futures contracts resolved.") : *failure); return; }
+        QStringList tickers;
+        for (const auto& [ticker, symbolsFor] : *contracts) tickers << ticker;
+        get(endpoint("/futures/v1/snapshot", { { "ticker.any_of", tickers.join(',') }, { "limit", "250" } }), [contracts, ok](const QJsonObject& body) {
+            std::vector<Quote> quotes;
+            for (const QJsonValue v : body["results"].toArray()) {
+                const QJsonObject r = v.toObject();
+                const QString ticker = r["details"].toObject()["ticker"].toString();
+                const auto it = contracts->find(ticker);
+                if (it == contracts->end()) continue;
+                const QJsonObject session = r["session"].toObject();
+                const QJsonObject trade = r["last_trade"].toObject();
+                const QJsonObject minute = r["last_minute"].toObject();
+                Quote q;
+                q.previousClose = session["previous_settlement"].toDouble();
+                const double tradePrice = trade["price"].toDouble();
+                const double minuteClose = minute["close"].toDouble();
+                const double sessionClose = session["close"].toDouble();
+                q.last = tradePrice > 0.0 ? tradePrice : (minuteClose > 0.0 ? minuteClose : (sessionClose > 0.0 ? sessionClose : q.previousClose));
+                q.dayOpen = session["open"].toDouble();
+                q.dayHigh = session["high"].toDouble();
+                q.dayLow = session["low"].toDouble();
+                q.dayVolume = session["volume"].toDouble();
+                q.change = q.previousClose > 0.0 ? q.last - q.previousClose : 0.0;
+                q.changePercent = q.previousClose > 0.0 ? (q.last / q.previousClose - 1.0) * 100.0 : 0.0;
+                q.asOf = fromNanos(trade["last_updated"].toDouble());
+                if (!q.asOf.isValid()) q.asOf = fromNanos(minute["last_updated"].toDouble());
+                if (q.last <= 0.0) continue;
+                for (const QString& symbol : it->second) {
+                    q.ticker = symbol;
+                    quotes.push_back(q);
+                }
+            }
+            ok(quotes);
+        }, err);
+    };
+    for (const QString& symbol : symbols) {
+        resolveFutures(symbol, [contracts, pending, request, symbol](const FuturesContract& c) {
+            if (!(*contracts)[c.ticker].contains(symbol)) (*contracts)[c.ticker] << symbol;
+            if (--*pending == 0) request();
+        }, [pending, failure, request](const QString& message) {
+            *failure = message;
+            if (--*pending == 0) request();
+        });
+    }
+}
+
+void MarketDataClient::fetchFuturesAggregates(const QString& symbol, int multiplier, const QString& timespan, const QDate& from, const QDate& to,
+                                              std::function<void(const BarSeries&)> ok, ErrorHandler err)
+{
+    resolveFutures(symbol, [this, symbol, multiplier, timespan, from, to, ok, err](const FuturesContract& c) {
+        auto series = std::make_shared<BarSeries>();
+        series->ticker = symbol;
+        series->multiplier = multiplier;
+        series->timespan = timespan;
+        const QUrl url = endpoint(QStringLiteral("/futures/v1/aggs/%1").arg(c.ticker),
+                                  { { "resolution", futuresResolution(multiplier, timespan) }, { "window_start.gte", from.toString(Qt::ISODate) },
+                                    { "window_start.lt", to.addDays(1).toString(Qt::ISODate) }, { "limit", "50000" }, { "sort", "window_start.asc" } });
+        const bool daily = timespan != "minute" && timespan != "hour";
+        getPaged(url, 20,
+                 [series, daily](const QJsonArray& results) {
+                     for (const QJsonValue v : results) {
+                         const QJsonObject o = v.toObject();
+                         Bar bar;
+                         bar.timeMs = static_cast<qint64>(o["window_start"].toDouble() / 1e6);
+                         // Daily and longer bars: the window starts the evening before the session
+                         // (midnight UTC of the prior calendar day), so stamp them with the session
+                         // date itself (noon UTC) and the chart labels the right day.
+                         const QDate sessionEnd = QDate::fromString(o["session_end_date"].toString(), Qt::ISODate);
+                         if (daily && sessionEnd.isValid()) bar.timeMs = QDateTime(sessionEnd, QTime(12, 0), QTimeZone::UTC).toMSecsSinceEpoch();
+                         bar.open = o["open"].toDouble();
+                         bar.high = o["high"].toDouble();
+                         bar.low = o["low"].toDouble();
+                         bar.close = o["close"].toDouble();
+                         bar.volume = o["volume"].toDouble();
+                         if (bar.timeMs > 0 && bar.close > 0.0) series->bars.push_back(bar);
+                     }
+                 },
+                 [series, c, ok, err] {
+                     if (series->bars.empty()) { err(QStringLiteral("No price history returned for %1 in that range.").arg(c.ticker)); return; }
+                     std::sort(series->bars.begin(), series->bars.end(), [](const Bar& a, const Bar& b) { return a.timeMs < b.timeMs; });
+                     ok(*series);
+                 }, err);
+    }, err);
+}
+
+void MarketDataClient::fetchFuturesUnderlying(const QString& symbol, std::function<void(const UnderlyingSnapshot&)> ok, ErrorHandler err)
+{
+    fetchFuturesQuotes({ symbol }, [symbol, ok, err](const std::vector<Quote>& quotes) {
+        if (quotes.empty()) { err(QStringLiteral("No price data for %1.").arg(symbol)); return; }
+        const Quote& q = quotes.front();
+        UnderlyingSnapshot snap;
+        snap.ticker = symbol;
+        snap.price = q.last;
+        snap.previousClose = q.previousClose;
+        snap.priceSource = q.asOf.isValid() && q.asOf.secsTo(QDateTime::currentDateTime()) < 900 ? QStringLiteral("futures last trade (real-time)") : QStringLiteral("futures last trade");
+        snap.asOf = q.asOf;
+        ok(snap);
+    }, err);
+}
+
+void MarketDataClient::fetchFuturesDetails(const QString& symbol, std::function<void(const TickerDetails&)> ok, ErrorHandler err)
+{
+    resolveFutures(symbol, [this, symbol, ok, err](const FuturesContract& c) {
+        fetchFuturesProduct(c.productCode, [symbol, c, ok](const FuturesProduct& p) {
+            TickerDetails d;
+            d.ticker = symbol;
+            const QString month = contractLabel(c.ticker);
+            d.name = month.isEmpty() ? p.name : QStringLiteral("%1 · %2").arg(p.name, month);
+            // Show the vendor's ticker when it differs from what was typed (NGX6 -> NGX26, /ES -> ESZ6).
+            QString typed = symbol;
+            if (typed.startsWith('/')) typed.remove(0, 1);
+            if (c.ticker != typed) d.name += QStringLiteral(" · %1").arg(c.ticker);
+            d.exchange = p.venue;
+            d.type = "FUT";
+            d.sicDescription = QStringLiteral("%1 futures").arg(p.category);
+            d.description = QStringLiteral("%1 futures contract %2 (%3)%4. Multiplier %5 %6 per contract%7. Real-time prices from Massive.com; options on futures are not available yet.")
+                                .arg(p.name, c.ticker, p.venue, month.isEmpty() ? QString() : QStringLiteral(", %1 expiry").arg(month))
+                                .arg(p.multiplier).arg(p.unit, c.lastTradeDate.isValid() ? QStringLiteral(", last trade %1").arg(c.lastTradeDate.toString(Qt::ISODate)) : QString());
+            ok(d);
+        }, [symbol, c, ok](const QString&) {
+            TickerDetails d;
+            d.ticker = symbol;
+            d.name = c.name;
+            d.type = "FUT";
+            ok(d);
+        });
+    }, err);
 }

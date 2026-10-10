@@ -150,7 +150,62 @@ public:
     void fetchOptionContracts(const QString& underlying, const QDate& expiry, double strikeLo, double strikeHi,
                               std::function<void(const std::vector<OptionContract>&)> ok, ErrorHandler err);
 
+    // ---- Futures (Massive /futures/v1, real-time) ----
+    // App-wide convention, as on trading platforms: a leading "/" marks a futures symbol.
+    // "/ES" is the front month of the E-mini S&P 500, "/ESZ6" a specific contract. The
+    // quote, aggregate, underlying and ticker-details fetches accept these symbols and route
+    // to the futures endpoints, so charts, watchlists, portfolios and risk work unchanged;
+    // option-chain fetches report that options on futures are not available yet.
+    struct FuturesProduct {
+        QString code;              ///< product code, e.g. "ES"
+        QString name;              ///< "E-mini S&P 500"
+        QString category;          ///< "Equity index", "Energy", "Metals", "Rates", "Grains", "Meats", "FX", "Crypto"
+        double multiplier = 1.0;   ///< contract unit (unit_of_measure_qty): 50 for ES
+        QString unit;              ///< "index points", "barrels", ...
+        QString venue;             ///< exchange MIC, e.g. "XCME"
+    };
+    struct FuturesContract {
+        QString symbol;            ///< the app symbol asked for, e.g. "/ES" or "/ESZ6"
+        QString ticker;            ///< vendor contract ticker, e.g. "ESZ6"
+        QString productCode;       ///< "ES"
+        QString name;              ///< "ESZ6 Future"
+        QDate lastTradeDate;
+        QDate settlementDate;
+        int daysToMaturity = 0;
+        double tickSize = 0.0;
+    };
+    /// True for a futures symbol in either form: with the platform-style slash ("/ES", "/CLX6")
+    /// or Massive's bare contract ticker ("CLX6", "ESZ6", "6EZ6": a known product root, a month
+    /// code F G H J K M N Q U V X Z and one or two year digits). A bare product root alone
+    /// ("ES", "CL") stays a stock symbol, since those collide with listed companies.
+    static bool isFutures(const QString& symbol);
+    /// "/ESZ6" -> "ES", "/6EZ6" -> "6E", "/ES" -> "ES".
+    static QString futuresProductCode(const QString& symbol);
+    /// "ESZ6" -> "Dec 2026" (empty for a product without a month code).
+    static QString contractLabel(const QString& ticker);
+    static const std::vector<FuturesProduct>& knownFuturesProducts();
+    static const FuturesProduct* knownFuturesProduct(const QString& code);
+    /// Resolves "/ES" to its front-month contract (the nearest expiry with at least a week
+    /// left, otherwise the next one). An explicit contract ("ESZ6", "NGX6", "NGX26") is matched
+    /// by month and year against the product's listed contracts, so a one-digit year maps to
+    /// the vendor's ticker whatever its convention (NGX6 -> NGX26, ESZ26 -> ESZ6); a ticker that
+    /// already matches passes through. Cached per session day.
+    void resolveFutures(const QString& symbol, std::function<void(const FuturesContract&)> ok, ErrorHandler err);
+    /// Product specification: the built-in table, else the products endpoint (multiplier, unit, venue).
+    void fetchFuturesProduct(const QString& code, std::function<void(const FuturesProduct&)> ok, ErrorHandler err);
+
 private:
+    void fetchFuturesQuotes(const QStringList& symbols, std::function<void(const std::vector<Quote>&)> ok, ErrorHandler err);
+    void fetchFuturesAggregates(const QString& symbol, int multiplier, const QString& timespan, const QDate& from, const QDate& to,
+                                std::function<void(const BarSeries&)> ok, ErrorHandler err);
+    void fetchFuturesUnderlying(const QString& symbol, std::function<void(const UnderlyingSnapshot&)> ok, ErrorHandler err);
+    void fetchFuturesDetails(const QString& symbol, std::function<void(const TickerDetails&)> ok, ErrorHandler err);
+    /// Listed outright contracts of a product (sorted by days to maturity), cached per session day.
+    void loadFuturesContracts(const QString& productCode, std::function<void(const std::vector<FuturesContract>&)> ok, ErrorHandler err);
+    std::map<QString, std::vector<FuturesContract>> m_contracts;   ///< product code -> contracts listed today
+    QDate m_frontMonthDate;                                        ///< session day the cache belongs to
+    std::map<QString, FuturesProduct> m_products;       ///< product code -> specification from the API
+
     void get(const QUrl& url, std::function<void(const QJsonObject&)> ok, ErrorHandler err);
     /// GET with up to two retries (back-off 0.8 s, 3.2 s) on transient failures: network
     /// errors including HTTP/2 GOAWAY cancellations and timeouts, 429 and 5xx responses.

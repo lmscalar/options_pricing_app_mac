@@ -36,6 +36,8 @@ public:
 
     /// Replaces the chain with a synthetic one that has skew and smile.
     void generateSample();
+    /// Removes the loaded chain from the shared state (and this tab).
+    void clearChain();
 
     // Live data (Massive.com). Each operation reports through onLiveOperationFinished.
     void setTicker(const QString& ticker);
@@ -71,7 +73,6 @@ public:
 private:
     void buildUi();
     void wire();
-    void clearChain();
     void showSlice(int index);
     void updateCharts(const pricing::ExpirySlice* slice);
     void setMarketVolToAtm();

@@ -53,6 +53,13 @@ QString kindName(pricing::LegKind kind)
     return "Stock";
 }
 
+/// Display name for a holding's instrument: Stock, Future (an underlying with a "/" symbol), Call or Put.
+QString holdingTypeName(const pricing::Holding& h)
+{
+    if (h.kind == pricing::LegKind::Underlying && MarketDataClient::isFutures(QString::fromStdString(h.symbol))) return "Future";
+    return kindName(h.kind);
+}
+
 pricing::LegKind kindFromName(const QString& text)
 {
     const QString t = text.trimmed().toLower();
@@ -627,7 +634,16 @@ bool PortfolioTab::addHolding(const QJsonObject& spec, QString* error)
     h.quantity = spec.value("quantity").toDouble(spec.value("qty").toDouble());
     if (h.quantity == 0.0) return fail("Quantity must be non-zero (negative for short).");
     h.entryPrice = spec.value("entry").toDouble(spec.value("price").toDouble());
-    h.multiplier = h.isOption() ? spec.value("multiplier").toDouble(100.0) : 1.0;
+    // Shares count one for one; options default to 100; a futures contract carries its
+    // product's unit (50 index points for /ES, 1,000 barrels for /CL …) unless given.
+    const QString symbolText = QString::fromStdString(h.symbol);
+    double futuresUnit = 1.0;
+    if (MarketDataClient::isFutures(symbolText)) {
+        if (const MarketDataClient::FuturesProduct* p = MarketDataClient::knownFuturesProduct(MarketDataClient::futuresProductCode(symbolText))) futuresUnit = p->multiplier;
+    }
+    h.multiplier = h.isOption() ? spec.value("multiplier").toDouble(100.0)
+                                : (MarketDataClient::isFutures(symbolText) ? spec.value("multiplier").toDouble(futuresUnit) : 1.0);
+    if (h.multiplier <= 0.0) h.multiplier = h.isOption() ? 100.0 : futuresUnit;
     h.currency = normalizeCurrency(spec.value("currency").toString(m_currency)).toStdString();
     const QString tradeDate = spec.value("tradeDate").toString(spec.value("trade_date").toString()).trimmed();
     if (!tradeDate.isEmpty() && !QDate::fromString(tradeDate, Qt::ISODate).isValid()) return fail("The trade date must be an ISO date (YYYY-MM-DD).");
@@ -713,11 +729,15 @@ void PortfolioTab::promptPosition(int editRow)
     form->setContentsMargins(14, 12, 14, 10);
     form->setSpacing(8);
     auto* symbol = new QLineEdit(QString::fromStdString(current.symbol), &dialog);
-    symbol->setPlaceholderText("e.g. AAPL");
-    symbol->setMaxLength(8);
+    symbol->setPlaceholderText("e.g. AAPL, or CLX6 / /ES for a future");
+    symbol->setMaxLength(10);
     auto* type = new QComboBox(&dialog);
-    type->addItems({ "Stock", "Call", "Put" });
-    type->setCurrentIndex(current.kind == pricing::LegKind::Call ? 1 : (current.kind == pricing::LegKind::Put ? 2 : 0));
+    type->addItems({ "Stock", "Call", "Put", "Future" });
+    const bool currentFuture = current.kind == pricing::LegKind::Underlying && MarketDataClient::isFutures(QString::fromStdString(current.symbol));
+    type->setCurrentIndex(current.kind == pricing::LegKind::Call ? 1 : (current.kind == pricing::LegKind::Put ? 2 : (currentFuture ? 3 : 0)));
+    // Contract multiplier for futures: filled from the product table when the symbol is typed, editable.
+    auto* multiplier = ui::makeSpinBox(&dialog, 0.01, 1e8, 1.0, 2, current.multiplier > 0.0 ? current.multiplier : 1.0);
+    multiplier->setToolTip("Contract unit per quoted point (50 for /ES, 1,000 for /CL, 100 for /GC). Options use 100.");
     auto* quantity = ui::makeSpinBox(&dialog, -1e7, 1e7, 1.0, 0, current.quantity == 0.0 ? 1.0 : current.quantity);
     quantity->setToolTip("Shares for stock, contracts for options; negative = short");
     auto* strike = ui::makeSpinBox(&dialog, 0.0, 1e6, 1.0, 2, current.strike);
@@ -753,13 +773,30 @@ void PortfolioTab::promptPosition(int editRow)
     form->addRow("Type", type);
     form->addRow("Currency", currency);
     form->addRow("Quantity", quantity);
+    form->addRow("Multiplier", multiplier);
     form->addRow("Strike", strike);
     form->addRow("Expiry", expiry);
     form->addRow("Entry price", entry);
     form->addRow("Implied vol", iv);
-    auto syncEnabled = [&] { const bool option = type->currentIndex() > 0; strike->setEnabled(option); expiry->setEnabled(option); iv->setEnabled(option); };
+    auto syncEnabled = [&] {
+        const bool option = type->currentIndex() == 1 || type->currentIndex() == 2;
+        const bool future = type->currentIndex() == 3;
+        strike->setEnabled(option); expiry->setEnabled(option); iv->setEnabled(option);
+        multiplier->setEnabled(future);
+        quantity->setToolTip(future ? "Contracts; negative = short" : "Shares for stock, contracts for options; negative = short");
+    };
+    auto syncSymbol = [&] {
+        // A "/" symbol is a future: pick the type and the product's multiplier automatically.
+        const QString text = symbol->text().trimmed().toUpper();
+        if (!MarketDataClient::isFutures(text)) return;
+        if (type->currentIndex() == 0) type->setCurrentIndex(3);
+        if (const MarketDataClient::FuturesProduct* p = MarketDataClient::knownFuturesProduct(MarketDataClient::futuresProductCode(text))) {
+            if (!editing || std::fabs(multiplier->value() - 1.0) < 1e-9) multiplier->setValue(p->multiplier);
+        }
+    };
     syncEnabled();
     connect(type, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int) { syncEnabled(); });
+    connect(symbol, &QLineEdit::editingFinished, &dialog, [&] { syncSymbol(); });
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     buttons->button(QDialogButtonBox::Ok)->setText(editing ? "Apply" : "Add");
     form->addRow(buttons);
@@ -770,6 +807,7 @@ void PortfolioTab::promptPosition(int editRow)
     QJsonObject spec{ { "symbol", symbol->text() }, { "type", type->currentText().toLower() }, { "quantity", quantity->value() }, { "strike", strike->value() },
                       { "expiry", expiry->date().toString(Qt::ISODate) }, { "entry", entry->value() }, { "iv", iv->value() }, { "currency", chosenCurrency },
                       { "portfolio", book->currentText().trimmed() }, { "tradeDate", tradeDate->date().toString(Qt::ISODate) } };
+    if (type->currentIndex() == 3) spec["multiplier"] = multiplier->value();
     if (editing) m_book.holdings.erase(m_book.holdings.begin() + editRow);
     QString error;
     if (!addHolding(spec, &error)) {
@@ -1058,7 +1096,7 @@ void PortfolioTab::fillTable()
         m_table->setItem(r, ColSymbol, symbol);
         m_table->setItem(r, ColBook, ui::makeCell(QString::fromStdString(h.group), Qt::AlignLeft | Qt::AlignVCenter));
         m_table->setItem(r, ColTrade, ui::makeCell(h.tradeDate.empty() ? QStringLiteral("–") : QString::fromStdString(h.tradeDate), Qt::AlignLeft | Qt::AlignVCenter));
-        m_table->setItem(r, ColType, ui::makeCell(kindName(h.kind), Qt::AlignLeft | Qt::AlignVCenter));
+        m_table->setItem(r, ColType, ui::makeCell(holdingTypeName(h), Qt::AlignLeft | Qt::AlignVCenter));
         const QString ccy = QString::fromStdString(h.currency);
         m_table->setItem(r, ColCurrency, ui::makeCell(ccy, Qt::AlignCenter));
         m_table->setItem(r, ColExpiry, ui::makeCell(h.isOption() ? QString::fromStdString(h.expiryDate) : QStringLiteral("–"), Qt::AlignLeft | Qt::AlignVCenter));

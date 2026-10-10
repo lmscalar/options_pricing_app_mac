@@ -81,6 +81,10 @@ private:
     /// present (refreshing stale ones in the background) or downloads it, then every tab
     /// follows through the shared market state.
     void showTicker(const QString& symbol, bool switchToChainTab);
+    /// Futures symbol ("/ES", "/ESZ6"): real-time price into the shared state, no chain.
+    void showFuturesTicker(const QString& symbol, bool wantedChain);
+    /// The symbols in `symbols` that have option chains (futures are left out).
+    static QStringList chainTickers(const QStringList& symbols);
     /// Shows `symbol` in the Quotes chart and opens the pop-out chart window with a copy of it
     /// (used when a stock is picked on the Sector Heatmap).
     void showChartPopup(const QString& symbol);

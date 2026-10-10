@@ -108,7 +108,10 @@ public:
 QStringList parseTickers(const QString& rawText)
 {
     static const QRegularExpression headerWord("^(ticker|tickers|symbol|symbols|stock|stocks|name|company|instrument)$", QRegularExpression::CaseInsensitiveOption);
-    static const QRegularExpression tickerShape("^[A-Z][A-Z0-9.\\-]{0,7}$");
+    // Stocks and ETFs ("AAPL", "BRK.B"), futures with the platform-style leading slash ("/ES", "/ESZ6",
+    // "/6E"), or Massive's bare contract tickers ("CLX6", "6EZ6"), which MarketDataClient recognises.
+    static const QRegularExpression tickerShape("^(?:[A-Z][A-Z0-9.\\-]{0,7}|/[A-Z0-9]{1,8})$");
+    auto looksLikeTicker = [](const QString& token) { return tickerShape.match(token).hasMatch() || MarketDataClient::isFutures(token); };
     auto clean = [](QString token) {
         token = token.trimmed();
         token.remove(QRegularExpression("^=?[\"'$]+|[\"')]+$"));   // Excel ="AAPL", quotes, a leading $
@@ -139,7 +142,7 @@ QStringList parseTickers(const QString& rawText)
     for (const QString& token : tokens) {
         const QString symbol = clean(token);
         if (symbol.isEmpty() || headerWord.match(symbol).hasMatch()) continue;
-        if (tickerShape.match(symbol).hasMatch() && !tickers.contains(symbol)) tickers << symbol;
+        if (looksLikeTicker(symbol) && !tickers.contains(symbol)) tickers << symbol;
     }
     return tickers;
 }
@@ -620,6 +623,9 @@ void QuotesTab::wire()
         if (!m_bars.bars.empty()) { pushBars(); pushDrawings(); }
     });
 
+    m_futuresTimer = new QTimer(this);
+    m_futuresTimer->setInterval(3000);
+    connect(m_futuresTimer, &QTimer::timeout, this, [this] { refreshFuturesQuotes(); });
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, [this] {
         refreshQuotes();
@@ -1049,6 +1055,15 @@ void QuotesTab::pushLive()
         live["source"] = m_state.spotSource == "option parity" ? QStringLiteral("parity-implied") : m_state.spotSource;
         if (m_state.spotAsOf.isValid()) live["asOf"] = m_state.spotAsOf.toString("HH:mm");
         else if (m_state.spotTime.isValid()) live["asOf"] = m_state.spotTime.toString("HH:mm");
+    } else if (MarketDataClient::isFutures(m_chartTicker)) {
+        // A charted future that is not the app-wide ticker: its real-time snapshot quote.
+        const auto it = m_quotes.find(m_chartTicker);
+        if (it != m_quotes.end() && it->second.last > 0.0) {
+            live["price"] = it->second.last;
+            if (it->second.previousClose > 0.0) live["previousClose"] = it->second.previousClose;
+            live["source"] = QStringLiteral("futures last trade (real-time)");
+            if (it->second.asOf.isValid()) live["asOf"] = it->second.asOf.toString("HH:mm:ss");
+        }
     }
     runJs(QStringLiteral("chartApi.setLive(%1);").arg(live.isEmpty() ? QStringLiteral("null") : QString::fromUtf8(QJsonDocument(live).toJson(QJsonDocument::Compact))));
 }
@@ -1088,7 +1103,10 @@ void QuotesTab::refreshQuotes()
         // The active ticker's vendor quote also feeds the shared state (headline, chain, chart).
         bool stateChanged = false;
         for (const MarketDataClient::Quote& q : quotes) {
-            if (q.ticker == m_state.underlyingTicker) stateChanged = m_state.updateVendorQuote(q.ticker, q.last, q.previousClose, q.asOf, "last minute bar") || stateChanged;
+            if (q.ticker == m_state.underlyingTicker) {
+                const QString source = MarketDataClient::isFutures(q.ticker) ? QStringLiteral("futures last trade (real-time)") : QStringLiteral("last minute bar");
+                stateChanged = m_state.updateVendorQuote(q.ticker, q.last, q.previousClose, q.asOf, source) || stateChanged;
+            }
         }
         QDateTime newest;
         for (const MarketDataClient::Quote& q : quotes) {
@@ -1149,11 +1167,54 @@ void QuotesTab::showTicker(const QString& ticker)
     if (symbol != m_chartTicker) loadChart(symbol);   // e.g. the row was already current
 }
 
+void QuotesTab::refreshFuturesQuotes()
+{
+    if (!m_client.hasApiKey() || m_futuresBusy) return;
+    QStringList futures;
+    for (const QString& s : m_watchlist) if (MarketDataClient::isFutures(s)) futures << s;
+    if (MarketDataClient::isFutures(m_chartTicker) && !futures.contains(m_chartTicker)) futures << m_chartTicker;
+    if (futures.isEmpty()) return;
+    m_futuresBusy = true;
+    ++m_futuresTicks;
+    m_client.fetchQuotes(futures, [this](const std::vector<MarketDataClient::Quote>& quotes) {
+        m_futuresBusy = false;
+        ++m_futuresRefreshes;
+        bool stateChanged = false;
+        for (const MarketDataClient::Quote& q : quotes) {
+            m_quotes[q.ticker] = q;
+            if (q.ticker == m_state.underlyingTicker) {
+                stateChanged = m_state.updateVendorQuote(q.ticker, q.last, q.previousClose, q.asOf, QStringLiteral("futures last trade (real-time)")) || stateChanged;
+            }
+        }
+        m_updating = true;
+        m_table->setSortingEnabled(false);
+        for (int row = 0; row < m_table->rowCount(); ++row) {
+            const QString ticker = tickerAtRow(row);
+            const auto it = m_quotes.find(ticker);
+            if (it != m_quotes.end() && MarketDataClient::isFutures(ticker)) fillQuoteRow(row, it->second);
+        }
+        m_table->setSortingEnabled(true);
+        m_updating = false;
+        if (stateChanged) m_state.notify();
+        if (MarketDataClient::isFutures(m_chartTicker)) pushLive();
+        if (onQuotesRefreshed) onQuotesRefreshed(quotes);   // alerts see the fresh prices
+    }, [this](const QString&) { m_futuresBusy = false; });
+    // Intraday futures charts: re-pull the bars every ~20 s so the last candle moves too.
+    if (m_futuresTicks % 7 == 0 && MarketDataClient::isFutures(m_chartTicker) && timeframes()[static_cast<size_t>(m_timeframeIndex)].intraday && !m_loadingChart) {
+        loadChart(m_chartTicker);
+    }
+}
+
 void QuotesTab::updateTimers()
 {
     m_timer->setInterval(m_refreshInterval->value() * 1000);
     if (m_autoRefresh->isChecked()) m_timer->start();
     else m_timer->stop();
+    // Futures are real-time on the feed: poll their snapshot every 3 s while auto-refresh is on.
+    if (m_futuresTimer) {
+        if (m_autoRefresh->isChecked()) m_futuresTimer->start();
+        else m_futuresTimer->stop();
+    }
     if (m_mirror) m_mirror->setLive(m_autoRefresh->isChecked(), m_refreshInterval->value());
 }
 

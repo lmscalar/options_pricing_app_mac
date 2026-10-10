@@ -18,6 +18,8 @@
 #include "Widgets.h"
 #include "../Pricing/Treemap.h"
 
+#include <QtWidgets/QStackedWidget>
+
 #include <functional>
 #include <map>
 #include <vector>
@@ -36,7 +38,14 @@ public:
         double previousClose = 0.0;
         double referenceClose = 0.0;   ///< close at the start of the selected period (non-daily)
         double performance = std::numeric_limits<double>::quiet_NaN();   ///< percent over the period
+        double dayVolume = 0.0;        ///< session volume (shares or contracts), for $-volume sizing
+        double multiplier = 1.0;       ///< contract unit for futures (1 for stocks and ETFs)
+        double shortReferenceClose = 0.0;   ///< close one week back, for the rotation view's momentum axis
+        double shortPerformance = std::numeric_limits<double>::quiet_NaN();   ///< percent over the short window
     };
+    /// What the map shows: the built-in large caps by sector, a curated ETF list by asset
+    /// class, the front-month futures by product group (real-time), or the Quotes watchlist.
+    enum class Universe { LargeCaps, Etfs, Futures, Watchlist };
 
     explicit SectorHeatmapTab(QWidget* parent = nullptr);
 
@@ -49,7 +58,15 @@ public:
     QStringList periodLabels() const;
     QString periodLabel() const;
     bool setPeriod(const QString& label);
-    bool setView(const QString& view);   ///< "stocks" or "sectors"
+    bool setView(const QString& view);   ///< "stocks", "sectors" or "rotation"
+    Universe universeKind() const { return m_universeKind; }
+    /// "large caps", "etfs", "futures" or "watchlist"; false if unknown.
+    bool setUniverse(const QString& name);
+    /// Tile sizing: "market cap", "volume" ($ traded today) or "equal"; false if unknown.
+    bool setSizing(const QString& name);
+    QString sizingLabel() const;
+    /// Rotation view figures: each group's relative strength and momentum versus the universe, with its quadrant.
+    QString rotationSummary() const;
     /// Expands one sector to fill the map (as clicking its tile does); false if no such sector.
     bool focusSector(const QString& sector);
     /// Back to the full sector map.
@@ -89,6 +106,13 @@ private:
     void fetchMissingCaps();
     void recomputePerformance();
     void relayout();
+    /// Rotation scatter: one point per group, x = relative strength over the period, y = momentum over the short window.
+    void buildRotation();
+    /// Loads the one-week reference closes the rotation view needs (in addition to the period's).
+    void ensureShortReference();
+    /// Tile weight under the chosen sizing (market cap, $ volume or equal), with sensible fallbacks.
+    double weightFor(const Stock& s) const;
+    QString universeTitle() const;
     void updateStatus(const QString& text, ui::StatusKind kind);
     QDate referenceDate() const;
     QString capCachePath() const;
@@ -101,6 +125,10 @@ private:
     bool m_sectorsView = false;
     QString m_focusSector;           ///< non-empty while one sector is expanded
     bool m_watchlistUniverse = false;
+    Universe m_universeKind = Universe::LargeCaps;
+    int m_sizing = 0;                ///< 0 market cap, 1 $ volume, 2 equal
+    bool m_rotationView = false;
+    bool m_shortReferencePending = false;   ///< one-week reference closes are being fetched
     bool m_loaded = false;
     bool m_loadingQuotes = false;
     QDateTime m_pricesAsOf;
@@ -116,6 +144,10 @@ private:
     QButtonGroup* m_viewGroup = nullptr;
     QButtonGroup* m_periodGroup = nullptr;
     QComboBox* m_universe = nullptr;
+    QComboBox* m_sizingBox = nullptr;
+    QStackedWidget* m_stack = nullptr;      ///< treemap or rotation chart
+    QChartView* m_rotationChart = nullptr;
+    QChart* m_rotation = nullptr;
     QLabel* m_summary = nullptr;
     QLabel* m_status = nullptr;
     QPushButton* m_refresh = nullptr;
