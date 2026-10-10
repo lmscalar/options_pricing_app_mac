@@ -11,16 +11,20 @@
 #pragma once
 
 #include "QtHeaders.h"
+#include "ChainStore.h"
+#include "IvBackfill.h"
 #include "MarketDataClient.h"
 #include "MarketState.h"
 #include "Theme.h"
 #include "Widgets.h"
 #include "../Pricing/Volatility.h"
+#include "../Pricing/IvHistory.h"
 
 #include <QtCharts/QCategoryAxis>
 #include <QtCore/QTimeZone>
 
 #include <functional>
+#include <memory>
 #include <vector>
 
 class VolatilityTab : public QWidget
@@ -30,6 +34,16 @@ public:
 
     void setTicker(const QString& ticker);
     QString ticker() const { return m_ticker; }
+    /// Shared store: daily implied-vol samples (from stored chains and backfills) live there.
+    void setStore(ChainStore* store);
+
+    // ---- Implied-vol history: IV rank and percentile ----
+    /// Rebuilds about a year of daily implied vol from historical option bars (needs daily bars loaded).
+    void backfillIvHistory();
+    bool backfillBusy() const { return m_backfill && m_backfill->busy(); }
+    const pricing::ivhist::Stats& ivStats() const { return m_ivStats; }
+    /// One sentence: IV30 now, rank, percentile, one-year range with dates, sample count.
+    QString ivSummary() const;
     /// Downloads daily bars for the ticker from Massive.com and recomputes everything.
     void fetchHistory();
     /// User-initiated fetch: loads the history and, when the ticker differs from the loaded
@@ -55,6 +69,9 @@ private:
     void setBars(std::vector<pricing::DailyBar> bars, const QString& source);
     void recompute();
     void updateCards();
+    /// Loads the stored implied-vol history for the ticker and ranks today's IV30 against it.
+    void updateIvStats();
+    double currentIv30() const;
     void updateModelLabel();
     void updateConeTable();
     /// Fixes the table's height to its header and rows (no inner scrolling) for the sidebar.
@@ -90,6 +107,10 @@ private:
     QString m_lastChainTicker;
     QString m_lastSurfaceSignature;
     bool m_loading = false;
+    ChainStore* m_store = nullptr;
+    std::unique_ptr<IvBackfill> m_backfill;
+    std::vector<pricing::ivhist::Sample> m_ivHistory;   ///< ascending, from the store
+    pricing::ivhist::Stats m_ivStats;
 
     // Results
     std::vector<pricing::VolPoint> m_series;       ///< rolling realized vol, short window
@@ -104,6 +125,7 @@ private:
     QComboBox* m_history = nullptr;
     QPushButton* m_fetch = nullptr;
     QPushButton* m_sample = nullptr;
+    QPushButton* m_backfillButton = nullptr;
     QComboBox* m_estimator = nullptr;
     QSpinBox* m_window = nullptr;
     QSpinBox* m_windowLong = nullptr;
@@ -116,7 +138,7 @@ private:
     QLabel* m_modelLabel = nullptr;
 
     // Cards
-    ui::Card m_cardRealized, m_cardLong, m_cardEwma, m_cardGarchNow, m_cardForecast, m_cardLongRun, m_cardImplied, m_cardPersistence;
+    ui::Card m_cardRealized, m_cardLong, m_cardEwma, m_cardGarchNow, m_cardForecast, m_cardLongRun, m_cardImplied, m_cardPersistence, m_cardIvRank, m_cardIvPercentile;
 
     // Charts
     QChart* m_historyChart = nullptr;

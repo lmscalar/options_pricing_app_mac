@@ -354,6 +354,9 @@ std::vector<AssistantClient::Tool> MainWindow::assistantTools() const
     tools.push_back({ "run_portfolio_risk",
                       "Recomputes portfolio risk: parametric delta-gamma, historical simulation and Monte Carlo VaR / CVaR (expected shortfall), component VaR by underlying, the spot x vol stress grid and the time-decay ladder.",
                       schema({ { "confidence", prop("number", "Confidence level: 95, 97.5 or 99 (percent)") }, { "horizon_days", prop("integer", "Holding period in trading days (1-60)") } }) });
+    tools.push_back({ "get_iv_rank",
+                      "IV rank and IV percentile of a ticker's 30-day ATM implied vol against its stored daily history (one-year lookback), with the range, median and sample count. Optionally rebuilds a year of history from option bars first.",
+                      schema({ { "ticker", prop("string", "Symbol (default: the Volatility tab's ticker)") }, { "backfill", prop("boolean", "Rebuild a year of implied-vol history from historical option bars before answering (takes ~20 s)") } }) });
     tools.push_back({ "get_implied_earnings_move",
                       "Earnings overlay on the Quotes chart: the option-implied earnings move (beat side and miss side, from the implied-vol term structure and skew), the report date and its source, and the ATM term structure. Optionally pins the report date or toggles the cone.",
                       schema({ { "ticker", prop("string", "Symbol (default: the charted one)") }, { "earnings_date", prop("string", "ISO date to pin as the report date; 'clear' removes the pin") },
@@ -540,6 +543,27 @@ void MainWindow::executeAssistantTool(const QString& name, const QJsonObject& in
         m_tabs->setCurrentWidget(m_portfolio);
         m_portfolio->runRisk();
         done(m_portfolio->summaryText() + "\n\nRisk (CSV):\n" + clip(m_portfolio->riskCsv(), 4000), false);
+    } else if (name == "get_iv_rank") {
+        const QString ticker = input.value("ticker").toString().trimmed().toUpper();
+        if (!ticker.isEmpty() && ticker != m_volatility->ticker()) {
+            m_volatility->setTicker(ticker);
+            m_volatility->fetchHistory();
+        }
+        m_tabs->setCurrentWidget(m_volatility);
+        auto answer = [this, done] { done(QStringLiteral("%1: %2").arg(m_volatility->ticker(), m_volatility->ivSummary()), false); };
+        if (input.value("backfill").toBool(false)) {
+            QTimer::singleShot(ticker.isEmpty() ? 100 : 3000, this, [this, answer] {
+                m_volatility->backfillIvHistory();
+                auto poll = std::make_shared<std::function<void(int)>>();
+                *poll = [this, answer, poll](int tries) {
+                    if (m_volatility->backfillBusy() && tries < 120) QTimer::singleShot(500, this, [poll, tries] { (*poll)(tries + 1); });
+                    else answer();
+                };
+                (*poll)(0);
+            });
+        } else {
+            QTimer::singleShot(ticker.isEmpty() ? 100 : 3000, this, answer);
+        }
     } else if (name == "get_implied_earnings_move") {
         const QString ticker = input.value("ticker").toString().trimmed().toUpper();
         if (!ticker.isEmpty() && ticker != m_quotes->chartTicker()) { showTicker(ticker, false); m_quotes->showTicker(ticker); }
@@ -658,6 +682,18 @@ bool MainWindow::handleLocalCommand(const QString& rawText, QString& feedback)
     const QString lower = text.toLower();
     auto symbolFrom = [](const QString& s) { return s.trimmed().toUpper().remove(QRegularExpression("[^A-Z.]")); };
 
+    // IV rank: "backfill iv history", "what is the iv rank".
+    if (lower.contains("backfill") && (lower.contains("iv") || lower.contains("implied"))) {
+        m_tabs->setCurrentWidget(m_volatility);
+        m_volatility->backfillIvHistory();
+        feedback = QStringLiteral("Rebuilding a year of implied-vol history for %1 from option bars; the IV rank cards update when it finishes.").arg(m_volatility->ticker());
+        return true;
+    }
+    if (lower.contains("iv rank") || lower.contains("iv percentile") || lower.contains("implied vol rank") || lower.contains("implied volatility rank")) {
+        m_tabs->setCurrentWidget(m_volatility);
+        feedback = QStringLiteral("%1: %2").arg(m_volatility->ticker(), m_volatility->ivSummary());
+        return true;
+    }
     // Earnings overlay: "show the implied move cone", "hide the earnings cone", "earnings for NVDA on 2026-10-30",
     // "set the earnings date to 2026-10-30", "what is the implied earnings move".
     QRegularExpression coneRe("^(?:please\\s+)?(show|hide|turn\\s+on|turn\\s+off|enable|disable)\\s+(?:the\\s+)?(?:implied\\s+)?(?:move|earnings|event)\\s*(?:move\\s+)?cone$", QRegularExpression::CaseInsensitiveOption);

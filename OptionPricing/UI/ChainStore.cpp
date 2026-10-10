@@ -4,6 +4,7 @@
 //
 
 #include "ChainStore.h"
+#include "../Pricing/IvHistory.h"
 
 #include <QtCore/QStandardPaths>
 #include <QtSql/QSqlError>
@@ -51,6 +52,8 @@ bool ChainStore::createSchema()
         "  ticker TEXT PRIMARY KEY, last REAL, previous_close REAL, change REAL, change_pct REAL,"
         "  day_open REAL, day_high REAL, day_low REAL, day_volume REAL, as_of TEXT, fetched_at TEXT NOT NULL)",
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)",
+        "CREATE TABLE IF NOT EXISTS iv_history ("
+        "  ticker TEXT NOT NULL, date TEXT NOT NULL, iv30 REAL, iv_near REAL, spot REAL, source TEXT, PRIMARY KEY (ticker, date))",
     };
     for (const char* sql : statements) {
         if (!q.exec(QString::fromLatin1(sql))) {
@@ -120,7 +123,78 @@ bool ChainStore::put(const StoredChain& chain)
         m_db.rollback();
         return false;
     }
+    if (!m_db.commit()) return false;
+    // Today's implied-vol sample: the chain's 30-day constant-maturity ATM vol.
+    if (chain.snapshot.price > 0.0 && !chain.download.quotes.empty()) {
+        pricing::ActivityMarket am;
+        am.spot = chain.snapshot.price;
+        am.rateFor = rateFor;
+        const pricing::ivhist::Sample s = pricing::ivhist::sampleFromChain(QDate::currentDate().toString(Qt::ISODate).toStdString(), chain.download.quotes, am);
+        if (s.iv30 > 0.0) {
+            IvPoint p;
+            p.date = QDate::currentDate();
+            p.iv30 = s.iv30;
+            p.ivNear = s.ivNear;
+            p.spot = s.spot;
+            p.source = "snapshot";
+            putIvSamples(chain.ticker, { p }, true);
+        }
+    }
+    return true;
+}
+
+// MARK: - Implied-vol history
+
+bool ChainStore::putIvSamples(const QString& ticker, const std::vector<IvPoint>& points, bool replace)
+{
+    if (!m_open || ticker.isEmpty() || points.empty()) return false;
+    if (!m_db.transaction()) return false;
+    QSqlQuery q(m_db);
+    q.prepare(QStringLiteral("INSERT OR %1 INTO iv_history (ticker, date, iv30, iv_near, spot, source) VALUES (?, ?, ?, ?, ?, ?)").arg(replace ? "REPLACE" : "IGNORE"));
+    bool ok = true;
+    for (const IvPoint& p : points) {
+        if (!p.date.isValid() || p.iv30 <= 0.0) continue;
+        q.addBindValue(ticker);
+        q.addBindValue(p.date.toString(Qt::ISODate));
+        q.addBindValue(p.iv30);
+        q.addBindValue(p.ivNear);
+        q.addBindValue(p.spot);
+        q.addBindValue(p.source);
+        ok = q.exec() && ok;
+    }
+    if (!ok) { m_lastError = q.lastError().text(); m_db.rollback(); return false; }
     return m_db.commit();
+}
+
+std::vector<ChainStore::IvPoint> ChainStore::ivHistory(const QString& ticker, int maxPoints) const
+{
+    std::vector<IvPoint> out;
+    if (!m_open) return out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT date, iv30, iv_near, spot, source FROM iv_history WHERE ticker = ? ORDER BY date DESC LIMIT ?");
+    q.addBindValue(ticker);
+    q.addBindValue(maxPoints);
+    if (!q.exec()) return out;
+    while (q.next()) {
+        IvPoint p;
+        p.date = QDate::fromString(q.value(0).toString(), Qt::ISODate);
+        p.iv30 = q.value(1).toDouble();
+        p.ivNear = q.value(2).toDouble();
+        p.spot = q.value(3).toDouble();
+        p.source = q.value(4).toString();
+        out.push_back(p);
+    }
+    std::reverse(out.begin(), out.end());
+    return out;
+}
+
+int ChainStore::ivHistoryCount(const QString& ticker) const
+{
+    if (!m_open) return 0;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COUNT(*) FROM iv_history WHERE ticker = ?");
+    q.addBindValue(ticker);
+    return q.exec() && q.next() ? q.value(0).toInt() : 0;
 }
 
 std::optional<ChainStore::StoredChain> ChainStore::get(const QString& ticker) const
@@ -307,15 +381,19 @@ int ChainStore::loadFrom(const QString& path)
     }
     int loaded = 0;
     bool ok = m_db.transaction();
-    const char* copies[] = {
+    QStringList copies = {
         "INSERT OR REPLACE INTO chains SELECT * FROM disk.chains",
         "DELETE FROM contracts WHERE ticker IN (SELECT ticker FROM disk.chains)",
         "INSERT INTO contracts SELECT * FROM disk.contracts",
         "INSERT OR REPLACE INTO quotes SELECT * FROM disk.quotes",
         "INSERT OR REPLACE INTO meta SELECT * FROM disk.meta",
     };
-    for (const char* sql : copies) {
-        if (ok && !q.exec(QString::fromLatin1(sql))) {
+    // Files written before the implied-vol history existed have no iv_history table.
+    if (q.exec("SELECT COUNT(*) FROM disk.sqlite_master WHERE type = 'table' AND name = 'iv_history'") && q.next() && q.value(0).toInt() > 0) {
+        copies << "INSERT OR REPLACE INTO iv_history SELECT * FROM disk.iv_history";
+    }
+    for (const QString& sql : copies) {
+        if (ok && !q.exec(sql)) {
             // Older or damaged files: give up on this file rather than half-load it.
             m_lastError = q.lastError().text();
             ok = false;
@@ -335,7 +413,7 @@ int ChainStore::loadFrom(const QString& path)
     if (!ok) {
         // Start clean next time.
         QFile::remove(path);
-        for (const char* sql : { "DELETE FROM contracts", "DELETE FROM chains", "DELETE FROM quotes" }) { QSqlQuery d(m_db); d.exec(QString::fromLatin1(sql)); }
+        for (const char* sql : { "DELETE FROM contracts", "DELETE FROM chains", "DELETE FROM quotes", "DELETE FROM iv_history" }) { QSqlQuery d(m_db); d.exec(QString::fromLatin1(sql)); }
     }
     return ok ? loaded : 0;
 }

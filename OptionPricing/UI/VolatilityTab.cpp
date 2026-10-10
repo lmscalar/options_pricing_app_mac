@@ -83,6 +83,8 @@ void VolatilityTab::buildUi()
     m_history->setCurrentIndex(1);
     m_fetch = ui::makeButton(this, "Fetch History", "primary", "Download daily bars from Massive.com");
     m_sample = ui::makeButton(this, "Sample Data", "secondary", "Load a simulated GARCH price path");
+    m_backfillButton = ui::makeButton(this, "Backfill IV History", "secondary",
+                                      "Rebuild about a year of daily implied vol from historical option bars (one at-the-money call/put pair per month), so IV rank and percentile have a full year behind them");
     m_status = new QLabel(this);
     m_status->setObjectName("muted");
     m_status->setWordWrap(true);
@@ -137,6 +139,7 @@ void VolatilityTab::buildUi()
     fetchRow->setSpacing(8);
     fetchRow->addWidget(m_fetch, 1);
     fetchRow->addWidget(m_sample, 1);
+    fetchRow->addWidget(m_backfillButton, 1);
     grid->addLayout(fetchRow, 5, 0, 1, 4);
     auto* useRow = new QHBoxLayout;
     useRow->setSpacing(8);
@@ -173,10 +176,12 @@ void VolatilityTab::buildUi()
     m_cardLongRun = ui::makeCard(this, "Long-run σ");
     m_cardImplied = ui::makeCard(this, "Implied ATM σ (21d)");
     m_cardPersistence = ui::makeCard(this, "Persistence");
+    m_cardIvRank = ui::makeCard(this, "IV rank (1y)");
+    m_cardIvPercentile = ui::makeCard(this, "IV percentile (1y)");
     auto* cards = new QGridLayout;
     cards->setSpacing(8);
     int index = 0;
-    for (const ui::Card& card : { m_cardRealized, m_cardLong, m_cardEwma, m_cardImplied, m_cardGarchNow, m_cardForecast, m_cardLongRun, m_cardPersistence }) {
+    for (const ui::Card& card : { m_cardRealized, m_cardLong, m_cardEwma, m_cardImplied, m_cardIvRank, m_cardIvPercentile, m_cardGarchNow, m_cardForecast, m_cardLongRun, m_cardPersistence }) {
         // Cards share whatever height the sidebar has left, so the column has no dead space.
         card.frame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         card.frame->setMinimumWidth(120);
@@ -350,6 +355,7 @@ void VolatilityTab::buildUi()
 
 void VolatilityTab::wire()
 {
+    connect(m_backfillButton, &QPushButton::clicked, this, [this] { backfillIvHistory(); });
     connect(m_fetch, &QPushButton::clicked, this, [this] { setTicker(m_tickerEdit->text()); fetchAll(); });
     connect(m_tickerEdit, &QLineEdit::returnPressed, this, [this] { setTicker(m_tickerEdit->text()); fetchAll(); });
     connect(m_sample, &QPushButton::clicked, this, [this] { loadSample(); });
@@ -538,6 +544,7 @@ void VolatilityTab::recompute()
     }
     m_useRealized->setEnabled(!m_series.empty());
     m_useForecast->setEnabled(m_garch.converged);
+    updateIvStats();
     updateCards();
     updateModelLabel();
     updateConeTable();
@@ -629,6 +636,22 @@ void VolatilityTab::updateCards()
         m_cardImplied.subtitle->setText(QStringLiteral("chain is %1").arg(m_state.underlyingTicker));
     } else {
         m_cardImplied.subtitle->setText("load a chain to compare");
+    }
+
+    // IV rank and percentile against the stored history.
+    if (m_ivStats.ok) {
+        m_cardIvRank.value->setText(QStringLiteral("%1%").arg(qRound(m_ivStats.rank * 100.0)));
+        m_cardIvRank.subtitle->setText(QStringLiteral("IV30 %1 · low %2 (%3) · high %4 (%5)")
+                                           .arg(pct(m_ivStats.current), pct(m_ivStats.low), QString::fromStdString(m_ivStats.lowDate).mid(5), pct(m_ivStats.high), QString::fromStdString(m_ivStats.highDate).mid(5)));
+        const int pctl = qRound(m_ivStats.percentile * 100.0);
+        const char* suffix = (pctl % 10 == 1 && pctl != 11) ? "st" : (pctl % 10 == 2 && pctl != 12) ? "nd" : (pctl % 10 == 3 && pctl != 13) ? "rd" : "th";
+        m_cardIvPercentile.value->setText(QStringLiteral("%1%2").arg(pctl).arg(suffix));
+        m_cardIvPercentile.subtitle->setText(QStringLiteral("%1 daily samples · median %2 · mean %3").arg(m_ivStats.samples).arg(pct(m_ivStats.median), pct(m_ivStats.mean)));
+    } else {
+        m_cardIvRank.value->setText("–");
+        m_cardIvRank.subtitle->setText(m_ivStats.current > 0.0 ? QStringLiteral("IV30 %1 · %2 sample(s): backfill IV history").arg(pct(m_ivStats.current)).arg(m_ivStats.samples) : QStringLiteral("load a chain and backfill IV history"));
+        m_cardIvPercentile.value->setText("–");
+        m_cardIvPercentile.subtitle->setText(m_ivStats.samples ? QStringLiteral("%1 sample(s) stored").arg(m_ivStats.samples) : QString());
     }
 
     m_cardPersistence.title->setText(model() == GarchModel::Garch11 ? "Persistence α + β" : "Persistence α + β + γ/2");
@@ -781,6 +804,11 @@ void VolatilityTab::updateHistoryChart()
     addLine(QStringLiteral("Realized %1d").arg(m_windowLong->value()), QColor(m_theme.textMuted), Qt::DashLine, 1.6, longPts);
     addLine(QStringLiteral("Realized %1d").arg(m_window->value()), QColor(m_theme.accent), Qt::SolidLine, 2.0, shortPts);
     addLine(QStringLiteral("%1 σ").arg(garchModelName(model())), QColor(m_theme.accent2.isEmpty() ? "#f59e0b" : m_theme.accent2), Qt::SolidLine, 1.6, garchPts);
+    std::vector<std::pair<qint64, double>> ivPts;
+    for (const pricing::ivhist::Sample& s : m_ivHistory) if (s.iv30 > 0.0) ivPts.emplace_back(msecsForDate(s.date), s.iv30);
+    trim(ivPts);
+    addLine(QStringLiteral("Implied σ (30d)"), QColor("#e879f9"), Qt::SolidLine, 1.8, ivPts);
+    if (!ivPts.empty()) m_historyChart->setTitle(QStringLiteral("%1 realized vs implied volatility · %2").arg(m_ticker, estimatorName(estimator())));
 
     if (minT < maxT) {
         // Month-start labels, spaced so that roughly six to eight fit across the span.
@@ -1050,7 +1078,86 @@ QString VolatilityTab::summaryText() const
     }
     const double implied = impliedAtmVol(m_horizon->value() / static_cast<double>(kPeriodsPerYear));
     if (implied > 0.0) text += QStringLiteral("; implied ATM(%1d) %2").arg(m_horizon->value()).arg(pct(implied, 2));
+    text += "; " + ivSummary();
     return text;
+}
+
+// MARK: - Implied-vol history
+
+void VolatilityTab::setStore(ChainStore* store)
+{
+    m_store = store;
+    m_backfill = store ? std::make_unique<IvBackfill>(m_client, *store) : nullptr;
+    m_backfillButton->setEnabled(store != nullptr);
+}
+
+double VolatilityTab::currentIv30() const
+{
+    // The loaded chain when it is this ticker's; otherwise the latest stored sample.
+    if (chainMatches() && !m_state.chainQuotes.empty() && m_state.market.spot > 0.0) {
+        pricing::ActivityMarket am;
+        am.model = m_state.market.model;
+        am.spot = m_state.market.spot;
+        am.dividendYield = m_state.market.dividendYield;
+        am.rateFor = [this](double t) { return m_state.rateFor(t); };
+        const pricing::ivhist::Sample s = pricing::ivhist::sampleFromChain(QDate::currentDate().toString(Qt::ISODate).toStdString(), m_state.chainQuotes, am);
+        if (s.iv30 > 0.0) return s.iv30;
+    }
+    for (auto it = m_ivHistory.rbegin(); it != m_ivHistory.rend(); ++it) if (it->iv30 > 0.0) return it->iv30;
+    return 0.0;
+}
+
+void VolatilityTab::updateIvStats()
+{
+    m_ivHistory.clear();
+    m_ivStats = pricing::ivhist::Stats{};
+    if (!m_store || m_ticker.isEmpty()) return;
+    for (const ChainStore::IvPoint& p : m_store->ivHistory(m_ticker, 400)) {
+        pricing::ivhist::Sample s;
+        s.date = p.date.toString(Qt::ISODate).toStdString();
+        s.iv30 = p.iv30;
+        s.ivNear = p.ivNear;
+        s.spot = p.spot;
+        s.source = p.source.toStdString();
+        m_ivHistory.push_back(s);
+    }
+    m_ivStats = pricing::ivhist::stats(m_ivHistory, currentIv30(), kPeriodsPerYear);
+    if (!m_ivStats.ok) m_ivStats.samples = static_cast<int>(m_ivHistory.size());
+}
+
+void VolatilityTab::backfillIvHistory()
+{
+    if (!m_backfill) { setStatus("No chain store available for implied-vol history.", ui::StatusKind::Error); return; }
+    if (m_backfill->busy()) { setStatus("A backfill is already running.", ui::StatusKind::Warning); return; }
+    if (m_bars.size() < 20 || m_ticker.isEmpty()) { setStatus("Fetch at least a month of daily bars first; the backfill prices options against those closes.", ui::StatusKind::Warning); return; }
+    if (!m_client.hasApiKey()) { setStatus("No Massive API key.", ui::StatusKind::Error); return; }
+    std::vector<IvBackfill::Close> closes;
+    for (const DailyBar& b : m_bars) {
+        const QDate d = QDate::fromString(QString::fromStdString(b.date), Qt::ISODate);
+        if (d.isValid() && b.close > 0.0) closes.push_back({ d, b.close });
+    }
+    m_backfillButton->setEnabled(false);
+    const QString ticker = m_ticker;
+    m_backfill->run(ticker, std::move(closes), [this](double t) { return m_state.rateFor(t); },
+        [this](int done, int total, const QString& message) { setStatus(QStringLiteral("Backfilling implied vol %1/%2 · %3").arg(done + 1).arg(total).arg(message), ui::StatusKind::Info); },
+        [this, ticker](bool ok, int samples, const QString& message) {
+            m_backfillButton->setEnabled(true);
+            setStatus(message, ok ? ui::StatusKind::Info : ui::StatusKind::Warning);
+            qInfo("[iv-backfill] %s: %s (%d samples)", qPrintable(ticker), qPrintable(message), samples);
+            if (samples > 0 && m_store) m_store->saveTo(ChainStore::defaultCachePath());   // a year of history is worth keeping right away
+            if (ticker == m_ticker) { updateIvStats(); updateCards(); updateHistoryChart(); }
+        });
+}
+
+QString VolatilityTab::ivSummary() const
+{
+    if (!m_ivStats.ok) {
+        if (m_ivStats.current > 0.0) return QStringLiteral("IV30 %1 with %2 stored sample(s), not enough for a rank (backfill IV history)").arg(pct(m_ivStats.current, 2)).arg(m_ivStats.samples);
+        return QStringLiteral("no implied-vol history for %1").arg(m_ticker.isEmpty() ? QStringLiteral("this ticker") : m_ticker);
+    }
+    return QStringLiteral("IV30 %1: IV rank %2%, IV percentile %3% over %4 daily samples (low %5 on %6, high %7 on %8, median %9)")
+        .arg(pct(m_ivStats.current, 2)).arg(qRound(m_ivStats.rank * 100.0)).arg(qRound(m_ivStats.percentile * 100.0)).arg(m_ivStats.samples)
+        .arg(pct(m_ivStats.low, 2), QString::fromStdString(m_ivStats.lowDate), pct(m_ivStats.high, 2), QString::fromStdString(m_ivStats.highDate), pct(m_ivStats.median, 2));
 }
 
 QString VolatilityTab::resultsCsv() const

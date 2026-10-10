@@ -631,3 +631,24 @@ void MarketDataClient::fetchEarnings(const QString& ticker, std::function<void(c
         },
         [fromFilings](const QString&) { fromFilings(); });
 }
+
+void MarketDataClient::fetchOptionContracts(const QString& underlying, const QDate& expiry, double strikeLo, double strikeHi,
+                                            std::function<void(const std::vector<OptionContract>&)> ok, ErrorHandler err)
+{
+    get(endpoint("/v3/reference/options/contracts", { { "underlying_ticker", underlying.trimmed().toUpper() }, { "expiration_date", expiry.toString(Qt::ISODate) },
+                                                      { "expired", "true" }, { "strike_price.gte", QString::number(strikeLo, 'f', 2) }, { "strike_price.lte", QString::number(strikeHi, 'f', 2) },
+                                                      { "limit", "250" } }),
+        [ok](const QJsonObject& body) {
+            std::vector<OptionContract> out;
+            for (const QJsonValue v : body["results"].toArray()) {
+                const QJsonObject o = v.toObject();
+                OptionContract c;
+                c.ticker = o["ticker"].toString();
+                c.strike = o["strike_price"].toDouble();
+                c.type = o["contract_type"].toString().compare("put", Qt::CaseInsensitive) == 0 ? pricing::OptionType::Put : pricing::OptionType::Call;
+                c.expiry = QDate::fromString(o["expiration_date"].toString(), Qt::ISODate);
+                if (!c.ticker.isEmpty() && c.strike > 0.0) out.push_back(c);
+            }
+            ok(out);
+        }, err);
+}

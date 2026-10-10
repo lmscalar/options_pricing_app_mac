@@ -6,6 +6,7 @@
 #include "ScannerTab.h"
 #include "Formatting.h"
 #include "../Pricing/Activity.h"
+#include "../Pricing/IvHistory.h"
 #include "../Pricing/VolSurface.h"
 
 #include <QtCore/QElapsedTimer>
@@ -34,7 +35,7 @@ constexpr const char* kMinOiKey = "scanner/minOi";
 constexpr const char* kDefinedRiskKey = "scanner/definedRisk";
 constexpr const char* kSplitterKey = "scanner/splitter";
 
-enum MetricColumn { McTicker = 0, McSpot, McIv, McFarIv, McTerm, McSkew, McMove, McPcVol, McPcOi, McVolume, McOi, McSpread, McExpiry, McIdeas, MetricColumnCount };
+enum MetricColumn { McTicker = 0, McSpot, McIv, McIvRank, McFarIv, McTerm, McSkew, McMove, McPcVol, McPcOi, McVolume, McOi, McSpread, McExpiry, McIdeas, MetricColumnCount };
 enum IdeaColumn { IcTicker = 0, IcStrategy, IcBias, IcExpiry, IcLegs, IcNet, IcMaxProfit, IcMaxLoss, IcPop, IcRor, IcExpected, IcBreakevens, IcDelta, IcTheta, IcIv, IcSpread, IcScore, IcRationale, IdeaColumnCount };
 
 /// Sorts by the numeric payload when both cells carry one.
@@ -189,7 +190,7 @@ void ScannerTab::buildUi()
         t->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         return t;
     };
-    m_metricsTable = makeTable({ "Ticker", "Spot", "ATM IV", "Far IV", "Term", "Skew 25d", "1 sd move", "P/C vol", "P/C OI", "Volume", "Open int", "Spread", "Expiry", "Ideas" });
+    m_metricsTable = makeTable({ "Ticker", "Spot", "ATM IV", "IV rank", "Far IV", "Term", "Skew 25d", "1 sd move", "P/C vol", "P/C OI", "Volume", "Open int", "Spread", "Expiry", "Ideas" });
     for (int c = 0; c < MetricColumnCount; ++c) m_metricsTable->setColumnWidth(c, c == McTicker ? 70 : (c == McExpiry ? 150 : 82));
     m_metricsTable->horizontalHeader()->setStretchLastSection(false);
     m_ideasTable = makeTable({ "Ticker", "Strategy", "Bias", "Expiry", "Legs", "Net", "Max profit", "Max loss", "PoP", "Return/risk", "Exp. P&L", "Breakevens", "Delta", "Theta/d", "IV", "Spread", "Score", "Why" });
@@ -439,6 +440,13 @@ void ScannerTab::runScan()
         Row row;
         row.ticker = ticker;
         row.metrics = scan::chainMetrics(quotes, am, c.targetDays, std::min(7, c.minDays), std::max(c.maxDays, 120));
+        if (m_store) {
+            std::vector<pricing::ivhist::Sample> history;
+            for (const ChainStore::IvPoint& p : m_store->ivHistory(ticker, 300)) { pricing::ivhist::Sample s; s.date = p.date.toString(Qt::ISODate).toStdString(); s.iv30 = p.iv30; history.push_back(s); }
+            const pricing::ivhist::Stats st = pricing::ivhist::stats(history, row.metrics.atmIv, 252);
+            row.ivSamples = static_cast<int>(history.size());
+            if (st.ok && st.samples >= 20) row.ivRank = st.rank;
+        }
         if (!row.metrics.ok) { m_rows.push_back(row); continue; }
         Market base = m_state.market;
         if (ticker != m_state.underlyingTicker) base.dividends.clear();
@@ -484,6 +492,7 @@ void ScannerTab::fillMetrics()
             continue;
         }
         m_metricsTable->setItem(r, McIv, numeric(m.atmIv, pct(m.atmIv, 1)));
+        m_metricsTable->setItem(r, McIvRank, numeric(std::isfinite(row.ivRank) ? row.ivRank : -1.0, std::isfinite(row.ivRank) ? pct(row.ivRank, 0) : QStringLiteral("–")));
         m_metricsTable->setItem(r, McFarIv, numeric(m.farAtmIv, m.farAtmIv > 0 ? pct(m.farAtmIv, 1) : "–"));
         m_metricsTable->setItem(r, McTerm, numeric(m.termSlope, m.farAtmIv > 0 ? (m.termSlope >= 0 ? "+" : "") + ui::number(m.termSlope * 100.0, 1) + " pt" : "–", true, &m_theme));
         m_metricsTable->setItem(r, McSkew, numeric(m.skew, m.putIv25 > 0 && m.callIv25 > 0 ? (m.skew >= 0 ? "+" : "") + ui::number(m.skew * 100.0, 1) + " pt" : "–"));
@@ -749,11 +758,12 @@ QString ScannerTab::resultsCsv() const
 
 QString ScannerTab::metricsCsv() const
 {
-    QString out = "ticker,spot,atm_iv_pct,far_iv_pct,term_slope_pts,skew_25d_pts,expected_move_pct,put_call_volume,put_call_oi,volume,open_interest,median_spread_pct,expiry,days,ideas\n";
+    QString out = "ticker,spot,atm_iv_pct,iv_rank_pct,iv_samples,far_iv_pct,term_slope_pts,skew_25d_pts,expected_move_pct,put_call_volume,put_call_oi,volume,open_interest,median_spread_pct,expiry,days,ideas\n";
     for (const Row& row : m_rows) {
         const auto& m = row.metrics;
-        out += QStringLiteral("%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15\n")
-                   .arg(row.ticker, QString::number(m.spot, 'f', 2), QString::number(m.atmIv * 100.0, 'f', 1), QString::number(m.farAtmIv * 100.0, 'f', 1),
+        out += QStringLiteral("%1,%2,%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,%15,%16,%17\n")
+                   .arg(row.ticker, QString::number(m.spot, 'f', 2), QString::number(m.atmIv * 100.0, 'f', 1),
+                        std::isfinite(row.ivRank) ? QString::number(row.ivRank * 100.0, 'f', 0) : QString(), QString::number(row.ivSamples), QString::number(m.farAtmIv * 100.0, 'f', 1),
                         QString::number(m.termSlope * 100.0, 'f', 1), QString::number(m.skew * 100.0, 'f', 1), QString::number(m.expectedMove * 100.0, 'f', 1),
                         QString::number(m.putCallVolume, 'f', 2), QString::number(m.putCallOpenInterest, 'f', 2))
                    .arg(QString::number(m.totalVolume, 'f', 0), QString::number(m.totalOpenInterest, 'f', 0), QString::number(m.medianSpread * 100.0, 'f', 1),

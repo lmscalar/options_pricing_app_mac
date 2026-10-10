@@ -30,6 +30,15 @@ public:
         QDateTime fetchedAt;
     };
 
+    /// One day of implied-vol history for a ticker (see Pricing/IvHistory.h).
+    struct IvPoint {
+        QDate date;
+        double iv30 = 0.0;       ///< 30-day constant-maturity ATM implied vol, decimal
+        double ivNear = 0.0;     ///< ATM vol of the nearest expiry a week or more out
+        double spot = 0.0;
+        QString source;          ///< "snapshot" or "backfill …"
+    };
+
     struct Summary {
         QString ticker;
         QDateTime fetchedAt;
@@ -57,6 +66,15 @@ public:
     int loadFrom(const QString& path);
     /// When the database was last saved to disk (from the loaded file), if known.
     QDateTime savedAt() const { return m_savedAt; }
+
+    // ---- Implied-vol history (one sample per ticker per day) ----
+    /// `replace` overwrites a day's sample; false keeps an existing one (backfill never beats a live snapshot).
+    bool putIvSamples(const QString& ticker, const std::vector<IvPoint>& points, bool replace);
+    /// Ascending by date, the most recent `maxPoints` samples.
+    std::vector<IvPoint> ivHistory(const QString& ticker, int maxPoints = 400) const;
+    int ivHistoryCount(const QString& ticker) const;
+    /// Rate used when a stored chain is turned into the day's IV sample (set by the host to its curve).
+    std::function<double(double maturity)> rateFor = [](double) { return 0.04; };
 
     // ---- Underlying quotes (watchlist snapshot) ----
     bool putQuotes(const std::vector<MarketDataClient::Quote>& quotes);

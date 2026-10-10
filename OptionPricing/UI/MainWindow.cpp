@@ -97,6 +97,8 @@ void MainWindow::buildUi()
     // Every ticker entry point funnels through showTicker(): stored chains apply instantly,
     // missing or stale ones are downloaded, and all tabs follow the shared market state.
     m_volatility->onRequestChain = [this](const QString& ticker) { showTicker(ticker, false); };
+    m_volatility->setStore(&m_store);
+    m_store.rateFor = [this](double maturity) { return m_state.rateFor(maturity); };
     m_quotes->onOpenInChain = [this](const QString& ticker) { showTicker(ticker, true); };
     m_quotes->onTickerSelected = [this](const QString& ticker) { showTicker(ticker, false); };
     m_quotes->onWatchlistChanged = [this](const QStringList& watchlist) {
@@ -1095,6 +1097,14 @@ void MainWindow::runLiveSmoke(const QString& ticker)
                     if (grab().save(shotDir + "/sector-heatmap-energy.png")) qInfo("[live-smoke] wrote sector-heatmap-energy.png");
                     m_sectorHeatmap->clearFocus();
                     waitFor(200);
+                }
+                if (tab == m_volatility) {
+                    // IV rank: rebuild a year of implied vol for the tab's ticker from option history, then rank today's IV30.
+                    auto waitFor = [](int ms) { QEventLoop loop; QTimer::singleShot(ms, &loop, &QEventLoop::quit); loop.exec(); };
+                    m_volatility->backfillIvHistory();
+                    for (int i = 0; i < 120 && m_volatility->backfillBusy(); ++i) waitFor(500);
+                    waitFor(300);
+                    qInfo("[live-smoke] iv history (%s): %s", qPrintable(m_volatility->ticker()), qPrintable(m_volatility->ivSummary()));
                 }
                 if (tab == m_quotes) {
                     // Earnings overlay: the implied move cone on the chart, with a pinned date and then inferred.

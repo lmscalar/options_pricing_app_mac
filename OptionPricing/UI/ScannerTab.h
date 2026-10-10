@@ -21,6 +21,7 @@
 #include "../Pricing/Scanner.h"
 
 #include <functional>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -72,6 +73,8 @@ private:
     struct Row {
         QString ticker;
         pricing::scan::ChainMetrics metrics;
+        double ivRank = std::numeric_limits<double>::quiet_NaN();   ///< against the stored IV history (NaN = too little history)
+        int ivSamples = 0;
         int ideas = 0;
     };
     struct SampleChain {

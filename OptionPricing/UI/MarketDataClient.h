@@ -84,6 +84,14 @@ public:
         QDateTime asOf;
     };
 
+    /// One listed (or expired) option contract from the reference data.
+    struct OptionContract {
+        QString ticker;              ///< e.g. "O:AAPL260918C00255000"
+        double strike = 0.0;
+        pricing::OptionType type = pricing::OptionType::Call;
+        QDate expiry;
+    };
+
     /// Next scheduled earnings report.
     struct EarningsInfo {
         QDate date;
@@ -138,6 +146,9 @@ public:
     /// Next earnings date: the Benzinga calendar when the plan carries it, otherwise projected
     /// from the cadence of the company's quarterly filings (flagged `estimated`).
     void fetchEarnings(const QString& ticker, std::function<void(const EarningsInfo&)> ok, ErrorHandler err);
+    /// Contracts of `underlying` expiring on `expiry` with strikes in [strikeLo, strikeHi], including expired ones.
+    void fetchOptionContracts(const QString& underlying, const QDate& expiry, double strikeLo, double strikeHi,
+                              std::function<void(const std::vector<OptionContract>&)> ok, ErrorHandler err);
 
 private:
     void get(const QUrl& url, std::function<void(const QJsonObject&)> ok, ErrorHandler err);

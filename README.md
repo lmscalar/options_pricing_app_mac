@@ -38,6 +38,7 @@ volatility smiles from option chains and prices batches of contracts from CSV.
 | `Risk.h` | Return histories, covariance, parametric / historical / Monte Carlo VaR and expected shortfall, component VaR, stress grid, decay ladder. |
 | `Scanner.h` | Chain metrics (ATM IV, term slope, skew, expected move, put/call ratios), delta-targeted strategy construction, ranked trade ideas. |
 | `Events.h` | Earnings analytics: ATM term structure in total variance, event variance isolation, skew-adjusted implied move, price cone. |
+| `IvHistory.h` | Implied-vol history: 30-day constant-maturity ATM vol samples, IV rank and percentile, implied vol from call/put closes. |
 | `Treemap.h` | Squarified treemap layout for the sector heatmap. |
 | `TechnicalAnalysis.h` | TA-Lib catalogue wrapper and generic indicator evaluation. |
 | `Volatility.h` | Realized vol estimators (close-to-close, Parkinson, Garman-Klass, Rogers-Satchell, Yang-Zhang), rolling series, volatility cone, EWMA, GARCH(1,1) / GJR-GARCH(1,1) by quasi-maximum likelihood with variance forecasts and forecast term structure. |
@@ -157,6 +158,15 @@ loads sample data, renders every tab to PNG, round-trips a workspace file and ex
   put-call parity table per expiry with the implied forward, the dividend yield that
   reconciles it, and the worst-offending strike. Double-click a cell or row to price it.
 
+- **IV rank and percentile** (Volatility tab): every stored option chain writes the day's 30-day
+  constant-maturity ATM implied vol into the chain store's `iv_history` table, so a history
+  accumulates for every watchlist ticker as the app runs. **Backfill IV History** rebuilds about a
+  year at once from historical option bars (one at-the-money call/put pair per month, priced
+  from daily closes against the stock's closes, about three requests per month). The IV rank
+  card shows where today's IV30 sits between the one-year low and high (with their dates); the IV
+  percentile card shows the share of days below it, with the median and mean; the realized-vol
+  history chart gains an "Implied σ (30d)" line. The Trade Ideas market scan has an IV rank
+  column, and the assistant answers "what is the IV rank" and runs the backfill on request.
 - **Earnings overlay** (Quotes chart, the **Earnings cone** checkbox and the **Earnings ▾** menu): the option-implied earnings move as a
   cone drawn from the last bar through the report date. The at-the-money implied-vol term
   structure is converted to total variance per expiry; the variance the expiry after the
